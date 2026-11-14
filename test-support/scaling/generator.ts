@@ -40,6 +40,14 @@ export interface Shape {
    * merged the way the deployer merges them (#272): the merge is what has to record the keys.
    */
   merged?: boolean;
+  /**
+   * The report went through compaction: each partition's rows are written as two flushes, the partitions are 12 h
+   * apart whatever `spacing` says (so the report spans days, and the time bound makes pairs of them: a third would
+   * span more than 24 h), and the session is closed, which compacts the flushes. What compaction makes of them is what
+   * is measured. Slots come in pairs from the first, so with an even number of outside slots the pair holding the
+   * window is the same at every retention step.
+   */
+  compacted?: boolean;
 }
 
 export interface ScalingReport {
@@ -56,8 +64,19 @@ export interface ScalingReport {
 export const BASE: Shape = { outside: 2, inside: 2, rowGroups: 2, spacing: 'dense' };
 
 /** Retention, window and density at 2, 4 and 8 with the other two axes at `BASE`. */
-export function stepsOf(axis: Axis, spacing: Shape['spacing'], merged = false): readonly Shape[] {
-  return [2, 4, 8].map((v) => ({ ...BASE, spacing, ...(merged ? { merged } : {}), [AXIS_FIELD[axis]]: v }));
+export function stepsOf(
+  axis: Axis,
+  spacing: Shape['spacing'],
+  merged = false,
+  compacted = false,
+): readonly Shape[] {
+  return [2, 4, 8].map((v) => ({
+    ...BASE,
+    spacing,
+    ...(merged ? { merged } : {}),
+    ...(compacted ? { compacted } : {}),
+    [AXIS_FIELD[axis]]: v,
+  }));
 }
 
 /** Whether an entry is measured on merged reports: those whose condition is on a statistics key (#272). */
@@ -127,7 +146,9 @@ const FIRST_SLOT = 16;
 
 const hex = (k: number, width: number): string => k.toString(16).padStart(width, '0');
 const str = (key: string, value: string) => ({ key, value: { stringValue: value } });
-const startOf = (shape: Shape, n: number): bigint => T0 + BigInt(n) * SPACING_NS[shape.spacing];
+const COMPACTED_SPACING_NS = 12n * 3600n * 1_000_000_000n;
+const startOf = (shape: Shape, n: number): bigint =>
+  T0 + BigInt(n) * (shape.compacted === true ? COMPACTED_SPACING_NS : SPACING_NS[shape.spacing]);
 const rowsPerGroup = (shape: Shape): number => shape.rowGroupRows ?? ROW_GROUP_ROWS;
 const spanCount = (shape: Shape, n: number): number =>
   (n === FIRST_SLOT - shape.outside ? (shape.bigRowGroups ?? shape.rowGroups) : shape.rowGroups) *
@@ -309,9 +330,16 @@ async function build(shape: Shape): Promise<ScalingReport> {
     const jsons =
       spanCount(shape, n) > CHUNK_SPANS ? chunkedPartitionJson(shape, n) : partitionJson(shape, n);
     let i = 0;
-    for (const json of jsons)
+    let flushed = false;
+    for (const json of jsons) {
       for (const request of parseOtlpObject(json, `scaling:${n}`))
         await session.add(request, `scaling:${n}:${i++}`);
+      // compacted: the partition is two flushes, the first after the spans
+      if (shape.compacted === true && i > 0 && !flushed) {
+        await session.flush();
+        flushed = true;
+      }
+    }
   };
   if (shape.merged === true) {
     const runConfig = testConfig({ writer: { format: 'site', chunkTargetBytes: 2_000_000_000 } });
@@ -330,6 +358,8 @@ async function build(shape: Shape): Promise<ScalingReport> {
       await addPartition(session, n);
       await session.flush();
     }
+    // closing compacts the flushes
+    if (shape.compacted === true) await session.close();
   }
   const text = w.fs.snapshot().get(`${OUT}/data/manifest.js`);
   if (text === undefined) throw new OtelHtmlError('usage', { message: 'no manifest' });
@@ -353,12 +383,29 @@ async function build(shape: Shape): Promise<ScalingReport> {
     start: Number(spanStart(shape, first, 0) - epoch),
     end: Number(spanStart(shape, last, lastSpan) + SPAN_NS - epoch),
   };
-  const entry = manifest.partitions.find((p) => p.n === shape.outside);
-  if (entry === undefined)
-    throw new OtelHtmlError('usage', { message: `no partition ${shape.outside} in the manifest` });
   // a span and a log of the first inside partition: span index 8 (second trace, first service), log row 0
   const k = 8;
-  const logFileRow = 0;
+  const firstStart = startOf(shape, first);
+  // after compaction the partition holding it may also hold the logs of the slots before it
+  const entry =
+    shape.compacted === true
+      ? manifest.partitions.find((p) => {
+          const logs = p.files.logs;
+          return (
+            logs?.timeMin != null &&
+            logs.timeMax != null &&
+            BigInt(logs.timeMin) <= firstStart &&
+            firstStart <= BigInt(logs.timeMax)
+          );
+        })
+      : manifest.partitions.find((p) => p.n === shape.outside);
+  if (entry === undefined)
+    throw new OtelHtmlError('usage', { message: `no partition holds slot ${first} in the manifest` });
+  const earlier = BigInt(entry.files.logs?.timeMin ?? firstStart);
+  let logFileRow = 0;
+  if (shape.compacted === true)
+    for (let slot = FIRST_SLOT - shape.outside; slot < first; slot++)
+      if (startOf(shape, slot) >= earlier) logFileRow += spanCount(shape, slot) / 16; // logs sort by service first: the earlier slots' first-service logs precede it
   return {
     dir: written.dir,
     manifest,
@@ -382,7 +429,7 @@ async function build(shape: Shape): Promise<ScalingReport> {
 
 /** The one key of a shape: reports and measurements of one key are one thing (`{}` and `{rowGroupRows: 8192}` are one). */
 export const shapeKey = (shape: Shape): string =>
-  `${shape.outside}-${shape.inside}-${shape.rowGroups}-${shape.spacing}-${rowsPerGroup(shape)}-${shape.bigRowGroups ?? 0}${shape.merged === true ? '-merged' : ''}`;
+  `${shape.outside}-${shape.inside}-${shape.rowGroups}-${shape.spacing}-${rowsPerGroup(shape)}-${shape.bigRowGroups ?? 0}${shape.merged === true ? '-merged' : ''}${shape.compacted === true ? '-compacted' : ''}`;
 
 /** The folder of the reports `prebuildScalingReports` made, set by the scaling global setup for the worker processes. */
 export const PREBUILT_ENV = 'OTEL_HTML_SCALING_REPORTS';

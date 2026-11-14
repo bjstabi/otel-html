@@ -1,23 +1,27 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, test } from 'vitest';
+import { afterAll, describe, expect, test } from 'vitest';
 import {
   type Axis,
   CATALOGUE,
+  type CatalogueEntry,
   type CostClass,
   DECLARED,
   KNOWN_DEBT,
   SMALL_TABLE_ENTRIES,
 } from '../../src/viewer/data/catalogue.js';
-import { AXES } from '../../test-support/scaling/measure.js';
+import { LONG_WINDOW_NS } from '../../src/viewer/data/time-window.js';
+import { classify, type Step } from '../../test-support/scaling/classify.js';
+import { buildScalingReport, type Shape, stepsOf } from '../../test-support/scaling/generator.js';
+import { AXES, closeMeasured, measureEntry } from '../../test-support/scaling/measure.js';
 import { assertedAxes, fileOf, SPLIT } from '../../test-support/scaling/measured-file.js';
 import { ROLLUP_ENTRIES } from '../../test-support/scaling/rollup-entries.js';
 
-const { OTEL_HTML_SCALING_OUT: OUT } = process.env;
+const { OTEL_HTML_SCALING: SCALING, OTEL_HTML_SCALING_OUT: OUT } = process.env;
 
 /** The number of lines the known-debt list may hold; a PR that removes lines lowers it. */
-const DEBT_MAX = 7;
+const DEBT_MAX = 5;
 
 describe('declared classes', () => {
   test('every catalogue entry has a declaration and nothing else does', () => {
@@ -104,10 +108,14 @@ describe('declared classes', () => {
     }
   });
 
-  test('no debt line names an aggregate over rollup dimensions, except the compaction one (#283, PR 7, not yet measured)', () => {
+  test('the compaction debt (#283) is paid: no line of it remains', () => {
+    expect(KNOWN_DEBT.filter((d) => d.issue === 283)).toEqual([]);
+  });
+
+  test('no debt line names an aggregate over rollup dimensions', () => {
     const rollup = new Set(ROLLUP_ENTRIES.map((e) => e.id));
     expect(ROLLUP_ENTRIES.length).toBeGreaterThan(0);
-    expect(KNOWN_DEBT.filter((d) => rollup.has(d.id) && d.issue !== 283)).toEqual([]);
+    expect(KNOWN_DEBT.filter((d) => rollup.has(d.id))).toEqual([]);
     // the entries the router answers from rollups under a long window, over dimensions: all `fixed` on retention and density.
     for (const id of rollup) {
       const entry = CATALOGUE.find((e) => e.id === id);
@@ -176,4 +184,95 @@ describe('the split of the measurement', () => {
     }
     expect(true).toBe(true);
   });
+});
+
+/** The steps `stepsFor` makes, on the compacted shape: the report went through compaction, one partition per time group. */
+async function compactedSteps(
+  entry: CatalogueEntry,
+  axis: Axis,
+  shapes: readonly Shape[] = stepsOf(axis, entry.spacing, false, true),
+): Promise<Step[]> {
+  const declared = DECLARED[entry.id];
+  const reference = declared?.scanOf === undefined ? entry : CATALOGUE.find((e) => e.id === declared.scanOf);
+  if (reference === undefined) throw new Error(`${entry.id} names no entry to compare with`);
+  const steps: Step[] = [];
+  for (const shape of shapes) {
+    const cost = await measureEntry(entry, shape);
+    const selectedGroups = (entry.window ? shape.inside : shape.outside + shape.inside) * shape.rowGroups;
+    steps.push({
+      partitions: shape.outside + shape.inside,
+      selectedGroups,
+      neededGroups: declared?.needed?.(shape) ?? selectedGroups,
+      reference: reference === entry ? cost.serial : (await measureEntry(reference, shape)).serial,
+      cost,
+    });
+  }
+  return steps;
+}
+
+const RANK: Record<CostClass, number> = { fixed: 0, files: 1, matched: 2, scan: 3 };
+
+/**
+ * Retention is what the time bound of compaction protects (a windowed read stays `fixed` however many partitions lie
+ * before the window), and window is the other axis the shape leaves comparable. Density is not measured on it: a
+ * compacted file holds two partitions' rows, so at 8 row groups a logs file passes the harness's small-file limit
+ * (350 KB, see `HARNESS_SMALL_FILE_BYTES`) that the plain shape's files stay under, and the entry reads it by range.
+ * An entry may measure better than declared (a compacted file is read by metadata where the plain shape scans), never worse.
+ */
+const COMPACTED_AXES: readonly Axis[] = ['retention', 'window'];
+
+describe.skipIf(SCALING !== '1')('the compacted shape (#283, PR 7)', { timeout: 180_000 }, () => {
+  afterAll(async () => {
+    await closeMeasured();
+  });
+  test.each(CATALOGUE.filter((e) => e.id.endsWith('.short')))(
+    '$id keeps the classes it has on the plain shape when partitions are compactions of many',
+    async (entry) => {
+      for (const axis of assertedAxes(entry).filter((a) => COMPACTED_AXES.includes(a))) {
+        const steps = await compactedSteps(entry, axis);
+        const declared = DECLARED[entry.id]?.class[axis];
+        const got = classify(steps);
+        expect(
+          declared != null && RANK[got] <= RANK[declared],
+          `${entry.id} on ${axis}, compacted: ${got}, declared ${declared}: ${JSON.stringify(steps.map((s) => s.cost))}`,
+        ).toBe(true);
+      }
+    },
+    180_000,
+  );
+
+  /**
+   * The steps above have two inside partitions, 12 h apart: a window of about 12 h, past `LONG_WINDOW_NS`, which the
+   * router answers from rollups. This case has one inside slot (a window of about 10 min), so the entries read raw
+   * files, and an odd number of outside slots, so the window's slot shares a compacted file with the last outside one:
+   * the retention class then rests on pruning rows inside a compacted file, which only the time bound keeps constant.
+   */
+  const shortWindowSteps = (spacing: Shape['spacing']): Shape[] =>
+    [3, 5, 9].map((outside) => ({
+      outside,
+      inside: 1,
+      rowGroups: 2,
+      spacing,
+      compacted: true,
+    }));
+  const debt = CATALOGUE.filter((e) => ['spans.total.short', 'spans.total.long'].includes(e.id));
+  test.each([...new Set([...debt, ...CATALOGUE.filter((e) => e.id.endsWith('.short'))])])(
+    '$id keeps its retention class on a compacted report with a window under LONG_WINDOW_NS',
+    async (entry) => {
+      const shapes = shortWindowSteps(entry.spacing);
+      for (const shape of shapes) {
+        const r = await buildScalingReport(shape);
+        expect(r.window.end - r.window.start, 'the window is short').toBeLessThan(LONG_WINDOW_NS);
+      }
+      if (!assertedAxes(entry).includes('retention')) return;
+      const steps = await compactedSteps(entry, 'retention', shapes);
+      const declared = DECLARED[entry.id]?.class.retention;
+      const got = classify(steps);
+      expect(
+        declared != null && RANK[got] <= RANK[declared],
+        `${entry.id} on retention, compacted, short window: ${got}, declared ${declared}: ${JSON.stringify(steps.map((s) => s.cost))}`,
+      ).toBe(true);
+    },
+    180_000,
+  );
 });

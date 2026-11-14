@@ -13,7 +13,8 @@ import { fileStatistics } from '../../src/format/parquet/stats.js';
 import { partitionKey, partitionWrapperPath } from '../../src/format/paths.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import type { CompactOptions } from '../../src/writer/compaction.js';
-import { compactPartitions } from '../../src/writer/compaction.js';
+import { COMPACTION_SPAN_NS, compactPartitions, timeGroups } from '../../src/writer/compaction.js';
+import { mergeReports } from '../../src/writer/merge.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { PartitionWriter } from '../../src/writer/partition-writer.js';
 import type { FileSystem } from '../../src/writer/ports.js';
@@ -23,9 +24,19 @@ import {
   rollupDimensions,
   spanRollupRows,
 } from '../../src/writer/rollup-rows.js';
+import { openSession } from '../../src/writer/session.js';
 import { traceRows } from '../../src/writer/trace-summaries.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
+import { logRecord, logsRequest, span, traceRequest } from '../../test-support/otlp-builders.js';
 import { chunksOf } from '../../test-support/parquet-footer.js';
+import {
+  createTestWriter,
+  EPOCH_NS,
+  otlp,
+  type TestWriter,
+  testConfig,
+} from '../../test-support/writer-deps.js';
+import { manifestOf, tableRowsOf } from './helpers.js';
 
 const OUT = '/out';
 const ROW_GROUP = 5;
@@ -1089,5 +1100,240 @@ describe('compactPartitions: rows that end before they start, and given rollups'
     expect(canon(await rowsOfFile(fs, out, 'span_rollups'))).toEqual(canon(expected));
     const recomputed = spanRollupRows(batchFromRows('spans', [...a, ...b]), DIMS);
     expect(canon(expected)).not.toEqual(canon(recomputed));
+  });
+});
+
+// -- time groups ------------------------------------------------------------------------------------------------------
+
+const HOUR = 3_600_000_000_000n;
+const at = (startHour: number, endHour: number) => ({
+  timeMin: String(BigInt(startHour) * HOUR),
+  timeMax: String(BigInt(endHour) * HOUR),
+});
+const sizes = (groups: readonly (readonly unknown[])[]) => groups.map((g) => g.length);
+
+describe('timeGroups', () => {
+  test('the bound is 24 hours', () => {
+    expect(COMPACTION_SPAN_NS).toBe(24n * HOUR);
+  });
+
+  test('inputs sorted by timeMin are grouped while the union spans at most 24 h', () => {
+    expect(sizes(timeGroups([at(0, 1), at(2, 3), at(30, 31), at(60, 61)]))).toEqual([2, 1, 1]);
+    // the input order does not matter, and the union is exactly 24 h: still one group
+    expect(sizes(timeGroups([at(60, 61), at(0, 1), at(23, 24)]))).toEqual([2, 1]);
+    expect(timeGroups([at(60, 61), at(0, 1)]).map((g) => g[0]?.timeMin)).toEqual([
+      at(0, 1).timeMin,
+      at(60, 61).timeMin,
+    ]);
+  });
+
+  test('one input longer than 24 h is a group of its own; inputs with no time share the first group', () => {
+    expect(sizes(timeGroups([at(0, 1), at(2, 40), at(41, 42)]))).toEqual([1, 1, 1]);
+    const none = { timeMin: null, timeMax: null };
+    expect(sizes(timeGroups([at(30, 31), none, at(0, 1), none]))).toEqual([3, 1]);
+    expect(sizes(timeGroups([none, none]))).toEqual([2]);
+    // not into a lone long input: the first group that is not one, or a group of their own
+    expect(sizes(timeGroups([at(0, 40), none, at(50, 51)]))).toEqual([1, 2]);
+    expect(sizes(timeGroups([at(0, 40), none]))).toEqual([1, 1]);
+    expect(timeGroups([])).toEqual([]);
+  });
+});
+
+// -- compaction at close and at merge, bounded in time -----------------------------------------------------------------
+
+const KEY = 'resource:run.id';
+const sec = (h: number, extra = 0): string =>
+  String(BigInt(EPOCH_NS) + BigInt(h) * HOUR + BigInt(extra) * 1000n);
+
+/** One flush: `count` spans and logs at hour `h` (the last span starts at `lastHour`, so one flush can be long). */
+async function flushAt(
+  s: Awaited<ReturnType<typeof openSession>>,
+  h: number,
+  first: number,
+  count = 4,
+  lastHour = h,
+): Promise<void> {
+  const spans = Array.from({ length: count }, (_, i) =>
+    span({
+      traceId: (first + i + 1).toString(16).padStart(32, '0'),
+      spanId: (first + i + 1).toString(16).padStart(16, '0'),
+      startTimeUnixNano: sec(i === count - 1 ? lastHour : h, i),
+      endTimeUnixNano: sec(i === count - 1 ? lastHour : h, i + 1),
+    }),
+  );
+  const resource = [{ key: 'run.id', value: { stringValue: 'run-a' } }];
+  await s.add(otlp(traceRequest(spans, resource)), `s-${first}.json`);
+  await s.add(
+    otlp(
+      logsRequest([logRecord({ timeUnixNano: sec(h) }), logRecord({ timeUnixNano: sec(h, 1) })], resource),
+    ),
+    `l-${first}.json`,
+  );
+  await s.flush();
+}
+
+const reportOf = (w: TestWriter, out: string, hours: readonly number[], close: boolean) =>
+  (async () => {
+    const s = await openSession(w.deps, {
+      out,
+      config: testConfig({ writer: { format: 'site', statisticsKeys: [KEY] } }),
+      mode: 'replace',
+    });
+    for (const [i, h] of hours.entries()) await flushAt(s, h, i * 10);
+    if (close) await s.close();
+    else await s.flush();
+  })();
+
+const spanOf = (f: { timeMin: string | null; timeMax: string | null } | undefined): bigint => {
+  if (f?.timeMin == null || f.timeMax == null) throw new Error('no time');
+  return BigInt(f.timeMax) - BigInt(f.timeMin);
+};
+
+describe('compaction at close is bounded in time', () => {
+  test('writes one partition per time group and no output spans more than 24 h unless one input does', async () => {
+    const w = createTestWriter();
+    await reportOf(w, 'r', [0, 2, 30, 60], true);
+    const spansFiles = manifestOf(w, 'r').partitions.map((p) => p.files.spans);
+    expect(spansFiles).toHaveLength(3);
+    for (const f of spansFiles) expect(spanOf(f)).toBeLessThanOrEqual(COMPACTION_SPAN_NS);
+    expect(spansFiles.map((f) => f?.rows).sort()).toEqual([4, 4, 8]);
+    // a single input longer than 24 h stays one partition
+    const w2 = createTestWriter();
+    const s = await openSession(w2.deps, {
+      out: 'r',
+      config: testConfig({ writer: { format: 'site' } }),
+      mode: 'replace',
+    });
+    await flushAt(s, 0, 0);
+    await flushAt(s, 2, 10);
+    await flushAt(s, 100, 20, 4, 140);
+    await s.close();
+    const files = manifestOf(w2, 'r').partitions.map((p) => p.files.spans);
+    expect(files).toHaveLength(2);
+    expect(files.map((f) => f?.rows).sort()).toEqual([4, 8]);
+    expect(files.map((f) => String(spanOf(f) > COMPACTION_SPAN_NS)).sort()).toEqual(['false', 'true']);
+  });
+
+  test('compactOnMerge still writes per merge input, each split by time group', async () => {
+    const w = createTestWriter();
+    await reportOf(w, 'a', [0, 1, 30, 31], true);
+    await reportOf(w, 'b', [0, 1, 30, 31], true);
+    await mergeReports(w.deps, ['a', 'b'], {
+      out: 'm',
+      config: testConfig({ writer: { format: 'site', statisticsKeys: [KEY], compactOnMerge: true } }),
+      mode: 'replace',
+    });
+    const spansFiles = manifestOf(w, 'm').partitions.map((p) => p.files.spans);
+    expect(spansFiles).toHaveLength(4);
+    for (const f of spansFiles) expect(spanOf(f)).toBeLessThanOrEqual(COMPACTION_SPAN_NS);
+    expect(spansFiles.reduce((n, f) => n + (f?.rows ?? 0), 0)).toBe(32);
+  });
+
+  test('rollup rows, statistics and timeEndMax of the outputs equal those of an uncompacted report', async () => {
+    const w = createTestWriter();
+    await reportOf(w, 'closed', [0, 2, 30, 60], true);
+    await reportOf(w, 'open', [0, 2, 30, 60], false);
+    const closed = manifestOf(w, 'closed');
+    const open = manifestOf(w, 'open');
+    expect(closed.partitions.length).toBeLessThan(open.partitions.length);
+    const range = (m: typeof closed, table: 'spans' | 'logs' | 'traces') => {
+      const files = m.partitions.flatMap((p) => (p.files[table] === undefined ? [] : [p.files[table]]));
+      const big = (xs: (string | null | undefined)[]) => xs.filter((x): x is string => x != null).map(BigInt);
+      const sorted = (xs: bigint[]) => [...xs].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      const lo = (xs: bigint[]) => sorted(xs)[0];
+      const hi = (xs: bigint[]) => sorted(xs).at(-1);
+      return {
+        rows: files.reduce((n, f) => n + f.rows, 0),
+        min: lo(big(files.map((f) => f.timeMin))),
+        max: hi(big(files.map((f) => f.timeMax))),
+        end: table === 'logs' ? null : hi(big(files.map((f) => f.timeEndMax))),
+        values: [...new Set(files.flatMap((f) => f.values[KEY] ?? []))].sort(),
+      };
+    };
+    for (const t of ['spans', 'logs', 'traces'] as const) expect(range(closed, t), t).toEqual(range(open, t));
+    for (const t of ['span_rollups', 'log_rollups'] as const) {
+      const sum = (name: string) => {
+        const rows = tableRowsOf(w, name, t);
+        return canon(addRollupRows(rows, []));
+      };
+      expect(sum('closed'), t).toEqual(sum('open'));
+      expect(sum('open').length, t).toBeGreaterThan(0);
+    }
+  });
+});
+
+async function logFlush(s: Awaited<ReturnType<typeof openSession>>, h: number, body: string): Promise<void> {
+  const records = [0, 1].map((i) => logRecord({ timeUnixNano: sec(h, i), body: { stringValue: body } }));
+  await s.add(otlp(logsRequest(records)), `lg-${h}-${body}.json`);
+  await s.flush();
+}
+
+describe('compaction by time group keeps one template per pattern', () => {
+  test.each([
+    ['in time order', [0, 30, 31]],
+    ['out of time order', [30, 0, 1]],
+  ])('%s', async (_name, hours) => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, {
+      out: 'r',
+      config: testConfig({ writer: { format: 'site' } }),
+      mode: 'replace',
+    });
+    // the first flush's cluster is `worker started job alpha`, which the later ones generalise
+    for (const [i, h] of hours.entries())
+      await logFlush(s, h, i === 0 ? 'worker started job alpha' : 'worker started job beta');
+    await s.close();
+    const m = manifestOf(w, 'r');
+    // more than one partition: the time bound split the report
+    expect(m.partitions.length).toBeGreaterThan(1);
+    const rows = tableRowsOf(w, 'r', 'patterns');
+    expect([...new Set(rows.map((r) => Reflect.get(r, 'template')))]).toEqual(['worker started job <*>']);
+    expect(rows.reduce((n, r) => n + Number(Reflect.get(r, 'count')), 0)).toBe(6);
+  });
+});
+
+describe('compaction by time group: sources and statistics', () => {
+  test('the source is the first and last member of the group, not every number between', async () => {
+    const w = createTestWriter();
+    await reportOf(w, 'r', [0, 30, 1], true);
+    const sources = manifestOf(w, 'r').partitions.map((p) => p.source);
+    expect(sources.some((x) => x === 'compact:0..2')).toBe(true);
+    expect(sources.some((x) => x === 'flush:1')).toBe(true);
+  });
+
+  test('each output has the statistics of the fold of its own inputs', async () => {
+    const w = createTestWriter();
+    await reportOf(w, 'open', [0, 2, 30, 60], false);
+    await reportOf(w, 'closed', [0, 2, 30, 60], true);
+    const open = manifestOf(w, 'open').partitions;
+    const closed = manifestOf(w, 'closed').partitions;
+    const fold = (parts: typeof open) => {
+      const f = parts.flatMap((p) => (p.files.spans === undefined ? [] : [p.files.spans]));
+      const times = f.flatMap((x) =>
+        x.timeMin === null || x.timeMax === null ? [] : [BigInt(x.timeMin), BigInt(x.timeMax)],
+      );
+      const ends = f.flatMap((x) => (x.timeEndMax == null ? [] : [BigInt(x.timeEndMax)]));
+      const sort = (xs: bigint[]) => [...xs].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      return {
+        rows: f.reduce((n, x) => n + x.rows, 0),
+        min: String(sort(times)[0]),
+        max: String(sort(times).at(-1)),
+        end: String(sort(ends).at(-1)),
+        values: [...new Set(f.flatMap((x) => x.values[KEY] ?? []))].sort(),
+      };
+    };
+    // flush partitions of the uncompacted report, by hour group: [0, 2], [30], [60]
+    const groups = [[0, 1], [2], [3]];
+    expect(closed).toHaveLength(3);
+    const byStart = [...closed].sort((a, b) =>
+      Number(BigInt(a.files.spans?.timeMin ?? 0) - BigInt(b.files.spans?.timeMin ?? 0)),
+    );
+    for (const [i, g] of groups.entries()) {
+      const out = byStart[i];
+      if (out === undefined) throw new Error('missing output');
+      expect(fold([out]), `output ${i}`).toEqual(
+        fold(g.flatMap((j) => (open[j] === undefined ? [] : [open[j]]))),
+      );
+    }
   });
 });

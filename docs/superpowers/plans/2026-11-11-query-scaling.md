@@ -30,7 +30,7 @@ in order; a PR starts from `main` after the previous one merged.
 | 3   | `perf/small-site-files`      | `perf(viewer): small site files load whole and in parallel`            |        | merged #289 |
 | 4   | `perf/pruning-statistics`    | `perf(query): statistics survive merges and reads follow the window`   | #272   | merged #292 |
 | 5   | `feat/format-5`              | `feat(format): format 5 with rollup tables and the end-time statistic` |        | merged #293 |
-| 6   | `perf/rollup-router`         | `perf(viewer): long windows are answered from rollups`                 | #271   |        |
+| 6   | `perf/rollup-router`         | `perf(viewer): long windows are answered from rollups`                 | #271   | merged #296 |
 | 7   | `perf/compaction-time-bound` | `perf(writer): compaction keeps files bounded in time`                 |        |        |
 | 8   | `feat/default-window`        | `feat(viewer): viewer.defaultWindow and longer presets`                |        |        |
 | 9   | `docs/query-scaling-record`  | `docs(plan): query-scaling record`                                     |        |        |
@@ -100,7 +100,7 @@ outside the PR's list below.
 | 4   | `spans.total.statkey.*`, `logs.timeline.statkey.*` on the `merged` shape → the classes they have on the plain shape; `trace.has`, `trace.logs` → `matched` on density (Task 11a; measured `files`). `trace.get` and `trace.share` were planned here too; with no bloom filter on `spans` (maintainer, 2026-11-12) they stay `scan`, owed to #291 by PR 9; `traces.list.all`, `traces.list.all.long` → `files` on every axis; new entries `resourceValues.short`/`.long` (their logs and points parts skip files outside the window; their spans part stays on #271's end-time debt line until PR 6) and `logs.total.*` (declared as measured) | #272's test: a run selection on a merged two-run report opens only that run's files |
 | 5   | none (the rollups exist but nothing reads them); no entry may get worse                                                                                                                                             | format-4 reports open unchanged; rollup file < 4 % of its spans file on the measured partition (2 % until the maintainer accepted 3.46 %, 2026-11-13); frozen `format-5` fixture; README table             |
 | 6   | the long-window aggregates over rollup dimensions (`spans.total.long`, `spans.total.sortkey.long`, `spans.total.statkey.long`, `spans.buckets.long`, `spans.timeline.long`, `spans.facets.core.long`, `spans.groups.long`, `spans.services.long`, `spans.durations.long`, `logs.timeline.long`, `logs.timeline.statkey.long`, `logs.facets.core.long`, `logs.total.long`, `resourceValues.long`) → `fixed`/`fixed`/`files`; `percentile.long` → `files`/`fixed`/n.a.; `traces.list.long` → `files`×3; every windowed spans entry and `resourceValues.short` → `fixed` on retention (end-time pruning, Task 19); `resourceValues.all` (#282, re-targeted from PR 4: the rollup route must also answer a call without a window) | equivalence test (rollup = raw = mix) on the edge data of §6; debt list holds no aggregate over rollup dimensions |
-| 7   | the `compacted` generator shape: entries keep their classes when one partition is a compaction of many                                                                                                              | no file written by compaction spans more than 24 h unless a single input does                                                                       |
+| 7   | the `compacted` generator shape: entries keep their classes on retention and window when one partition is a compaction of many (density is out: maintainer, 2026-11-14; a compacted logs file passes the small-file limit and is range-read, whatever the time bound)                                                                                                              | no file written by compaction spans more than 24 h unless a single input does                                                                       |
 | 8   | none; the prediction for today's shape is taken with the 7-day window                                                                                                                                               | `#/dashboards/ci` predicted ≤ 150 serial range requests                                                                                             |
 | 9   | none | live: `#/dashboards/ci` ≤ 150 serial range requests and ≤ 5 s; `#/traces?mode=traces` ≤ 5 s (§9). A miss is reported in the record with its cause; it is not a stop |
 
@@ -167,7 +167,10 @@ change in any PR (a need for one is a stop).
   `src/viewer/components/fusion-timeline.tsx` (maintainer, 2026-11-13: the dashboard Timeline puts its columns on the
   buckets' origin under a long window); and `src/viewer/state/use-keyed-async.ts` (maintainer, 2026-11-14: an
   aborted keyed load is not an error). No build file.
-- **PR 7** — `src/writer/compaction.ts`, `src/writer/partition-session.ts`, `src/viewer/data/catalogue.ts`. No build
+- **PR 7** — `src/writer/compaction.ts`, `src/writer/partition-session.ts`, `src/viewer/data/catalogue.ts`; and
+  `src/cli/commands/merge.ts` (maintainer, 2026-11-14: the `--compact` help text names the 24 h groups); and
+  `.github/workflows/ci.yml` (maintainer, 2026-11-14: the binary smoke step asserts that every partition left by close is a
+  compaction, not that there is exactly one). No build
   file.
 - **PR 8** — `src/config/schema.ts`, `src/viewer/shell/shell.tsx`, `src/viewer/shell/time-range.tsx`,
   `src/viewer/state/selection.ts`, `src/viewer/state/url-state.ts`, `src/viewer/state/param-schemas.ts`,

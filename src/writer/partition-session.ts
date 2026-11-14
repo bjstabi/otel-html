@@ -46,7 +46,7 @@ import {
   writeManifest,
   writeStateSlotV2,
 } from './checkpoint.js';
-import { compactPartitions } from './compaction.js';
+import { compactPartitions, latestTemplates, timeGroups, timeRangeOf } from './compaction.js';
 import { DedupeSet } from './dedupe.js';
 import { renderIndexHtml } from './html.js';
 import { inheritDashboards } from './inherit-config.js';
@@ -1027,8 +1027,8 @@ class PartitionSession implements WriterSession {
 
   /**
    * At close, after the held rows and any copies are committed: compacts the flush partitions, and with
-   * `writer.compactOnMerge` each merge input's copies (one compacted partition per input, so a lineage is never
-   * summed with another's; see `#compactGroup`).
+   * `writer.compactOnMerge` each merge input's copies (compacted per input, so a lineage is never summed with
+   * another's, and in each input per time group, so no output spans more than 24 h; see `#compactGroup`).
    */
   async #compact(): Promise<void> {
     const flushed = new Set(this.#flushed);
@@ -1047,18 +1047,56 @@ class PartitionSession implements WriterSession {
   }
 
   /**
-   * Compacts `picks` into one partition when there are two or more, as `compactPartitions` says. Writes only the new
-   * partition's folder; the next checkpoint commits it, in this order: the state (numbering past it, no flush
-   * partitions left), then the manifest (listing it in place of the picks). The folders it replaces are removed by
-   * `#pruneCommitted` after that commit. Compaction is an optimisation, so a failure keeps the picks and is logged.
+   * Compacts `picks` group by group (`timeGroups` of their time ranges: no output spans more than 24 h unless one
+   * input does), each as `#compactOne` says.
    */
   async #compactGroup(
     picks: readonly PartitionEntry[],
     patternKey: 'cluster' | 'cluster-template' = 'cluster',
   ): Promise<void> {
+    const ranged = picks.map((entry) => ({ entry, ...timeRangeOf(entry) }));
+    const groups = timeGroups(ranged);
+    // A cluster keeps the template of the highest partition across all the groups, as one compaction would write it.
+    const latest =
+      groups.length > 1 && patternKey === 'cluster'
+        ? await latestTemplates(
+            this.#deps.fs,
+            this.#out,
+            [...picks].sort((a, b) => a.n - b.n),
+          ).catch((error: unknown) => {
+            // each group then keeps its own latest template: the Patterns page may show a pattern once per template
+            this.#deps.logger.warn(
+              'could not read the patterns to share templates across compaction groups',
+              {
+                error: error instanceof Error ? error.message : String(error),
+              },
+            );
+            return undefined;
+          })
+        : undefined;
+    for (const group of groups) {
+      const members = group.map((g) => g.entry).sort((a, b) => a.n - b.n);
+      // a lone partition is rewritten only to bring its patterns to the latest templates
+      const rewrite = members.length === 1 && members.some((m) => latest?.stale.has(m.n));
+      await this.#compactOne(members, patternKey, latest?.templates, rewrite);
+    }
+  }
+
+  /**
+   * Compacts `picks` into one partition when there are two or more, as `compactPartitions` says. Writes only the new
+   * partition's folder; the next checkpoint commits it, in this order: the state (numbering past it, no flush
+   * partitions left), then the manifest (listing it in place of the picks). The folders it replaces are removed by
+   * `#pruneCommitted` after that commit. Compaction is an optimisation, so a failure keeps the picks and is logged.
+   */
+  async #compactOne(
+    picks: readonly PartitionEntry[],
+    patternKey: 'cluster' | 'cluster-template',
+    templates?: ReadonlyMap<string, string>,
+    rewriteOne = false,
+  ): Promise<void> {
     const first = picks[0];
     const last = picks.at(-1);
-    if (first === undefined || last === undefined || picks.length < 2) return;
+    if (first === undefined || last === undefined || (picks.length < 2 && !rewriteOne)) return;
     const span = this.#deps.tracer.startSpan('otel-html.compact', { partitions: picks.length });
     try {
       const n = this.#writer.nextPartition;
@@ -1068,8 +1106,10 @@ class PartitionSession implements WriterSession {
         statisticsKeys: this.#statisticsKeys,
         facetValueCap: this.#config.writer.facetValueCap,
         format: this.#config.writer.format,
+        // the group's first and last partition numbers, not every number between (a group is made by time)
         source: `compact:${first.n}..${last.n}`,
         patternKey,
+        ...(templates === undefined ? {} : { templates }),
         warn: (message, attrs) => this.#deps.logger.warn(message, attrs),
       });
       this.#writer.skipTo(n + 1);

@@ -51,8 +51,79 @@ export interface CompactOptions {
    * (a merge's copies), whose ids collide: only rows with the same id and template are summed.
    */
   patternKey?: 'cluster' | 'cluster-template';
+  /**
+   * With `cluster`: the template each cluster id has in the highest partition of the whole report close, when this
+   * compaction holds only one time group of it (`latestTemplates`). A cluster not listed keeps its own latest.
+   */
+  templates?: ReadonlyMap<string, string>;
   /** Where the guard's refusal of a rollup is told. */
   warn?: (message: string, attrs: Record<string, unknown>) => void;
+}
+
+/** The most time one compaction output may span, unless a single input does already: 24 hours, in nanoseconds. */
+export const COMPACTION_SPAN_NS = 86_400_000_000_000n;
+
+/**
+ * Splits `inputs` into groups that are compacted separately, so that no output covers more than
+ * `COMPACTION_SPAN_NS` between its earliest `timeMin` and its latest `timeMax`. Inputs are taken in order of `timeMin`
+ * and added to the open group while the union stays within the bound; one input that spans more than the bound is a
+ * group of its own (it is not made worse, and nothing else joins it). Inputs with no time join the first group that is
+ * not such a long input, or are a group of their own when every group is.
+ * The members of a group keep the order the caller gave them, and the groups follow time.
+ */
+export function timeGroups<T extends { timeMin: string | null; timeMax: string | null }>(
+  inputs: readonly T[],
+): T[][] {
+  const timeless = inputs.filter((i) => i.timeMin === null || i.timeMax === null);
+  const timed = inputs
+    .filter((i) => i.timeMin !== null && i.timeMax !== null)
+    .map((input, order) => ({
+      input,
+      order,
+      min: BigInt(input.timeMin ?? 0),
+      max: BigInt(input.timeMax ?? 0),
+    }))
+    .sort((a, b) => (a.min < b.min ? -1 : a.min > b.min ? 1 : a.order - b.order));
+  const groups: { members: typeof timed; min: bigint; max: bigint; alone: boolean }[] = [];
+  for (const t of timed) {
+    const open = groups.at(-1);
+    const long = t.max - t.min > COMPACTION_SPAN_NS;
+    if (open !== undefined && !long && !open.alone) {
+      let max = open.max;
+      if (t.max > max) max = t.max;
+      if (max - open.min <= COMPACTION_SPAN_NS) {
+        open.members.push(t);
+        open.max = max;
+        continue;
+      }
+    }
+    groups.push({ members: [t], min: t.min, max: t.max, alone: long });
+  }
+  const out = groups.map((g) => [...g.members].sort((a, b) => a.order - b.order).map((m) => m.input));
+  if (timeless.length === 0) return out;
+  const open = groups.findIndex((g) => !g.alone);
+  const target = open < 0 ? undefined : out[open];
+  if (target === undefined) return [timeless, ...out];
+  target.unshift(...timeless);
+  return out;
+}
+
+/** The tables whose rows carry the time a partition covers (not the rollups, which repeat it, nor `patterns`). */
+const TIMED: readonly Table[] = ['spans', 'logs', 'points', 'traces'];
+
+/** The earliest `timeMin` and latest `timeMax` of the partition's timed files; null when none has a time. */
+export function timeRangeOf(entry: PartitionEntry): { timeMin: string | null; timeMax: string | null } {
+  let min: bigint | null = null;
+  let max: bigint | null = null;
+  for (const t of TIMED) {
+    const f = entry.files[t];
+    if (f?.timeMin == null || f.timeMax == null) continue;
+    const lo = BigInt(f.timeMin);
+    const hi = BigInt(f.timeMax);
+    if (min === null || lo < min) min = lo;
+    if (max === null || hi > max) max = hi;
+  }
+  return { timeMin: min === null ? null : String(min), timeMax: max === null ? null : String(max) };
 }
 
 /** Rows a merge holds before it hands them to the writer; the Parquet writer still cuts row groups of `rowGroupRows`. */
@@ -383,7 +454,11 @@ function severityCounts(json: unknown): [number, number][] {
  * Per cluster id (one Drain lineage), or with `byTemplate` per id and template (different lineages): counts summed; first the minimum and last the maximum; the template from the
  * highest partition; the sample from the row with the smallest first time (the lower partition on a tie).
  */
-async function aggregatePatterns(rows: AsyncIterable<Located>, byTemplate: boolean): Promise<Row[]> {
+async function aggregatePatterns(
+  rows: AsyncIterable<Located>,
+  byTemplate: boolean,
+  templates?: ReadonlyMap<string, string>,
+): Promise<Row[]> {
   const acc = new Map<string, PatternAcc & { id: bigint }>();
   for await (const l of rows) {
     const id = big(cell(l.row, 'cluster_id'));
@@ -411,13 +486,14 @@ async function aggregatePatterns(rows: AsyncIterable<Located>, byTemplate: boole
   return [...acc.values()]
     .sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))
     .map((a): Row => {
+      const template = byTemplate ? undefined : templates?.get(String(a.id));
       const severities: Record<string, number> = {};
       for (const sev of [...a.severities.keys()].sort((x, y) => x - y)) {
         severities[String(sev)] = a.severities.get(sev) ?? 0;
       }
       return {
         cluster_id: a.id,
-        template: a.template,
+        template: template ?? a.template,
         count: a.count,
         first_time_unix_nano: a.first,
         last_time_unix_nano: a.last,
@@ -425,6 +501,41 @@ async function aggregatePatterns(rows: AsyncIterable<Located>, byTemplate: boole
         sample: text(cell(a.sample?.row, 'sample')) ?? null,
       };
     });
+}
+
+/**
+ * The template of each cluster id in the highest partition that has it, over `entries` (in partition order): what a
+ * single compaction of all of them would write. Compacting by time group, each group gets these, so a pattern keeps
+ * one template (one Patterns row) across the output partitions. `stale` are the partitions that hold a cluster with
+ * another template: a group of one of them is rewritten, or it would keep the old row.
+ */
+export async function latestTemplates(
+  fs: FileSystem,
+  out: string,
+  entries: readonly PartitionEntry[],
+): Promise<{ templates: Map<string, string>; stale: Set<number> }> {
+  const templates = new Map<string, string>();
+  const held: { n: number; id: string; template: string }[] = [];
+  const watch = watchWasmPanics();
+  try {
+    for (const e of entries) {
+      const f = e.files.patterns;
+      if (f === undefined) continue;
+      for await (const row of rowsOf('patterns', await blobOf(fs, at(out, f.path)), f.path, watch.guard)) {
+        const id = big(cell(row, 'cluster_id'));
+        const template = text(cell(row, 'template'));
+        if (id === null || template === null) continue;
+        templates.set(String(id), template);
+        held.push({ n: e.n, id: String(id), template });
+      }
+    }
+  } finally {
+    watch.stop();
+  }
+  return {
+    templates,
+    stale: new Set(held.filter((h) => templates.get(h.id) !== h.template).map((h) => h.n)),
+  };
 }
 
 // -- rollups ----------------------------------------------------------------------------------------------------
@@ -762,7 +873,7 @@ export async function compactPartitions(
           const byTemplate = opts.patternKey === 'cluster-template';
           const rows = await (table === 'traces'
             ? aggregateTraces(located())
-            : aggregatePatterns(located(), byTemplate));
+            : aggregatePatterns(located(), byTemplate, opts.templates));
           for (const [i, row] of rows.entries()) checkRow(table, row, i);
           const batch = batchFromRows(table, rows);
           const bytes = encodeColumns(table, batch, { rowGroupRows: opts.rowGroupRows });

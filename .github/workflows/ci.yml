@@ -607,12 +607,14 @@ jobs:
           # The engine's parquet and json extensions travel with the report, so it opens offline.
           test -s out/assets/parquet.*.duckdb_extension.wasm
           test -s out/assets/json.*.duckdb_extension.wasm
-          # A small chunk target makes hundreds of flush partitions, which close compacts into one: that runs the
-          # streaming reader and writer, the merge rounds and the directory removal inside the binary.
+          # A small chunk target makes hundreds of flush partitions, which close compacts into one per 24 hours of
+          # data: that runs the streaming reader and writer, the merge rounds and the directory removal inside the
+          # binary. Every partition left is a compaction.
           ./otel-html${{ matrix.ext }} convert --config small-chunks.yaml in.otlp.json linked-logs.otlp.json \
             logs-only.otlp.json small.otlp.json metrics.otlp.json ci.otlp.json -o out2
-          test "$(find out2/data/partitions -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 1
-          grep -q '"source":"compact:' out2/data/manifest.js
+          parts="$(find out2/data/partitions -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+          test "$parts" -ge 1
+          test "$(grep -o '"source":"compact:' out2/data/manifest.js | wc -l | tr -d ' ')" = "$parts"
           # The local format: the embedded base64 engine files and the Bun-native base64 of the wrappers.
           ./otel-html${{ matrix.ext }} convert --format local --config small-chunks.yaml in.otlp.json -o out3
           test -s out3/assets/duckdb.*.wasm.gz.b64.js

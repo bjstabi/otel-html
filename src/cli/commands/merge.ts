@@ -18,7 +18,10 @@ export function addMergeCommand(program: Command, io: CliIo, deps: Partial<Write
     .description('combine reports into one (adds to a report already at -o)')
     .argument('<reports...>', 'report folders')
     .requiredOption('-o, --out <dir>', 'report folder to write or add to')
-    .option('--compact', "compact each format-4 input's copied partitions into one (writer.compactOnMerge)")
+    .option(
+      '--compact',
+      "compact each format-4 or format-5 input's copied partitions into one per 24 h of data (writer.compactOnMerge)",
+    )
     .option('--config <file>', 'config file (default: $OTEL_HTML_CONFIG or ./otel-html.yaml)');
   addReportFormatOptions(addReportModeOptions(merge)).action(async (reports: string[], flags: MergeFlags) => {
     const fs = deps.fs ?? createNodeFileSystem();
