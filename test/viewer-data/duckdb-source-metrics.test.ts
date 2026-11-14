@@ -138,9 +138,9 @@ describe('metricCatalog', () => {
   test('entries are ordered with sequential ids and describe each definition', async () => {
     const before = queries;
     const cat = await m.metricCatalog();
-    expect(queries - before).toBe(3);
+    expect(queries - before).toBe(4);
     await m.metricCatalog();
-    expect(queries - before).toBe(3);
+    expect(queries - before).toBe(4);
     expect(cat.entries.map((e) => [e.id, e.name, e.unit])).toEqual([
       [0, 'c', '1'],
       [1, 'e', '1'],
@@ -191,51 +191,12 @@ describe('metricCatalog', () => {
 });
 
 describe('metricShowOptions', () => {
-  test('the summary lists its quantiles, then count and sum, in one statement', async () => {
+  test("a summary's show options are read with the catalogue: no statement after it", async () => {
     const cat = await m.metricCatalog();
     const s = byName(cat.entries, 's');
     const before = queries;
     expect(await m.metricShowOptions(s.id)).toEqual(['q0.5', 'q0.99', 'count', 'sum']);
-    expect(queries - before).toBe(1);
-  });
-
-  test('two calls for one summary issue one statement', async () => {
-    const inner = mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db);
-    let runs = 0;
-    const counting: QueryEngine = {
-      ...inner,
-      query: (qq, signal) => {
-        runs++;
-        return inner.query(qq, signal);
-      },
-    };
-    const mm = metricMethods({ engine: counting, manifest: f.manifest, epoch: f.epoch, range: null });
-    const s = byName((await mm.metricCatalog()).entries, 's');
-    const before = runs;
-    const [a, b] = await Promise.all([mm.metricShowOptions(s.id), mm.metricShowOptions(s.id)]);
-    await mm.metricShowOptions(s.id);
-    expect(a).toEqual(b);
-    expect(runs - before).toBe(1);
-  });
-
-  test('a rejected read is not kept: the next call retries', async () => {
-    const inner = mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db);
-    let armed = false;
-    const flaky: QueryEngine = {
-      ...inner,
-      query: (qq, signal) => {
-        if (armed) {
-          armed = false;
-          return Promise.reject(new Error('boom'));
-        }
-        return inner.query(qq, signal);
-      },
-    };
-    const mm = metricMethods({ engine: flaky, manifest: f.manifest, epoch: f.epoch, range: null });
-    const s = byName((await mm.metricCatalog()).entries, 's');
-    armed = true;
-    await expect(mm.metricShowOptions(s.id)).rejects.toThrow('boom');
-    expect(await mm.metricShowOptions(s.id)).toEqual(['q0.5', 'q0.99', 'count', 'sum']);
+    expect(queries - before).toBe(0);
   });
 
   test('other kinds use the fixed options and no statement', async () => {
@@ -315,7 +276,13 @@ describe('catalog robustness', () => {
       scope_dropped_attributes_count: [0n, 0n],
     });
     const spark = tableFromArrays({ ...def, bucket: [0n], sum: [1], n: [1n] });
-    const cat = catalogFrom(defs, ids, spark, { widthNs: 1e6, startNs: 0, endNs: 0, originNs: 0 });
+    const cat = catalogFrom(
+      defs,
+      ids,
+      spark,
+      { widthNs: 1e6, startNs: 0, endNs: 0, originNs: 0 },
+      tableFromArrays({ q: [] }),
+    );
     expect(cat.resources).toHaveLength(1);
     expect([...(cat.resourceTexts[0] ?? [])].sort()).toEqual([...texts].sort());
     expect(cat.entries[0]?.resources).toEqual([0]);
@@ -1396,7 +1363,13 @@ describe('branch-review fixes', () => {
       scope_dropped_attributes_count: [0n, 0n],
     });
     const spark = tableFromArrays({ ...def, bucket: [0n], sum: [1], n: [1n] });
-    const cat = catalogFrom(defs, ids, spark, { widthNs: 1e6, startNs: 0, endNs: 0, originNs: 0 });
+    const cat = catalogFrom(
+      defs,
+      ids,
+      spark,
+      { widthNs: 1e6, startNs: 0, endNs: 0, originNs: 0 },
+      tableFromArrays({ q: [] }),
+    );
     expect(cat.entries[0]?.attributeKeys).toEqual(['$k', 'a', 'b', 'z']);
   });
 

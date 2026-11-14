@@ -45,7 +45,6 @@ import {
   type MetricQueryResult,
   type MetricRunQueryRequest,
   pickWidthNs,
-  summaryShowOptions,
   upperMedian,
 } from './metric-results.js';
 import { checkShow, kindOf, NOTES, SHOW_BY_KIND } from './metric-tables.js';
@@ -97,12 +96,13 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
 
   const load = async (): Promise<CatalogRows> => {
     const spec = bucketSpec(null, range, SPARK_BUCKETS);
-    const [defs, identities, spark] = await Promise.all([
+    const [defs, identities, spark, quantiles] = await Promise.all([
       read(undefined, metricDefsQuery()),
       read(undefined, metricIdentitiesQuery()),
       read(undefined, metricSparkQuery(spec, epoch)),
+      read(undefined, summaryQuantilesQuery()),
     ]);
-    return catalogFrom(defs, identities, spark, spec);
+    return catalogFrom(defs, identities, spark, spec, quantiles);
   };
   const metricCatalog = (): Promise<CatalogRows> => {
     if (catalog === null) {
@@ -444,42 +444,19 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
     );
   }
 
-  // Show options do not depend on the window: one read per entry, dropped again when it fails.
-  const showOptions = new Map<number, Promise<readonly string[]>>();
+  // Show options do not depend on the window: a summary's quantiles came with the catalogue.
   async function showOptionsOf(entryId: number): Promise<readonly string[]> {
     const cat = await metricCatalog();
     const entry = cat.entries[entryId];
-    const identity = cat.identities[entryId];
-    if (entry === undefined || identity === undefined) {
-      throw usage('metric entry', 'an entry of the catalog', String(entryId));
-    }
+    if (entry === undefined) throw usage('metric entry', 'an entry of the catalog', String(entryId));
     const kind = kindOf(entry);
     if (kind !== 'summary') return SHOW_BY_KIND[kind];
-    // `points` keeps `metric_name` statistics: a partition without the metric is not read.
-    const { filter } = buildFilter({
-      manifest,
-      table: 'points',
-      condition: null,
-      text: '',
-      window: null,
-      hints: new Map([['metric_name', new Set([identity.name])]]),
-    });
-    return summaryShowOptions(await read(filter.files, summaryQuantilesQuery(identity, filter.files)));
+    return cat.quantiles.get(entryId) ?? SHOW_BY_KIND.summary;
   }
 
   return {
     metricCatalog,
-    metricShowOptions(entryId) {
-      const held = showOptions.get(entryId);
-      if (held !== undefined) return held;
-      const run = showOptionsOf(entryId);
-      showOptions.set(entryId, run);
-      // A rejection is not kept: the next call retries.
-      run.catch(() => {
-        if (showOptions.get(entryId) === run) showOptions.delete(entryId);
-      });
-      return run;
-    },
+    metricShowOptions: showOptionsOf,
     metricQuery,
     metricRunQuery,
     async metricsForResources(resources) {

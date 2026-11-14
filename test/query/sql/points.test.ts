@@ -199,8 +199,12 @@ describe('metric catalog queries', () => {
   });
 
   test('summary quantiles are the distinct values across partitions, ascending', () => {
-    const id: MetricIdentity = { name: 's', type: 'summary', unit: '1', temporality: 0, monotonic: false };
-    expect(run(summaryQuantilesQuery(id)).map((r) => num(r.q))).toEqual([0.5, 0.99, 1]);
+    const rows = run(summaryQuantilesQuery());
+    expect(rows.map((r) => [String(r.metric_name), num(r.q)])).toEqual([
+      ['s', 0.5],
+      ['s', 0.99],
+      ['s', 1],
+    ]);
   });
 
   test('identityTerms match nullable columns with IS NOT DISTINCT FROM', () => {

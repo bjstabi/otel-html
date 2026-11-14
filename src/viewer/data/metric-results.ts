@@ -236,10 +236,18 @@ export interface CatalogRows extends MetricCatalogData {
   resourceTexts: readonly string[][];
   /** Per entry (by id), the definition as `points` stores it. */
   identities: readonly MetricIdentity[];
+  /** Per summary entry (by id), its show options as `summaryShowOptions` makes them. */
+  quantiles: ReadonlyMap<number, readonly string[]>;
 }
 
-/** The three catalog statements' results as the catalog (D20): attribute keys and resources come from the identity texts. */
-export function catalogFrom(defs: Table, identities: Table, spark: Table, spec: BucketSpec): CatalogRows {
+/** The four catalog statements' results as the catalog (D20): attribute keys and resources come from the identity texts. */
+export function catalogFrom(
+  defs: Table,
+  identities: Table,
+  spark: Table,
+  spec: BucketSpec,
+  quantiles: Table,
+): CatalogRows {
   const buckets = Math.floor((spec.endNs - spec.startNs) / spec.widthNs) + 1;
 
   interface Acc {
@@ -377,21 +385,30 @@ export function catalogFrom(defs: Table, identities: Table, spark: Table, spec: 
     };
   });
 
+  const qsByKey = new Map<string, number[]>();
+  for (const row of rowsOf(quantiles)) {
+    const q = cell(row, 'q');
+    if (typeof q !== 'number') throw invalid('q', 'a number', q);
+    const key = storedDef(row).key;
+    const held = qsByKey.get(key);
+    if (held === undefined) qsByKey.set(key, [q]);
+    else held.push(q);
+  }
+  const quantileOptions = new Map<number, readonly string[]>();
+  defsOf.forEach(({ acc, type }, id) => {
+    if (type !== 'summary') return;
+    const { name, type: stored, unit, temporality, monotonic } = acc.id;
+    const qs = qsByKey.get(JSON.stringify([name, stored, unit, temporality, monotonic])) ?? [];
+    // `q<quantile>` per quantile, then `count` and `sum`
+    quantileOptions.set(id, [...qs.map((q) => `q${q}`), ...SHOW_BY_KIND.summary]);
+  });
+
   return {
     entries,
+    quantiles: quantileOptions,
     resources: orderedResources.map(([, r]) => r.record),
     scopes: orderedScopes,
     resourceTexts: orderedResources.map(([, r]) => [...r.texts]),
     identities: defsOf.map(({ acc }) => acc.id),
   };
-}
-
-/** `q<quantile>` per quantile of a `summaryQuantilesQuery` result, then `count` and `sum`. */
-export function summaryShowOptions(t: Table): string[] {
-  const qs = rowsOf(t).map((r) => {
-    const q = cell(r, 'q');
-    if (typeof q !== 'number') throw invalid('q', 'a number', q);
-    return `q${q}`;
-  });
-  return [...qs, ...SHOW_BY_KIND.summary];
 }

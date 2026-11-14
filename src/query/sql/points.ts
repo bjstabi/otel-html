@@ -101,23 +101,21 @@ export function metricSparkQuery(spec: BucketSpec, epoch: bigint): Query {
     .orderby(...IDENTITY_COLUMNS.map((c) => sql`${verbatim(c)}`), sql`bucket`);
 }
 
-/** The distinct `q` (DOUBLE) values of the definition's `quantiles` JSON (in `files` when given), ascending (a whole-numbered quantile is stored as `{"$d": "1"}`). */
-export function summaryQuantilesQuery(identity: MetricIdentity, files?: Pruned): Query {
+/**
+ * Per definition (the identity columns) and distinct `q` (DOUBLE) of its summary points' `quantiles` JSON, over the
+ * whole table, ordered by definition and ascending `q` (a whole-numbered quantile is stored as `{"$d": "1"}`).
+ */
+export function summaryQuantilesQuery(): Query {
   const entries = Query.from('points')
-    .select({ e: sql`unnest(from_json(quantiles, '["JSON"]'))` })
-    .where(
-      and(
-        ...identityTerms(identity),
-        ...(files === undefined ? [] : [filenameTerm(files)].filter((t) => t !== null)),
-        sql`quantiles IS NOT NULL`,
-      ),
-    );
+    .select({ ...identitySelect(), e: sql`unnest(from_json(quantiles, '["JSON"]'))` })
+    .where(sql`quantiles IS NOT NULL`);
   return Query.from({ t: entries })
     .distinct()
     .select({
+      ...identitySelect(),
       q: sql`CAST(coalesce(json_extract_string(e, '$.quantile."$d"'), json_extract_string(e, '$.quantile')) AS DOUBLE)`,
     })
-    .orderby(sql`q`);
+    .orderby(...IDENTITY_COLUMNS.map((c) => sql`${verbatim(c)}`), sql`q`);
 }
 
 /** A `by` path as the SQL expression of its JSON text: `src` as written, `identity` when it reads attributes, resource or scope. */
