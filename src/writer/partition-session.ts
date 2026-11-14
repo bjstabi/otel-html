@@ -46,7 +46,7 @@ import {
   writeManifest,
   writeStateSlotV2,
 } from './checkpoint.js';
-import { compactPartitions, timeGroups, timeRangeOf } from './compaction.js';
+import { compactPartitions, latestTemplates, timeGroups, timeRangeOf } from './compaction.js';
 import { DedupeSet } from './dedupe.js';
 import { renderIndexHtml } from './html.js';
 import { inheritDashboards } from './inherit-config.js';
@@ -1055,11 +1055,22 @@ class PartitionSession implements WriterSession {
     patternKey: 'cluster' | 'cluster-template' = 'cluster',
   ): Promise<void> {
     const ranged = picks.map((entry) => ({ entry, ...timeRangeOf(entry) }));
-    for (const group of timeGroups(ranged))
-      await this.#compactOne(
-        group.map((g) => g.entry).sort((a, b) => a.n - b.n),
-        patternKey,
-      );
+    const groups = timeGroups(ranged);
+    // A cluster keeps the template of the highest partition across all the groups, as one compaction would write it.
+    const latest =
+      groups.length > 1 && patternKey === 'cluster'
+        ? await latestTemplates(
+            this.#deps.fs,
+            this.#out,
+            [...picks].sort((a, b) => a.n - b.n),
+          ).catch(() => undefined)
+        : undefined;
+    for (const group of groups) {
+      const members = group.map((g) => g.entry).sort((a, b) => a.n - b.n);
+      // a lone partition is rewritten only to bring its patterns to the latest templates
+      const rewrite = members.length === 1 && members.some((m) => latest?.stale.has(m.n));
+      await this.#compactOne(members, patternKey, latest?.templates, rewrite);
+    }
   }
 
   /**
@@ -1071,10 +1082,12 @@ class PartitionSession implements WriterSession {
   async #compactOne(
     picks: readonly PartitionEntry[],
     patternKey: 'cluster' | 'cluster-template',
+    templates?: ReadonlyMap<string, string>,
+    rewriteOne = false,
   ): Promise<void> {
     const first = picks[0];
     const last = picks.at(-1);
-    if (first === undefined || last === undefined || picks.length < 2) return;
+    if (first === undefined || last === undefined || (picks.length < 2 && !rewriteOne)) return;
     const span = this.#deps.tracer.startSpan('otel-html.compact', { partitions: picks.length });
     try {
       const n = this.#writer.nextPartition;
@@ -1084,8 +1097,10 @@ class PartitionSession implements WriterSession {
         statisticsKeys: this.#statisticsKeys,
         facetValueCap: this.#config.writer.facetValueCap,
         format: this.#config.writer.format,
+        // the group's first and last partition numbers, not every number between (a group is made by time)
         source: `compact:${first.n}..${last.n}`,
         patternKey,
+        ...(templates === undefined ? {} : { templates }),
         warn: (message, attrs) => this.#deps.logger.warn(message, attrs),
       });
       this.#writer.skipTo(n + 1);

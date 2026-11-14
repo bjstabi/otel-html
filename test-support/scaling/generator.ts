@@ -386,7 +386,7 @@ async function build(shape: Shape): Promise<ScalingReport> {
   // a span and a log of the first inside partition: span index 8 (second trace, first service), log row 0
   const k = 8;
   const firstStart = startOf(shape, first);
-  // after compaction the partition holding it also holds the logs of the slots before it, which sort first
+  // after compaction the partition holding it may also hold the logs of the slots before it
   const entry =
     shape.compacted === true
       ? manifest.partitions.find((p) => {
@@ -405,7 +405,7 @@ async function build(shape: Shape): Promise<ScalingReport> {
   let logFileRow = 0;
   if (shape.compacted === true)
     for (let slot = FIRST_SLOT - shape.outside; slot < first; slot++)
-      if (startOf(shape, slot) >= earlier) logFileRow += spanCount(shape, slot) / 8;
+      if (startOf(shape, slot) >= earlier) logFileRow += spanCount(shape, slot) / 16; // logs sort by service first: the earlier slots' first-service logs precede it
   return {
     dir: written.dir,
     manifest,

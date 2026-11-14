@@ -1132,6 +1132,9 @@ describe('timeGroups', () => {
     const none = { timeMin: null, timeMax: null };
     expect(sizes(timeGroups([at(30, 31), none, at(0, 1), none]))).toEqual([3, 1]);
     expect(sizes(timeGroups([none, none]))).toEqual([2]);
+    // not into a lone long input: the first group that is not one, or a group of their own
+    expect(sizes(timeGroups([at(0, 40), none, at(50, 51)]))).toEqual([1, 2]);
+    expect(sizes(timeGroups([at(0, 40), none]))).toEqual([1, 1]);
     expect(timeGroups([])).toEqual([]);
   });
 });
@@ -1255,6 +1258,82 @@ describe('compaction at close is bounded in time', () => {
       };
       expect(sum('closed'), t).toEqual(sum('open'));
       expect(sum('open').length, t).toBeGreaterThan(0);
+    }
+  });
+});
+
+async function logFlush(s: Awaited<ReturnType<typeof openSession>>, h: number, body: string): Promise<void> {
+  const records = [0, 1].map((i) => logRecord({ timeUnixNano: sec(h, i), body: { stringValue: body } }));
+  await s.add(otlp(logsRequest(records)), `lg-${h}-${body}.json`);
+  await s.flush();
+}
+
+describe('compaction by time group keeps one template per pattern', () => {
+  test.each([
+    ['in time order', [0, 30, 31]],
+    ['out of time order', [30, 0, 1]],
+  ])('%s', async (_name, hours) => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, {
+      out: 'r',
+      config: testConfig({ writer: { format: 'site' } }),
+      mode: 'replace',
+    });
+    // the first flush's cluster is `worker started job alpha`, which the later ones generalise
+    for (const [i, h] of hours.entries())
+      await logFlush(s, h, i === 0 ? 'worker started job alpha' : 'worker started job beta');
+    await s.close();
+    const m = manifestOf(w, 'r');
+    // more than one partition: the time bound split the report
+    expect(m.partitions.length).toBeGreaterThan(1);
+    const rows = tableRowsOf(w, 'r', 'patterns');
+    expect([...new Set(rows.map((r) => Reflect.get(r, 'template')))]).toEqual(['worker started job <*>']);
+    expect(rows.reduce((n, r) => n + Number(Reflect.get(r, 'count')), 0)).toBe(6);
+  });
+});
+
+describe('compaction by time group: sources and statistics', () => {
+  test('the source is the first and last member of the group, not every number between', async () => {
+    const w = createTestWriter();
+    await reportOf(w, 'r', [0, 30, 1], true);
+    const sources = manifestOf(w, 'r').partitions.map((p) => p.source);
+    expect(sources.some((x) => x === 'compact:0..2')).toBe(true);
+    expect(sources.some((x) => x === 'flush:1')).toBe(true);
+  });
+
+  test('each output has the statistics of the fold of its own inputs', async () => {
+    const w = createTestWriter();
+    await reportOf(w, 'open', [0, 2, 30, 60], false);
+    await reportOf(w, 'closed', [0, 2, 30, 60], true);
+    const open = manifestOf(w, 'open').partitions;
+    const closed = manifestOf(w, 'closed').partitions;
+    const fold = (parts: typeof open) => {
+      const f = parts.flatMap((p) => (p.files.spans === undefined ? [] : [p.files.spans]));
+      const times = f.flatMap((x) =>
+        x.timeMin === null || x.timeMax === null ? [] : [BigInt(x.timeMin), BigInt(x.timeMax)],
+      );
+      const ends = f.flatMap((x) => (x.timeEndMax == null ? [] : [BigInt(x.timeEndMax)]));
+      const sort = (xs: bigint[]) => [...xs].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      return {
+        rows: f.reduce((n, x) => n + x.rows, 0),
+        min: String(sort(times)[0]),
+        max: String(sort(times).at(-1)),
+        end: String(sort(ends).at(-1)),
+        values: [...new Set(f.flatMap((x) => x.values[KEY] ?? []))].sort(),
+      };
+    };
+    // flush partitions of the uncompacted report, by hour group: [0, 2], [30], [60]
+    const groups = [[0, 1], [2], [3]];
+    expect(closed).toHaveLength(3);
+    const byStart = [...closed].sort((a, b) =>
+      Number(BigInt(a.files.spans?.timeMin ?? 0) - BigInt(b.files.spans?.timeMin ?? 0)),
+    );
+    for (const [i, g] of groups.entries()) {
+      const out = byStart[i];
+      if (out === undefined) throw new Error('missing output');
+      expect(fold([out]), `output ${i}`).toEqual(
+        fold(g.flatMap((j) => (open[j] === undefined ? [] : [open[j]]))),
+      );
     }
   });
 });
