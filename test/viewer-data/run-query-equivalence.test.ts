@@ -287,10 +287,15 @@ describe('metricRunQuery answers as the whole read does', () => {
       failedWhen: null,
     };
     const residual = 'Len(attributes["job"]) > 4';
-    for (const req of [
-      { ...base, query: query('job.duration', { where: residual }) },
-      { ...base, failedWhen: residual },
-    ]) {
+    for (const [req, answers] of [
+      [{ ...base, query: query('job.duration', { where: residual }) }, false],
+      [{ ...base, failedWhen: residual }, false],
+      // its statistics prune every file of the failing condition: nothing is left to evaluate, so no error
+      [
+        { ...base, failedWhen: `resource.attributes["cicd.pipeline.run.id"] == "absent" and ${residual}` },
+        true,
+      ],
+    ] as const) {
       const main = await m.metricRunQuery(req).then(
         () => 'answered',
         (e: unknown) => String(e),
@@ -299,7 +304,7 @@ describe('metricRunQuery answers as the whole read does', () => {
         () => 'answered',
         (e: unknown) => String(e),
       );
-      expect(main).not.toBe('answered');
+      expect(main === 'answered').toBe(answers);
       expect(main).toBe(whole);
     }
   });

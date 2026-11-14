@@ -514,8 +514,10 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
       // The whole read would have needed the browser to evaluate a residual term, which a served engine cannot do.
       if (whole.filter.files.files.length > 0 && !engine.tempTables) {
         if (whole.residual !== null) throw servedResidual(whole.residual);
-        const failedResidual = failedWhen === null ? null : pruned(failedWhen, null).residual;
-        if (failedResidual !== null) throw servedResidual(failedResidual);
+        // As `scoped`: a condition whose own pruning keeps no file evaluates nothing, so it cannot need the browser.
+        const failed = failedWhen === null ? null : pruned(failedWhen, null);
+        if (failed !== null && failed.residual !== null && failed.filter.files.files.length > 0)
+          throw servedResidual(failed.residual);
       }
       const empty = tableFromArrays({});
       const left = tableFromArrays({
