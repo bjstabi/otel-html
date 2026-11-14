@@ -864,8 +864,8 @@ const BASELINE: Record<string, Declared> = {
   'metrics.query.long': decl(['fixed', 'fixed', 'files']),
   'metrics.query.summary': decl(['fixed', 'fixed', 'files']),
   'metrics.query.residual.long': decl(['fixed', 'fixed', 'files']),
-  'metrics.runQuery': decl(['files', 'fixed', 'files']),
-  'metrics.runQuery.failed': decl(['files', 'fixed', 'files']),
+  'metrics.runQuery': decl(['fixed', 'fixed', 'files']),
+  'metrics.runQuery.failed': decl(['fixed', 'fixed', 'files']),
   'metrics.forResources': decl(['fixed', 'fixed', null]),
   'metrics.points': decl(['files', 'fixed', null]),
 };
@@ -924,11 +924,9 @@ const owed = (
  * cause: #271 (paid by PR 6: the aggregates, the percentile, the trace list and `resourceValues` under a long window),
  * #281 (small files read serially; PR 3, done), #282 (paid by PR 6 for long-range reports: the rollup route answers
  * `resourceValues` without a window; on a short range it scans by design, §6.3, see `resourceValues.all.short`),
- * #283 (paid by PR 7: compaction groups its inputs by time, so no file spans more than 24 h unless an input does), #291 (opening a trace reads the spans files of its partitions whole; no PR of
- * the plan fixes it, so PR 9 carries it) and #295 (the two run-chart entries, `metrics.runQuery` and `metrics.runQuery.failed`, measure `files`, not `fixed`, on
- * retention: the points file of every partition outside the window is still loaded; PR 9).
+ * #283 (paid by PR 7: compaction groups its inputs by time, so no file spans more than 24 h unless an input does) and #291 (opening a trace reads the spans files of its partitions whole; no PR of
+ * the plan fixes it, so PR 9 carries it).
  */
 export const KNOWN_DEBT: readonly DebtLine[] = [
   ...owed(291, 9, 'density', 'matched', true, ['trace.get', 'trace.share']),
-  ...owed(295, 9, 'retention', 'fixed', false, ['metrics.runQuery', 'metrics.runQuery.failed']),
 ];
