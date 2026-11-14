@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.1](https://github.com/bjstabi/otel-html/compare/otel-html-v0.3.0...otel-html-v0.3.1) (2026-11-14)
+
+
+### Bug fixes
+
+* **ci:** a run update keeps its rollup files ([#304](https://github.com/bjstabi/otel-html/issues/304)) ([8a28fcc](https://github.com/bjstabi/otel-html/commit/8a28fcc9cef39edd4f425a2f9cdeb4cdcdf4feb4))
+
+
+### Documentation
+
+* mark PR 8 merged as [#300](https://github.com/bjstabi/otel-html/issues/300); PR 9 waits for the 0.3.0 release ([#303](https://github.com/bjstabi/otel-html/issues/303)) ([bf7771c](https://github.com/bjstabi/otel-html/commit/bf7771c4b0f429dd7bbd9b3550eda4686e9fd47e))
+
 ## [0.3.0](https://github.com/bjstabi/otel-html/compare/otel-html-v0.2.1...otel-html-v0.3.0) (2026-11-14)
 
 
