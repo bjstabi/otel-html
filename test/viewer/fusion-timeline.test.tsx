@@ -457,6 +457,33 @@ describe('alignLanes under a long window (buckets on absolute grains)', () => {
     expect(metric?.total('points')).toBe(points.total('points'));
   });
 
+  test('a bucket that straddles the grid start counts in the first column; one that ends before it is dropped', () => {
+    const grid = TimeBuckets.from(
+      {
+        maxBuckets: 4096,
+        widthNs: WIDTH,
+        startNs: ORIGIN + 2 * WIDTH,
+        originNs: ORIGIN,
+        keys: ['points'],
+        counts: [[1, 1]],
+      },
+      ['points'],
+    );
+    // origin 0: [W, 2W) ends before the grid start, [2W, 3W) holds it
+    const metric = TimeBuckets.from(
+      { maxBuckets: 4096, widthNs: WIDTH, startNs: WIDTH, keys: ['points'], counts: [[3, 7, 0]] },
+      ['points'],
+    );
+    const aligned = alignLanes([{ buckets: grid }, { buckets: metric }], {
+      start: 3 * WIDTH,
+      end: 8 * WIDTH,
+    });
+    expect(aligned.startNs).toBe(ORIGIN + 2 * WIDTH);
+    const lane = aligned.lanes[1];
+    expect(lane?.counts('points')[0]).toBe(7);
+    expect(lane?.total('points')).toBe(7);
+  });
+
   test('a brush over columns covers the bars shown', () => {
     const window: TimeWindow = { start: 0, end: 5 * WIDTH };
     const aligned = alignLanes([{ buckets: spans() }], window);

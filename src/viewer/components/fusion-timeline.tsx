@@ -36,8 +36,8 @@ const LANE_GAP_PX = 6;
  * Every lane on one column grid. The lanes' bucket widths are `1 ms * 2^k` and their starts are multiples of their
  * width (plus, under a long window, the origin of the absolute grain grid), so the widest lane's width divides evenly
  * into the others. The columns sit on the grid of the lane that has an origin (else the widest lane), its start modulo the shared width, and a lane on
- * another origin (the metric points) is re-binned by each bucket's start. Columns cover `window`; data outside it is
- * dropped.
+ * another origin (the metric points) is re-binned by each bucket's start. Columns cover `window`; a bucket that ends
+ * at or before the first column is dropped, one that straddles its start counts in it.
  */
 export function alignLanes(
   lanes: readonly { buckets: BucketView<string> }[],
@@ -69,8 +69,11 @@ export function alignLanes(
       for (let i = 0; i < b.length; i++) {
         const n = src[i] ?? 0;
         if (n === 0) continue;
-        const j = Math.floor((b.startNs + i * b.widthNs - startNs) / widthNs);
-        if (j >= 0 && j < length) out[j] = (out[j] ?? 0) + n;
+        const bucketStart = b.startNs + i * b.widthNs;
+        // a bucket that straddles the grid start counts in the first column; one that ends at or before it is dropped
+        if (bucketStart + b.widthNs <= startNs) continue;
+        const j = Math.max(0, Math.floor((bucketStart - startNs) / widthNs));
+        if (j < length) out[j] = (out[j] ?? 0) + n;
       }
       sums.set(k, out);
     }
