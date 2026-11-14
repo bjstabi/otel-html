@@ -37,7 +37,7 @@ export interface NewManifestOptions {
   version: string;
 }
 
-/** An empty, `complete: false` format-5 manifest (it becomes format 6 when a partition with a stored share is added) in `site` format with `statisticsKeysFor` each table from `config`. */
+/** An empty, `complete: false` format-5 manifest (`withSharesFormat` makes it format 6, without the stored epoch, once an added partition stores a service share) in `site` format with `statisticsKeysFor` each table from `config`. */
 export function newRunManifest(o: NewManifestOptions): ManifestV4 {
   const statisticsKeys = Object.fromEntries(
     TABLES.map((t) => [t, statisticsKeysFor(t, o.config)]),

@@ -111,15 +111,21 @@ describe('a resumed session writes the same times as a fresh one', () => {
     }
     // Patterns are per partition, so the counts differ; the first and last time of each template must not.
     const span = (out: string) => {
-      const m = new Map<string, [bigint, bigint]>();
+      const times = new Map<string, bigint[]>();
       for (const r of tableRowsOf(w, out, 'patterns')) {
         const t = String(Reflect.get(r, 'template'));
-        const f = Reflect.get(r, 'first_time_unix_nano') as bigint;
-        const l = Reflect.get(r, 'last_time_unix_nano') as bigint;
-        const cur = m.get(t);
-        m.set(t, cur === undefined ? [f, l] : [f < cur[0] ? f : cur[0], l > cur[1] ? l : cur[1]]);
+        const ts = [
+          Reflect.get(r, 'first_time_unix_nano'),
+          Reflect.get(r, 'last_time_unix_nano'),
+        ] as bigint[];
+        times.set(t, [...(times.get(t) ?? []), ...ts]);
       }
-      return [...m].map(([t, v]) => `${t}:${v[0]}:${v[1]}`).sort();
+      return [...times]
+        .map(([t, v]) => {
+          const sorted = [...v].sort((x, y) => (x < y ? -1 : 1));
+          return `${t}:${sorted[0]}:${sorted.at(-1)}`;
+        })
+        .sort();
     };
     expect(span('fresh').length).toBeGreaterThan(0);
     expect(span('split')).toEqual(span('fresh'));

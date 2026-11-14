@@ -43,7 +43,6 @@ export interface PartitionCopy {
   origin: number;
   /** The input report's folder: where its partition files are read from. */
   dir: string;
-  epoch: UnixNanos;
   totals: Record<Signal, number>;
   /** Absolute int64 nanosecond text, as in the manifest. */
   range: { start: string; end: string } | null;
