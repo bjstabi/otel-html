@@ -30,7 +30,7 @@ in order; a PR starts from `main` after the previous one merged.
 | 3   | `perf/small-site-files`      | `perf(viewer): small site files load whole and in parallel`            |        | merged #289 |
 | 4   | `perf/pruning-statistics`    | `perf(query): statistics survive merges and reads follow the window`   | #272   | merged #292 |
 | 5   | `feat/format-5`              | `feat(format): format 5 with rollup tables and the end-time statistic` |        | merged #293 |
-| 6   | `perf/rollup-router`         | `perf(viewer): long windows are answered from rollups`                 | #271   |        |
+| 6   | `perf/rollup-router`         | `perf(viewer): long windows are answered from rollups`                 | #271   | merged #296 |
 | 7   | `perf/compaction-time-bound` | `perf(writer): compaction keeps files bounded in time`                 |        |        |
 | 8   | `feat/default-window`        | `feat(viewer): viewer.defaultWindow and longer presets`                |        |        |
 | 9   | `docs/query-scaling-record`  | `docs(plan): query-scaling record`                                     |        |        |
