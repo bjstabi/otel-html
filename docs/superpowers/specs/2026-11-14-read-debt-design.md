@@ -124,7 +124,8 @@ which statistics key makes a run chart cheap.
 
 **The format.** `traces.parquet` gains a column `span_rows`: per trace and partition, the ranges of
 `file_row_number` in that partition's spans file that hold the trace's spans, at most one range per row group
-(the first and the last row of the trace inside that group), as `LIST<STRUCT<first: BIGINT, last: BIGINT>>`.
+(the first and the last row of the trace inside that group), as a flat `list_int64` of pairs
+`[first0, last0, first1, last1, …]` (the codec's existing list type; the plan pins it).
 Nullable: null means "not recorded" and the reader falls back. The manifest is format 6 with format 5's shape; the
 version tells an older reader to refuse the report. The schema document, the README's compatibility table and the
 format-5 frozen fixture (kept, still read) are updated; a frozen format-6 fixture is added.
@@ -180,5 +181,5 @@ PR 1 needs none of these and can go first.
 
 ## 7. Left to the builder
 
-The column's exact name and struct field names; whether the views use `union_by_name` or a typed null; how `runBy`
+The column's exact name; whether the views use `union_by_name` or a typed null; how `runBy`
 maps to a statistics key; how `left_out` is computed from the identities; module names; the frozen fixture's content.
