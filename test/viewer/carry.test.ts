@@ -223,3 +223,19 @@ describe('metricWindowLink', () => {
     expect(metricWindowLink(q(null), w, 'logs')).toEqual({ url: { t: '10~20' }, dropped: [] });
   });
 });
+
+describe('carryTo with a default window', () => {
+  const dflt = { start: 5, end: 9 };
+  test('the default is carried as no t, the entire run as t=all, another window as itself', () => {
+    for (const to of ['traces', 'logs', 'metrics', 'dashboards'] as const) {
+      expect(carryTo(data({ window: dflt, defaultWindow: dflt }), 'traces', to).url.t).toBeUndefined();
+      expect(carryTo(data({ window: null, defaultWindow: dflt }), 'dashboards', to).url.t).toBe('all');
+      expect(
+        carryTo(data({ window: { start: 1, end: 2 }, defaultWindow: dflt }), 'dashboards', to).url.t,
+      ).toBe('1~2');
+    }
+  });
+  test('without a default the entire run carries nothing', () => {
+    expect(carryTo(data({ window: null }), 'traces', 'logs').url.t).toBeUndefined();
+  });
+});

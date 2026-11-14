@@ -8,7 +8,7 @@ import type { TimeWindow } from '../data/time-window.js';
 import { defaultMetricState } from './metric-state.js';
 import { PAGE_OPTIONS, type Page } from './page-options.js';
 import { type SelectionData, selectionToUrlState } from './selection.js';
-import { formatWindow, URL_KEYS, type UrlKey, type UrlState } from './url-state.js';
+import { formatWindow, URL_KEYS, type UrlKey, type UrlState, windowParam } from './url-state.js';
 
 export interface DroppedParam {
   key: 'q';
@@ -32,13 +32,15 @@ export function carryTo(
     case 'dashboards': {
       // A dashboard has its own selection (`d`) and no query bar: only the time range comes along.
       const url: UrlState = {};
-      if (s.window !== null) url.t = formatWindow(s.window);
+      const t = windowParam(s.window, s.defaultWindow);
+      if (t !== undefined) url.t = t;
       return { url, dropped: [] };
     }
     case 'metrics': {
       // Metrics has no `text` and no `q`: a compiling `q` seeds the first query's `where` instead.
       const url: UrlState = {};
-      if (s.window !== null) url.t = formatWindow(s.window);
+      const t = windowParam(s.window, s.defaultWindow);
+      if (t !== undefined) url.t = t;
       const { condition, dropped } = conditionFor(s.condition, 'datapoint');
       if (condition !== null) {
         const seed = defaultMetricState(null);
@@ -50,7 +52,8 @@ export function carryTo(
     case 'logs': {
       const url: UrlState = {};
       if (s.text !== '') url.text = s.text;
-      if (s.window !== null) url.t = formatWindow(s.window);
+      const t = windowParam(s.window, s.defaultWindow);
+      if (t !== undefined) url.t = t;
       const { condition, dropped } = conditionFor(s.condition, PAGE_OPTIONS[to].context);
       if (condition !== null) url.q = condition;
       return { url, dropped };

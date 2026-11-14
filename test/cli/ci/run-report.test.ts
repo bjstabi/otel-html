@@ -510,7 +510,10 @@ describe('format 5 and format 4 run reports', () => {
 
   test('a format-4 run report that receives a format-5 update still parses with ManifestV4Schema and has no rollup file', async () => {
     const { span_rollups: _s, log_rollups: _l, ...keys } = (await newManifest()).statisticsKeys;
-    const m: ManifestV4 = { ...(await newManifest()), formatVersion: 4, statisticsKeys: keys };
+    const v5 = await newManifest();
+    // a format-4 manifest's viewer block has no defaultWindow (the CI config states one)
+    const { defaultWindow: _w, ...viewer } = v5.config.viewer;
+    const m: ManifestV4 = { ...v5, formatVersion: 4, statisticsKeys: keys, config: { ...v5.config, viewer } };
     const plan = sync(m, emptyRunState(1), [ju(push(1, [v5Partition()]))]);
     expect(plan.manifest.formatVersion).toBe(4);
     const entry = plan.manifest.partitions[0];

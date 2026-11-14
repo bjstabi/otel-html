@@ -6,6 +6,8 @@ import {
   parseUrlState,
   parseWindow,
   serializeUrlState,
+  windowFromParam,
+  windowParam,
 } from '../../src/viewer/state/url-state.js';
 
 const TRACE = 'a'.repeat(32);
@@ -172,5 +174,24 @@ describe('metrics key m', () => {
       expect(r.errors).toHaveLength(1);
       expect(r.errors[0]).toMatch(/^m(\.|:)/);
     }
+  });
+});
+
+describe('t=all and the default window', () => {
+  const d = { start: 5, end: 9 };
+  test('t=all parses; any other word is still reported', () => {
+    expect(parseUrlState('t=all').state).toEqual({ t: 'all' });
+    expect(parseUrlState('t=al').errors).toEqual(['t: expected <start>~<end> in nanoseconds, got al']);
+  });
+  test('windowParam and windowFromParam', () => {
+    expect(windowParam(null, null)).toBeUndefined();
+    expect(windowParam(null, d)).toBe('all');
+    expect(windowParam(d, d)).toBeUndefined();
+    expect(windowParam({ start: 1, end: 2 }, d)).toBe('1~2');
+    expect(windowParam({ start: 1, end: 2 }, null)).toBe('1~2');
+    expect(windowFromParam(undefined, d)).toEqual(d);
+    expect(windowFromParam('all', d)).toBeNull();
+    expect(windowFromParam('all', null)).toBeNull();
+    expect(windowFromParam('1~2', d)).toEqual({ start: 1, end: 2 });
   });
 });

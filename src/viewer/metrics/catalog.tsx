@@ -12,7 +12,7 @@ import { PageChrome } from '../shell/page-chrome.js';
 import { routeHref } from '../shell/use-route.js';
 import { defaultMetricState } from '../state/metric-state.js';
 import { useSelection } from '../state/selection-context.js';
-import { formatWindow, serializeUrlState } from '../state/url-state.js';
+import { serializeUrlState, windowParam } from '../state/url-state.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 import type { ColumnUi } from '../traces/columns.js';
 import { Sparkline } from '../traces/sparkline.js';
@@ -126,6 +126,7 @@ export function MetricsCatalog(props: { dataSource: DataSource }): JSX.Element {
   const all = useMemo(() => (load.status === 'ready' ? load.value.entries : []), [load]);
   const rows = useMemo(() => (needle === '' ? all : all.filter((e) => matches(e, needle))), [all, needle]);
   const window = useSelection((s) => s.window);
+  const defaultWindow = useSelection((s) => s.defaultWindow);
 
   // A summary click navigates after an async lookup: only the latest click, on a mounted page, may.
   const clicks = useRef(0);
@@ -159,12 +160,14 @@ export function MetricsCatalog(props: { dataSource: DataSource }): JSX.Element {
   // The href keeps `qmax` for a summary: a link needs a synchronous href, and the Explorer resolves `qmax` itself.
   /** The Explore cell is a real link to the same place, so it can open in a new tab; the window carries like `goTo`. */
   const hrefOf = useCallback(
-    (e: MetricEntry): string =>
-      `${routeHref('/metrics')}?${serializeUrlState({
+    (e: MetricEntry): string => {
+      const t = windowParam(window, defaultWindow);
+      return `${routeHref('/metrics')}?${serializeUrlState({
         m: explorerState(e),
-        ...(window === null ? {} : { t: formatWindow(window) }),
-      })}`,
-    [window],
+        ...(t === undefined ? {} : { t }),
+      })}`;
+    },
+    [window, defaultWindow],
   );
   const columns = useMemo(
     () => [

@@ -15,7 +15,7 @@ import type { UrlPatch } from '../state/carry.js';
 import { type DashboardPageState, EMPTY_DASHBOARD_STATE } from '../state/dashboard-state.js';
 import type { Page } from '../state/page-options.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
-import { formatWindow, parseWindow } from '../state/url-state.js';
+import { formatWindow, parseWindow, windowParam } from '../state/url-state.js';
 import { type KeyedState, useKeyedAsync } from '../state/use-keyed-async.js';
 import { TracePanel } from '../traces/trace-panel.js';
 import { dashboardToYaml } from './copy-config.js';
@@ -118,7 +118,7 @@ function windowText(w: TimeWindow | null, epoch: ReturnType<typeof parseUnixNano
 function openInOf(
   widget: Widget,
   scope: WidgetScope,
-  ctx: { variables: readonly VariableBinding[]; narrowing: Narrowing },
+  ctx: { variables: readonly VariableBinding[]; narrowing: Narrowing; defaultWindow: TimeWindow | null },
 ): { page: 'traces' | 'logs' | 'metrics'; label: string; patch: UrlPatch } | null {
   switch (widget.type) {
     case 'timeline':
@@ -142,7 +142,7 @@ function openInOf(
             split: false,
             exemplars: widget.exemplars,
           },
-          t: scope.window === null ? null : formatWindow(scope.window),
+          t: windowParam(scope.window, ctx.defaultWindow) ?? null,
         },
       };
     }
@@ -158,7 +158,7 @@ function openInOf(
         label: logs ? 'Open in Logs' : 'Open in Traces',
         patch: {
           q: scope.condition,
-          t: scope.window === null ? null : formatWindow(scope.window),
+          t: windowParam(scope.window, ctx.defaultWindow) ?? null,
           text: widget.text === '' ? null : widget.text,
           // The Traces page opens in spans mode; a Traces widget in spans mode needs no `mode` key.
           ...(widget.type === 'traces' ? { mode: widget.mode === 'spans' ? null : widget.mode } : {}),
@@ -240,6 +240,7 @@ function DashboardView(props: {
   const stored = useSelection((s) => s.dashboard);
   const state = stored ?? EMPTY_DASHBOARD_STATE;
   const page = useSelection((s) => s.window);
+  const defaultWindow = useSelection((s) => s.defaultWindow);
   const traceId = useSelection((s) => s.traceId);
   const logRef = useSelection((s) => s.logRef);
   const clear = useSelection((s) => s.clear);
@@ -327,7 +328,7 @@ function DashboardView(props: {
     const known = scopes.get(w.id);
     if (known === undefined) return <div />;
     const { scope } = known;
-    const open = openInOf(w, scope, { variables: bound?.bindings ?? [], narrowing });
+    const open = openInOf(w, scope, { variables: bound?.bindings ?? [], narrowing, defaultWindow });
     const actions: WidgetActions = {
       selectWindow: (win) =>
         change((s) => ({ ...s, sel: { ...s.sel, t: win === null ? null : formatWindow(win) } })),

@@ -22,7 +22,13 @@ import { isLogTabId, LOG_TAB_IDS, type LogTabId } from '../logs/tabs.js';
 import { isTraceTabId, TRACE_TAB_IDS, type TraceTabId } from '../traces/tabs.js';
 import { type DashboardPageState, isPristine } from './dashboard-state.js';
 import type { ExplorerView } from './explorer-view.js';
-import { formatWindow, parseUrlState, parseWindow, serializeUrlState, type UrlState } from './url-state.js';
+import {
+  parseUrlState,
+  serializeUrlState,
+  type UrlState,
+  windowFromParam,
+  windowParam,
+} from './url-state.js';
 
 const DEFAULT_TRACE_TAB: TraceTabId = 'flame';
 const DEFAULT_SPAN_TAB = 'overview';
@@ -33,7 +39,10 @@ export type SelectionMode = (typeof SELECTION_MODES)[number];
 type ClearKey = 'window' | 'condition' | 'text' | 'traceId' | 'spanId' | 'logRef' | 'groupBy' | 'sort';
 
 export interface Selection {
+  /** The effective window; null is the entire run. With no `t` in the URL it is `defaultWindow`. */
   window: TimeWindow | null;
+  /** The report's default window (aligned like `window`), or null: not in the URL, set when the store is made. */
+  defaultWindow: TimeWindow | null;
   condition: string | null;
   text: string;
   traceId: TraceId | null;
@@ -105,7 +114,7 @@ export type SelectionData = Omit<
  * starts earlier, and the data source aligns the window again for its own use (it can move a clamped start below 0
  * again: the window then differs, the answers and the buckets do not).
  */
-function aligned(
+export function aligned(
   w: TimeWindow | null,
   epoch: bigint | undefined,
   range: () => TimeWindow | null,
@@ -119,9 +128,11 @@ function dataFromUrl(
   u: UrlState,
   epoch?: bigint,
   range: () => TimeWindow | null = () => null,
+  defaultWindow: TimeWindow | null = null,
 ): SelectionData {
   return {
-    window: aligned(u.t === undefined ? null : parseWindow(u.t), epoch, range),
+    window: aligned(windowFromParam(u.t, defaultWindow), epoch, range),
+    defaultWindow,
     condition: u.q ?? null,
     text: u.text ?? '',
     traceId: u.trace ?? null,
@@ -146,7 +157,8 @@ export function selectionToUrlState(s: SelectionData): UrlState {
   const u: UrlState = {};
   if (s.condition !== null) u.q = s.condition;
   if (s.text !== '') u.text = s.text;
-  if (s.window !== null) u.t = formatWindow(s.window);
+  const t = windowParam(s.window, s.defaultWindow);
+  if (t !== undefined) u.t = t;
   if (s.mode !== null) u.mode = s.mode;
   if (s.groupBy !== null) u.group = s.groupBy;
   if (s.view !== 'list') u.view = s.view;
@@ -230,11 +242,13 @@ export function createSelectionStore(
   initial: UrlState,
   epoch?: bigint,
   range: () => TimeWindow | null = () => null,
+  defaultWindow: TimeWindow | null = null,
 ): StoreApi<Selection> {
+  const fallback = aligned(defaultWindow, epoch, range);
   return createStore<Selection>()((set, get) => ({
-    ...dataFromUrl(initial, epoch, range),
+    ...dataFromUrl(initial, epoch, range, fallback),
     setWindow: (w) => {
-      if (w !== null) formatWindow(w); // validates
+      if (w !== null) windowParam(w, null); // validates
       set({ window: aligned(w, epoch, range) });
     },
     setCondition: (c) => {
@@ -330,7 +344,7 @@ export function bindUrl(
     const { state, errors } = parseUrlState(history.read());
     applying = true;
     try {
-      store.setState(dataFromUrl(state, epoch, range));
+      store.setState(dataFromUrl(state, epoch, range, store.getState().defaultWindow));
     } finally {
       applying = false;
     }

@@ -10,7 +10,7 @@ import { LOG_TAB_IDS } from '../logs/tabs.js';
 import { TRACE_TAB_IDS } from '../traces/tabs.js';
 import { DashboardPageStateSchema, parseDashboardParam } from './dashboard-state.js';
 import { parseMetricParam } from './metric-state.js';
-import { T_FORMAT, TraceIdParamSchema, tRange, WindowTextSchema } from './param-schemas.js';
+import { T_ALL, T_FORMAT, TraceIdParamSchema, tRange, WindowParamSchema } from './param-schemas.js';
 
 const LOG_FORMAT = /^\d+\.\d+$/;
 const LOG_CANONICAL = /^(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -29,7 +29,7 @@ function isOttl(s: string): boolean {
 const UrlStateSchema = z.object({
   q: nonEmpty.refine(isOttl, 'a valid OTTL condition'),
   text: nonEmpty,
-  t: WindowTextSchema,
+  t: WindowParamSchema,
   mode: z.enum(SELECTION_MODES, `one of ${SELECTION_MODES.join(', ')}`),
   group: nonEmpty,
   view: z.enum(EXPLORER_VIEWS, `one of ${EXPLORER_VIEWS.join(', ')}`),
@@ -155,4 +155,20 @@ export function formatWindow(w: TimeWindow): string {
     });
   }
   return `${w.start}~${w.end}`;
+}
+
+/**
+ * The `t` text of a window. Without a fallback, the formatted window, or undefined for null. With the report's default
+ * window as the fallback: null is `all`, a window equal to the fallback needs no `t`, any other is formatted.
+ */
+export function windowParam(window: TimeWindow | null, fallback: TimeWindow | null): string | undefined {
+  if (window === null) return fallback === null ? undefined : T_ALL;
+  if (fallback !== null && window.start === fallback.start && window.end === fallback.end) return undefined;
+  return formatWindow(window);
+}
+
+/** The window a `t` stands for: absent is the fallback, `all` the entire run (null), else the parsed window. */
+export function windowFromParam(t: string | undefined, fallback: TimeWindow | null): TimeWindow | null {
+  if (t === undefined) return fallback;
+  return t === T_ALL ? null : parseWindow(t);
 }

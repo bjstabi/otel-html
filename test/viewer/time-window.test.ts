@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'vitest';
-import { alignLongWindow, isLongWindow, LONG_WINDOW_NS } from '../../src/viewer/data/time-window.js';
+import {
+  alignLongWindow,
+  defaultWindowOf,
+  durationNs,
+  isLongWindow,
+  LONG_WINDOW_NS,
+} from '../../src/viewer/data/time-window.js';
 
 const EPOCH = 1_700_000_000_000_000_000n;
 const GRAIN = 65_536_000_000n;
@@ -34,5 +40,21 @@ describe('alignLongWindow', () => {
     expect(w.start).toBeLessThanOrEqual(1);
     expect(w.end).toBeGreaterThanOrEqual(16_777_216_000_001);
     expect(alignLongWindow(w, EPOCH)).toEqual(w);
+  });
+});
+
+describe('durationNs and defaultWindowOf', () => {
+  test('durationNs', () => {
+    expect(durationNs('7d')).toBe(604_800_000_000_000);
+    expect(durationNs('90m')).toBe(5_400_000_000_000);
+    expect(durationNs('6h')).toBe(21_600_000_000_000);
+  });
+  test('the default is anchored at the end of the range; absent, or not shorter than the range, is null', () => {
+    const range = { start: 0, end: 12 * 3_600_000_000_000 };
+    expect(defaultWindowOf('6h', range)).toEqual({ start: 6 * 3_600_000_000_000, end: range.end });
+    expect(defaultWindowOf(undefined, range)).toBeNull();
+    expect(defaultWindowOf('12h', range)).toBeNull();
+    expect(defaultWindowOf('7d', range)).toBeNull();
+    expect(defaultWindowOf('6h', null)).toBeNull();
   });
 });

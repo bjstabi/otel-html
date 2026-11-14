@@ -66,6 +66,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     'dashboards-hostile',
     'run-charts',
     'long-range',
+    'default-window',
     'metrics-scale',
     'frozen-format-1',
     'frozen-format-2',
