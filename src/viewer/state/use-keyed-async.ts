@@ -25,14 +25,24 @@ export function useKeyedAsync<K, V>(
   useEffect(() => {
     if (key === null) return;
     const ctl = new AbortController();
+    // a synchronous throw is the load's own failure, an AbortError included; a rejection with one is a source that was
+    // superseded (below)
+    let sync = false;
     Promise.resolve()
-      .then(() => load(key, ctl.signal))
+      .then(() => {
+        try {
+          return load(key, ctl.signal);
+        } catch (e) {
+          sync = true;
+          throw e;
+        }
+      })
       .then(
         (value) => ctl.signal.aborted || setState({ key, result: { status: 'ready', value } }),
         (e: unknown) =>
           // an abort is not a failure, whoever aborted: the key or the data source is about to change
           ctl.signal.aborted ||
-          isAbort(e) ||
+          (!sync && isAbort(e)) ||
           setState({
             key,
             result: {

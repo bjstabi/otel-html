@@ -60,6 +60,17 @@ describe('useKeyedAsync', () => {
     expect(h.state()).toEqual({ status: 'loading' });
   });
 
+  test("a load that throws an AbortError synchronously is that load's error, while it is current", async () => {
+    const root: Root = createRoot(document.createElement('div'));
+    roots.push(root);
+    let latest: KeyedState<string> = { status: 'loading' };
+    const load = (): Promise<string> => {
+      throw new DOMException('refused', 'AbortError');
+    };
+    await act(async () => root.render(<Probe k="a" load={load} onState={(v) => (latest = v)} />));
+    expect(latest).toMatchObject({ status: 'error', message: 'AbortError: refused' });
+  });
+
   test('is loading, then ready with the value', async () => {
     const h = setup();
     await h.render('a');
