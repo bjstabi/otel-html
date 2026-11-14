@@ -6,6 +6,7 @@ import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
 import type { SpanQuery, TraceRow } from '../../src/viewer/data/results.js';
 import { traceRows } from '../../src/viewer/data/span-results.js';
+import { alignLongWindow } from '../../src/viewer/data/time-window.js';
 import type { TestDb } from '../../test-support/duckdb-node.js';
 import { buildFormat4Report, openFixtureDb } from '../../test-support/format4-fixture.js';
 import { format6Fixture } from '../../test-support/format6.js';
@@ -154,5 +155,65 @@ describe('the trace list stored share', () => {
     const out = traceRows(table).rows;
     expect(out[0]?.share).toBeNull();
     expect(out[1]?.share).toEqual([{ service: 's', ns: 5n }]);
+  });
+});
+
+describe('a trace with a partition outside the window is never exact, on every list path', () => {
+  const LONG = 16_777_216_000_000;
+  const asked = { start: 60_000e6, end: 60_000e6 + LONG };
+  const edge = alignLongWindow(asked, BASE);
+  const rel = (n: number): number => n / 1e6;
+  const inside = (extraMs: number): number => rel(edge.start) + extraMs;
+  // every partition stores its share; trace 3 starts in partition 1 (inside) and ends in partition 2 (after the window)
+  const PART0: S[] = [
+    { trace: 1, id: 1, svc: 'svc-a', startMs: 0, durMs: 10 },
+    { trace: 2, id: 2, svc: 'svc-a', startMs: inside(1000), durMs: 10 },
+  ];
+  const PART1: S[] = [{ trace: 3, id: 4, svc: 'svc-a', startMs: inside(3000), durMs: 10 }];
+  const PART2: S[] = [
+    { trace: 3, id: 6, parent: 4, svc: 'svc-b', startMs: rel(edge.end) + 2000, durMs: 10 },
+    { trace: 4, id: 5, svc: 'svc-a', startMs: rel(edge.end) + 1000, durMs: 10 },
+  ];
+  let wdb: TestDb;
+  let wclose: () => Promise<void>;
+  let wds: ReturnType<typeof createDuckDbDataSource>;
+
+  beforeAll(async () => {
+    const f = await buildFormat4Report([request(PART0), request(PART1), request(PART2)], { close: false });
+    const six = await format6Fixture(f);
+    wclose = six.close;
+    wdb = await openFixtureDb(six);
+    wds = createDuckDbDataSource({
+      engine: mosaicQueryEngine(createCoordinator(wdb.connector, silentLogger), wdb),
+      manifest: six.manifest,
+    });
+  });
+  afterAll(async () => {
+    await wclose();
+  });
+
+  const list = async (over: Partial<SpanQuery>): Promise<Map<string, TraceRow>> =>
+    byId((await wds.querySpans(query({ window: asked, ...over }))).rows);
+
+  test('the windowed unconditioned list: the whole trace is counted, so the split trace is null', async () => {
+    const got = await list({});
+    expect([...got.keys()].sort()).toEqual([t(2), t(3)]);
+    expect(got.get(t(2))?.share).not.toBeNull();
+    expect(got.get(t(3))?.share).toBeNull();
+  });
+
+  test('the windowed conditioned list (windowTraceRowsQuery)', async () => {
+    const got = await list({ condition: 'name != "no-such"' });
+    expect([...got.keys()].sort()).toEqual([t(2), t(3)]);
+    expect(got.get(t(2))?.share).not.toBeNull();
+    expect(got.get(t(3))?.share).toBeNull();
+  });
+
+  test('the conditioned list with no window (traceRowsQuery), spans pruned by the condition to one partition', async () => {
+    const got = await list({ window: null, condition: 'name == "op 4"' });
+    expect([...got.keys()]).toEqual([t(3)]);
+    expect(got.get(t(3))?.share).toBeNull();
+    const one = await list({ window: null, condition: 'name == "op 2"' });
+    expect(one.get(t(2))?.share).not.toBeNull();
   });
 });
