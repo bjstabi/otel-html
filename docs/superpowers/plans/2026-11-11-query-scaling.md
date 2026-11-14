@@ -165,7 +165,8 @@ change in any PR (a need for one is a stop).
   `copyPartitions`; it replaced `src/writer/merge.ts`, which needed no change); and `src/writer/rollup-rows.ts` (maintainer, 2026-11-13:
   `resource:service.name` is a core rollup dimension, so a condition on it answers from rollups exactly); and
   `src/viewer/components/fusion-timeline.tsx` (maintainer, 2026-11-13: the dashboard Timeline puts its columns on the
-  buckets' origin under a long window). No build file.
+  buckets' origin under a long window); and `src/viewer/state/use-keyed-async.ts` (maintainer, 2026-11-14: an
+  aborted keyed load is not an error). No build file.
 - **PR 7** — `src/writer/compaction.ts`, `src/writer/partition-session.ts`, `src/viewer/data/catalogue.ts`. No build
   file.
 - **PR 8** — `src/config/schema.ts`, `src/viewer/shell/shell.tsx`, `src/viewer/shell/time-range.tsx`,
