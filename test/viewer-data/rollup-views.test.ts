@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import type { ManifestV4 } from '../../src/format/manifest.js';
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { createViews } from '../../src/viewer/data/engine/files.js';
@@ -7,6 +7,9 @@ import type { SpanQuery } from '../../src/viewer/data/results.js';
 import { costOf } from '../../test-support/scaling/cost.js';
 import { type CountingEngine, openCountingEngine } from '../../test-support/scaling/counting-engine.js';
 import { BASE, buildScalingReport, type ScalingReport } from '../../test-support/scaling/generator.js';
+
+// Each test opens fresh DuckDB engines: about 1 s here, over 5 s on a Windows runner.
+vi.setConfig({ testTimeout: 30_000 });
 
 const query = (over: Partial<SpanQuery>): SpanQuery => ({
   condition: null,
