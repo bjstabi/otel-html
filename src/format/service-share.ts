@@ -1,4 +1,6 @@
+import type { AnyValue } from '../model/anyvalue.js';
 import { OtelHtmlError } from '../model/errors.js';
+import { attributesFromJson } from './columns.js';
 
 /**
  * One span as the service share sees it. `start` and `end` are relative to the trace's own earliest start, computed by
@@ -12,6 +14,20 @@ export interface ShareSpan {
   end: number;
   durationNs: number;
   provisional: boolean;
+}
+
+/** The attribute the CI publisher sets on a span it wrote before the span ended (`PROVISIONAL_ATTR` in src/cli/ci/workflow-trace.ts). */
+export const PROVISIONAL_ATTR = 'otel_html.ci.provisional';
+
+/** The one rule for "provisional": the attribute's value is the boolean true. */
+export function isProvisionalValue(v: AnyValue | undefined): boolean {
+  return v?.kind === 'bool' && v.value;
+}
+
+/** Whether a span's attributes JSON (the `attributes` column) marks it provisional; anything but a JSON string is not. */
+export function isProvisional(attributesJson: unknown): boolean {
+  if (typeof attributesJson !== 'string' || !attributesJson.includes(PROVISIONAL_ATTR)) return false;
+  return isProvisionalValue(attributesFromJson(attributesJson).get(PROVISIONAL_ATTR));
 }
 
 /** Exclusive time per service, largest first, ties by service name. Totals are exact; drawing converts to `number`. */

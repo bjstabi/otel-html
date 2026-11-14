@@ -1,7 +1,11 @@
-import { attributesFromJson } from '../format/columns.js';
 import type { ColumnBatch } from '../format/parquet/batch.js';
 import type { Row } from '../format/parquet/rows.js';
-import { encodeServiceShare, type ShareSpan, serviceShareOf } from '../format/service-share.js';
+import {
+  encodeServiceShare,
+  isProvisional,
+  type ShareSpan,
+  serviceShareOf,
+} from '../format/service-share.js';
 import { StatusCode } from '../model/records.js';
 
 interface Acc {
@@ -31,32 +35,31 @@ function rootBefore(spans: ColumnBatch, x: number, y: number): boolean {
   return String(cell(spans, 'span_id', x) ?? '') < String(cell(spans, 'span_id', y) ?? '');
 }
 
-const PROVISIONAL_ATTR = 'otel_html.ci.provisional';
-
-/** Whether a span's attributes JSON says `otel_html.ci.provisional` is boolean true (the viewer's rule). */
-function provisionalOf(json: unknown): boolean {
-  if (typeof json !== 'string' || !json.includes(PROVISIONAL_ATTR)) return false;
-  const v = attributesFromJson(json).get(PROVISIONAL_ATTR);
-  return v?.kind === 'bool' && v.value;
+/**
+ * One span of `spans` as the share sees it: times relative to the trace's earliest start `origin` (bigint arithmetic,
+ * exact), duration as stored. A span without a start or end, or a trace without an origin, adds nothing (null).
+ */
+export function shareSpanAt(spans: ColumnBatch, i: number, origin: bigint | null): ShareSpan | null {
+  const start = big(cell(spans, 'start_time_unix_nano', i));
+  const end = big(cell(spans, 'end_time_unix_nano', i));
+  if (start === null || end === null || origin === null) return null;
+  return {
+    spanId: text(cell(spans, 'span_id', i)) ?? '',
+    parentId: text(cell(spans, 'parent_span_id', i)),
+    service: text(cell(spans, 'service_name', i)) ?? '',
+    start: Number(start - origin),
+    end: Number(end - origin),
+    durationNs: Number(big(cell(spans, 'duration_ns', i)) ?? 0n),
+    provisional: isProvisional(cell(spans, 'attributes', i)),
+  };
 }
 
-/** The share input of a trace's spans: times relative to the trace's earliest start (bigint arithmetic, exact), duration as stored. */
+/** The share input of a trace's spans (`shareSpanAt` of each). */
 function shareSpansOf(spans: ColumnBatch, indices: readonly number[], origin: bigint | null): ShareSpan[] {
   const out: ShareSpan[] = [];
   for (const i of indices) {
-    const start = big(cell(spans, 'start_time_unix_nano', i));
-    const end = big(cell(spans, 'end_time_unix_nano', i));
-    if (start === null || end === null || origin === null) continue;
-    const parent = text(cell(spans, 'parent_span_id', i));
-    out.push({
-      spanId: text(cell(spans, 'span_id', i)) ?? '',
-      parentId: parent,
-      service: text(cell(spans, 'service_name', i)) ?? '',
-      start: Number(start - origin),
-      end: Number(end - origin),
-      durationNs: Number(big(cell(spans, 'duration_ns', i)) ?? 0n),
-      provisional: provisionalOf(cell(spans, 'attributes', i)),
-    });
+    const s = shareSpanAt(spans, i, origin);
+    if (s !== null) out.push(s);
   }
   return out;
 }

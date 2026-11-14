@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   decodeServiceShare,
   encodeServiceShare,
+  isProvisional,
   type ShareSpan,
   serviceShareOf,
 } from '../../src/format/service-share.js';
@@ -106,5 +107,15 @@ describe('encode and decode', () => {
 
   test.each(['not json', '{}', '[["a"]]', '[["a",5]]', '[["a","-1"]]'])('rejects %s', (text) => {
     expect(() => decodeServiceShare(text)).toThrow(OtelHtmlError);
+  });
+});
+
+describe('isProvisional', () => {
+  test('is true only for the boolean true of the provisional attribute', () => {
+    expect(isProvisional('{"otel_html.ci.provisional":true}')).toBe(true);
+    expect(isProvisional('{"otel_html.ci.provisional":false}')).toBe(false);
+    expect(isProvisional('{"otel_html.ci.provisional":"true"}')).toBe(false);
+    expect(isProvisional('{}')).toBe(false);
+    expect(isProvisional(null)).toBe(false);
   });
 });

@@ -1,12 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises';
-import {
-  Table as ArrowTable,
-  tableFromIPC,
-  tableToIPC,
-  Utf8,
-  type Vector,
-  vectorFromArray,
-} from 'apache-arrow';
+import { Table as ArrowTable, tableFromIPC, tableToIPC, Utf8, vectorFromArray } from 'apache-arrow';
 import { readParquet, Table as WasmTable, writeParquet } from 'parquet-wasm/esm';
 import { wrapDataFile } from '../src/format/data-file.js';
 import {
@@ -110,15 +103,13 @@ export async function withServiceShare(
     const arrow = tableFromIPC(readParquet(await readFile(`${dir}/${traces.path}`)).intoIPCStream());
     const column = arrow.getChild('trace_id');
     const cells = Array.from({ length: arrow.numRows }, (_, i) => shares.get(String(column?.get(i))) ?? null);
-    const named = Object.fromEntries(
-      arrow.schema.fields
-        .filter((f) => f.name !== SERVICE_SHARE_COLUMN.name)
-        .map((f) => [f.name, arrow.getChild(f.name)]),
+    // `select` keeps each field as the file has it (nullability included), which the readers' schema check compares.
+    const kept = arrow.select(
+      arrow.schema.fields.map((f) => f.name).filter((n) => n !== SERVICE_SHARE_COLUMN.name),
     );
-    const withColumn = new ArrowTable({
-      ...(named as Record<string, Vector>),
-      [SERVICE_SHARE_COLUMN.name]: vectorFromArray(cells, new Utf8()),
-    });
+    const withColumn = kept.assign(
+      new ArrowTable({ [SERVICE_SHARE_COLUMN.name]: vectorFromArray(cells, new Utf8()) }),
+    );
     const bytes = writeParquet(
       WasmTable.fromIPCStream(tableToIPC(withColumn, 'stream')),
       writerProperties({ rowGroupRows: 1000 }),
@@ -161,13 +152,11 @@ export async function format6Fixture(
 export function withoutServiceShare(bytes: Uint8Array): Uint8Array {
   ensureParquetWasm();
   const arrow = tableFromIPC(readParquet(bytes).intoIPCStream());
-  const named = Object.fromEntries(
-    arrow.schema.fields
-      .filter((f) => f.name !== SERVICE_SHARE_COLUMN.name)
-      .map((f) => [f.name, arrow.getChild(f.name)]),
+  const kept = arrow.select(
+    arrow.schema.fields.map((f) => f.name).filter((n) => n !== SERVICE_SHARE_COLUMN.name),
   );
   return writeParquet(
-    WasmTable.fromIPCStream(tableToIPC(new ArrowTable(named as Record<string, Vector>), 'stream')),
+    WasmTable.fromIPCStream(tableToIPC(kept, 'stream')),
     writerProperties({ rowGroupRows: 1000 }),
   );
 }

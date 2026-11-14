@@ -10,13 +10,15 @@ import {
   manifestAnchor,
   parseAnyManifest,
 } from '../../src/format/manifest.js';
+import { decodeTable } from '../../src/format/parquet/codec.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { writeManifest } from '../../src/writer/checkpoint.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { openSession } from '../../src/writer/session.js';
 import { asFormat5, withServiceShare } from '../../test-support/format6.js';
-import { createTestWriter, otlp, testConfig } from '../../test-support/writer-deps.js';
-import { spansRequest } from './helpers.js';
+import { span, traceRequest } from '../../test-support/otlp-builders.js';
+import { createTestWriter, EPOCH_NS, otlp, testConfig } from '../../test-support/writer-deps.js';
+import { spanIdOf, spansRequest, traceIdOf } from './helpers.js';
 
 let dir: string;
 beforeEach(() => {
@@ -79,6 +81,52 @@ describe('the format-6 test stand-in', () => {
     });
     expect(manifestAnchor(out)).toBe(start);
     expect(manifestAnchor(manifestAt('early').manifest)).toBe(start);
+  });
+});
+
+describe('merge --compact and the service share', () => {
+  test('a trace split between a format-5 copy and a format-6 flush is recomputed; one only in the copy stays null', async () => {
+    const w = real();
+    const out = join(dir, 'mixed');
+    const s = await openSession(w.deps, { out, config: testConfig(cfg), mode: 'replace' });
+    // flush 0: traces 0 and 1; flush 1: trace 1 again (a second span) and trace 2. Left unclosed: two partitions.
+    const base = BigInt(EPOCH_NS);
+    const one = (trace: number, id: number, at: bigint) =>
+      span({
+        traceId: traceIdOf(trace),
+        spanId: spanIdOf(id),
+        startTimeUnixNano: String(base + at),
+        endTimeUnixNano: String(base + at + 500n),
+      });
+    const request = (spans: ReturnType<typeof one>[]) =>
+      traceRequest(spans, [{ key: 'service.name', value: { stringValue: 'svc' } }]);
+    await s.add(otlp(request([one(0, 0, 0n), one(1, 1, 1000n)])), 'a.json');
+    await s.flush();
+    await s.add(otlp(request([one(1, 2, 10_000n), one(2, 3, 11_000n)])), 'b.json');
+    await s.flush();
+    const five = await asFormat5(out, manifestAt('mixed').manifest);
+    await withServiceShare(out, five, [1]);
+    await mergeWith(
+      {
+        inputs: [out],
+        out: join(dir, 'm'),
+        config: { writer: { format: 'site' as const, compactOnMerge: true } },
+      },
+      real().deps,
+    );
+    const { raw, manifest } = manifestAt('m');
+    expect(raw.formatVersion).toBe(6);
+    expect(manifest.partitions).toHaveLength(1);
+    expect(manifest.partitions[0]?.files.traces?.serviceShare).toBe(true);
+    const file = manifest.partitions[0]?.files.traces;
+    if (file === undefined) throw new Error('no traces file');
+    const rows = decodeTable('traces', readFileSync(join(dir, 'm', file.path)));
+    const shareOf = (n: number) =>
+      Reflect.get(rows.find((r) => Reflect.get(r, 'trace_id') === traceIdOf(n)) ?? {}, 'service_share');
+    expect(rows).toHaveLength(3);
+    expect(shareOf(0)).toBeNull(); // only in the format-5 copy
+    expect(shareOf(1)).toBe('[["svc","1000"]]'); // a span in each input, recomputed
+    expect(shareOf(2)).toBe('[["svc","500"]]'); // only in the format-6 flush, kept
   });
 });
 

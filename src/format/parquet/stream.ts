@@ -13,7 +13,7 @@ import {
 import { OtelHtmlError } from '../../model/errors.js';
 import type { ColumnBatch } from './batch.js';
 import { columnsOfBatch, columnsToArrow, type EncodeOptions, writerProperties } from './codec.js';
-import { TABLE_COLUMNS, type Table } from './columns.js';
+import { SERVICE_SHARE_COLUMN, TABLE_COLUMNS, type Table } from './columns.js';
 import { arrowSchema } from './schema.js';
 import { ensureParquetWasm } from './wasm.js';
 
@@ -46,10 +46,18 @@ export type PanicGuard = <T>(wait: Promise<T>, what?: string) => Promise<T>;
 
 const unguarded: PanicGuard = (wait) => wait;
 
-/** Throws `invalid-report` unless `actual` has exactly the columns, types and nullability `arrowSchema(table)` has. */
+/**
+ * Throws `invalid-report` unless `actual` has exactly the columns, types and nullability `arrowSchema(table)` has. A
+ * `traces` file may lack its last column, `service_share` (a format-5 file); its cells then read as null.
+ */
 export function checkSchema(table: Table, actual: ArrowSchema, path: string): void {
-  const want = arrowSchema(table).fields;
+  const all = arrowSchema(table).fields;
   const got = actual.fields;
+  const lacksShare =
+    table === 'traces' &&
+    got.length === all.length - 1 &&
+    all[all.length - 1]?.name === SERVICE_SHARE_COLUMN.name;
+  const want = lacksShare ? all.slice(0, -1) : all;
   for (let i = 0; i < Math.max(want.length, got.length); i++) {
     const w = want[i];
     const g = got[i];

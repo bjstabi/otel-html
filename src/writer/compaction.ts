@@ -19,6 +19,7 @@ import type { Row } from '../format/parquet/rows.js';
 import { type FileStatistics, fileStatistics, hasTimeEndMax, timeEndMaxOf } from '../format/parquet/stats.js';
 import { encodeBatches, type PanicGuard, readColumns } from '../format/parquet/stream.js';
 import { partitionDir, partitionFilePath, partitionKey, partitionWrapperPath } from '../format/paths.js';
+import { encodeServiceShare, type ShareSpan, serviceShareOf } from '../format/service-share.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { at } from './checkpoint.js';
 import type { FileSystem } from './ports.js';
@@ -32,6 +33,7 @@ import {
   spanRollupRows,
   widestDimension,
 } from './rollup-rows.js';
+import { shareSpanAt } from './trace-summaries.js';
 import { watchWasmPanics } from './wasm-panic.js';
 import { writeWrapperOfFile } from './wrapper-file.js';
 
@@ -349,6 +351,66 @@ function betterRoot(a: Located, b: Located): boolean {
   return a.part < b.part;
 }
 
+/** A trace with spans in several inputs: the earliest start of its spans, and the traces-input indices that have spans. */
+interface SplitTrace {
+  origin: bigint | null;
+  parts: readonly number[];
+}
+
+/** Computes the encoded share of each given trace (null for one whose spans are not found) from the spans of the inputs. */
+type SplitShares = (split: ReadonlyMap<string, SplitTrace>) => Promise<Map<string, string | null>>;
+
+/**
+ * The shares of the traces whose spans lie in several inputs, from those inputs' spans files, read once each (only the
+ * ones some split trace has spans in). Only the `ShareSpan`s of the split traces are held, plus one decoded batch.
+ * `spansOf(part)` is the spans file of traces input `part`.
+ */
+function splitSharesFrom(
+  fs: FileSystem,
+  out: string,
+  spansOf: (part: number) => PartitionFile | undefined,
+  guard: PanicGuard,
+): SplitShares {
+  return async (split) => {
+    const parts = new Set<number>();
+    for (const t of split.values()) for (const p of t.parts) parts.add(p);
+    const held = new Map<string, ShareSpan[]>();
+    const names = TABLE_COLUMNS.spans.map((c) => c.name);
+    const traceIdColumn = names.indexOf('trace_id');
+    for (const part of [...parts].sort((a, b) => a - b)) {
+      const f = spansOf(part);
+      if (f === undefined) continue;
+      for await (const cols of readColumns(
+        'spans',
+        await blobOf(fs, at(out, f.path)),
+        f.path,
+        undefined,
+        guard,
+      )) {
+        const cells: Record<string, unknown[]> = {};
+        for (const [i, name] of names.entries()) cells[name] = cols[i] ?? [];
+        const batch = { length: cols[0]?.length ?? 0, cells };
+        const ids = cols[traceIdColumn] ?? [];
+        for (let r = 0; r < batch.length; r++) {
+          const id = text(ids[r]);
+          const t = id === null ? undefined : split.get(id);
+          if (id === null || t === undefined) continue;
+          const list = held.get(id) ?? [];
+          held.set(id, list);
+          const s = shareSpanAt(batch, r, t.origin);
+          if (s !== null) list.push(s);
+        }
+      }
+    }
+    const shares = new Map<string, string | null>();
+    for (const id of split.keys()) {
+      const list = held.get(id);
+      shares.set(id, list === undefined ? null : encodeServiceShare(serviceShareOf(list)));
+    }
+    return shares;
+  };
+}
+
 interface TraceAcc {
   spanStart: bigint | null;
   spanEnd: bigint | null;
@@ -359,6 +421,11 @@ interface TraceAcc {
   errorCount: number;
   logCount: number;
   root: Located | null;
+  /** The rows (inputs) of this trace that have spans, the partition of the first, the others, and the first's stored share. */
+  spanRows: number;
+  firstPart: number;
+  otherParts: number[] | null;
+  firstShare: unknown;
 }
 
 function lower(a: bigint | null, b: bigint | null): bigint | null {
@@ -370,9 +437,12 @@ function upper(a: bigint | null, b: bigint | null): bigint | null {
 
 /**
  * Per trace id: counts summed; the range is that of the rows with spans, or of all rows when none has spans; the
- * root columns come from the root row with the smallest start (the lower partition on a tie).
+ * root columns come from the root row with the smallest start (the lower partition on a tie). The service share: a
+ * trace with spans in one input keeps that input's share (null when the input has none, a format-5 file); a trace with
+ * spans in several inputs gets `splitShares` of it, computed from the merged spans (null when none are found); a trace
+ * with no spans has the empty share. The rows are read once; `splitShares` runs after, with only the ids that need it.
  */
-async function aggregateTraces(rows: AsyncIterable<Located>): Promise<Row[]> {
+async function aggregateTraces(rows: AsyncIterable<Located>, splitShares: SplitShares): Promise<Row[]> {
   const acc = new Map<string, TraceAcc>();
   for await (const l of rows) {
     const id = text(cell(l.row, 'trace_id'));
@@ -389,6 +459,10 @@ async function aggregateTraces(rows: AsyncIterable<Located>): Promise<Row[]> {
         errorCount: 0,
         logCount: 0,
         root: null,
+        spanRows: 0,
+        firstPart: l.part,
+        otherParts: null,
+        firstShare: null,
       };
       acc.set(id, a);
     }
@@ -401,6 +475,14 @@ async function aggregateTraces(rows: AsyncIterable<Located>): Promise<Row[]> {
     a.anyStart = lower(a.anyStart, start);
     a.anyEnd = upper(a.anyEnd, end);
     if (spans > 0) {
+      if (a.spanRows === 0) {
+        a.firstPart = l.part;
+        a.firstShare = cell(l.row, 'service_share');
+      } else {
+        a.otherParts = a.otherParts ?? [];
+        a.otherParts.push(l.part);
+      }
+      a.spanRows++;
       a.hasSpans = true;
       a.spanStart = lower(a.spanStart, start);
       a.spanEnd = upper(a.spanEnd, end);
@@ -413,8 +495,19 @@ async function aggregateTraces(rows: AsyncIterable<Located>): Promise<Row[]> {
       a.root = l;
     }
   }
+  const split = new Map<string, SplitTrace>();
+  for (const [id, a] of acc) {
+    if (a.spanRows > 1) split.set(id, { origin: a.spanStart, parts: [a.firstPart, ...(a.otherParts ?? [])] });
+  }
+  const recomputed = split.size === 0 ? new Map<string, string | null>() : await splitShares(split);
   const out: Row[] = [];
   for (const [id, a] of acc) {
+    const share =
+      a.spanRows === 0
+        ? encodeServiceShare([])
+        : a.spanRows === 1
+          ? (text(a.firstShare) ?? null)
+          : (recomputed.get(id) ?? null);
     out.push({
       trace_id: id,
       start_time_unix_nano: a.hasSpans ? a.spanStart : a.anyStart,
@@ -425,6 +518,7 @@ async function aggregateTraces(rows: AsyncIterable<Located>): Promise<Row[]> {
       root_name: cell(a.root?.row, 'root_name') ?? null,
       root_resource: cell(a.root?.row, 'root_resource') ?? null,
       log_count: a.logCount,
+      service_share: share,
     });
   }
   // The order `traceRows` gives: start (a missing one last), then the trace id; the encoder keeps it for equal starts.
@@ -871,8 +965,12 @@ export async function compactPartitions(
           }
           // Each row is folded into its trace's or cluster's accumulator as it is read.
           const byTemplate = opts.patternKey === 'cluster-template';
+          const tracesEntries = entries.filter((e) => e.files.traces !== undefined);
           const rows = await (table === 'traces'
-            ? aggregateTraces(located())
+            ? aggregateTraces(
+                located(),
+                splitSharesFrom(fs, out, (part) => tracesEntries[part]?.files.spans, guard),
+              )
             : aggregatePatterns(located(), byTemplate, opts.templates));
           for (const [i, row] of rows.entries()) checkRow(table, row, i);
           const batch = batchFromRows(table, rows);
@@ -916,6 +1014,7 @@ export async function compactPartitions(
         path,
         bytes: size,
         ...stats,
+        ...(table === 'traces' ? { serviceShare: true as const } : {}),
         ...(timeEndMax === undefined ? {} : { timeEndMax }),
         ...(rollup === undefined ? {} : { rollup }),
       };

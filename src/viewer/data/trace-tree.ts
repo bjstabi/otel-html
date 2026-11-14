@@ -1,4 +1,11 @@
-import { exclusiveNsOf, laterCopyWins, type ShareSpan, serviceShareOf } from '../../format/service-share.js';
+import {
+  exclusiveNsOf,
+  isProvisionalValue,
+  laterCopyWins,
+  PROVISIONAL_ATTR,
+  type ShareSpan,
+  serviceShareOf,
+} from '../../format/service-share.js';
 import type { SpanId } from '../../model/ids.js';
 import type { SpanRow } from './results.js';
 
@@ -14,12 +21,8 @@ export interface TraceTree {
   readonly byId: Map<SpanId, TraceNode>;
 }
 
-/** The attribute the CI publisher sets on a span it wrote before the span ended (`PROVISIONAL_ATTR` in src/cli/ci/workflow-trace.ts). */
-const PROVISIONAL_ATTR = 'otel_html.ci.provisional';
-
 function isProvisional(row: SpanRow): boolean {
-  const v = row.span.attributes.get(PROVISIONAL_ATTR);
-  return v?.kind === 'bool' && v.value;
+  return isProvisionalValue(row.span.attributes.get(PROVISIONAL_ATTR));
 }
 
 /** §5.5: of two rows with one span id, the one that is not provisional, else the one that ends later, else the first. */
