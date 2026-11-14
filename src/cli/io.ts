@@ -28,7 +28,7 @@ export interface ConfigFlags {
   format?: ReportFormat;
   /** `--assets-base`: where the report loads its viewer files from (`writer.assetsBase`). */
   assetsBase?: string;
-  /** `merge --compact`: compact each format-4 input's copied partitions (`writer.compactOnMerge`). */
+  /** `merge --compact`: compact each format-5 input's copied partitions (`writer.compactOnMerge`). */
   compact?: boolean;
 }
 

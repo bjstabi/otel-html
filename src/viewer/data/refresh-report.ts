@@ -24,7 +24,7 @@ export interface RefreshDeps {
 
 /**
  * D55: loads `data/manifest.js?r=<now>` through the loader (which resolves with the registered `manifest`), validates it
- * (format 4), registers the files the new manifest lists and the old did not, drops the ones gone, recreates the base views and forgets the rollup views (the data source binds them again on the first statement that needs them),
+ * (format 5), registers the files the new manifest lists and the old did not, drops the ones gone, recreates the base views and forgets the rollup views (the data source binds them again on the first statement that needs them),
  * clears the engine cache and returns a DataSource over the new manifest and the same engine. A manifest that does
  * not validate rejects before anything is registered or dropped; one with the same `updatedAt` and files as `previous`
  * changes nothing and returns a null `dataSource`. A failure while registering or creating views restores the previous

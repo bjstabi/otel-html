@@ -56,10 +56,13 @@ const GATES: readonly [string, (m: ManifestV4) => Promise<unknown>][] = [
 ];
 
 describe('the gates', () => {
-  test.each(GATES)('%s accepts a format-5 manifest and refuses format 4', async (_name, gate) => {
+  test.each(GATES)('%s accepts a format-5 manifest and refuses format 4', async (name, gate) => {
     await expect(gate(manifest(5))).resolves.not.toThrow();
     // A format-4 manifest is refused with the old-format message, whatever the gate.
     const v4 = { ...manifest(5), formatVersion: 4 } as unknown as ManifestV4;
-    await expect(gate(v4)).rejects.toThrow(oldFormatMessage(4));
+    // An append reports it as a version mismatch with the --replace hint; every other gate says the old-format message.
+    await expect(gate(v4)).rejects.toThrow(
+      name === 'loadPartitionCheckpoint' ? 'is format 4' : oldFormatMessage(4),
+    );
   });
 });

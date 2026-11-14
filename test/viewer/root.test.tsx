@@ -1,6 +1,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { ManifestV4 } from '../../src/format/manifest.js';
+import { oldFormatMessage } from '../../src/format/version.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
 import { type LoadProgress, type OpenedReport, requireFormat4 } from '../../src/viewer/data/open-report.js';
 import { Root } from '../../src/viewer/root.js';
@@ -124,6 +125,13 @@ describe('a failed load', () => {
 
   test('the moved-or-incomplete hint is not shown for the format refusal', async () => {
     const refusal = new Error('This report is format 3; this viewer reads format 5. Convert it.');
+    render(<Root load={() => Promise.reject(refusal)} history={createHashHistory(window)} />);
+    await screen.findByText('This report could not be loaded');
+    expect(screen.getByRole('alert').textContent).not.toContain('incomplete or moved');
+  });
+
+  test('the hint is hidden for a format-4 refusal too', async () => {
+    const refusal = new Error(oldFormatMessage(4));
     render(<Root load={() => Promise.reject(refusal)} history={createHashHistory(window)} />);
     await screen.findByText('This report could not be loaded');
     expect(screen.getByRole('alert').textContent).not.toContain('incomplete or moved');

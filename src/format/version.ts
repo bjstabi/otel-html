@@ -23,7 +23,7 @@ export const REGISTRATION_GLOBAL = '__OH__';
 export const oldFormatMessage = (formatVersion: number): string =>
   formatVersion <= 3
     ? `This report is format ${formatVersion}; this viewer reads format 5. \`otel-html merge <report> --out <new>\` converts it.`
-    : `This report is format ${formatVersion}; this viewer reads format 5 only, and nothing converts a format ${formatVersion} report.`;
+    : `This report is format ${formatVersion}; this viewer reads format 5 only, and nothing converts a format ${formatVersion} report; open it with otel-html 0.3.1 or earlier.`;
 
 /** What `writer.format: chunks` (or `--format chunks`) now fails with. */
 export const CHUNKS_GONE =

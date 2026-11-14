@@ -464,7 +464,7 @@ describe('writeRunReport', () => {
   });
 });
 
-describe('format 5 and format 4 run reports', () => {
+describe('format 5 run reports', () => {
   const rollupFile = (path: string) => ({
     ...file(path, 2, '10', '20'),
     rollup: { grainNs: 65_536_000_000 as const, dimensions: ['service.name'] },

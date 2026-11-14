@@ -11,6 +11,7 @@ import {
   statePath,
 } from '../format/paths.js';
 import { parseAnySessionState, type SessionStateV2 } from '../format/state.js';
+import { oldFormatMessage } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
 import type { FileSystem } from './ports.js';
 
@@ -125,7 +126,17 @@ export async function loadPartitionCheckpoint(
   /** The format the caller writes: the merge hint names it. */
   format: string,
 ): Promise<PartitionCheckpoint> {
-  const manifest = await readManifest(fs, out);
+  const manifest = await readManifest(fs, out).catch((e: unknown) => {
+    // A format-4 report is refused by the reader; for an append it is a version mismatch like any other format.
+    if (e instanceof OtelHtmlError && e.code === 'invalid-report' && e.message === oldFormatMessage(4)) {
+      throw new OtelHtmlError('version-mismatch', {
+        message: `cannot append: the report at ${out} is format 4; writer.format local or site writes format 5`,
+        path: 'manifest.formatVersion',
+        hint: 'pass --replace to overwrite it; nothing converts a format 4 report',
+      });
+    }
+    throw e;
+  });
   if (!isPartitioned(manifest)) {
     throw new OtelHtmlError('version-mismatch', {
       message: `cannot append: the report at ${out} is format ${manifest.formatVersion}; writer.format local or site writes format 5`,
