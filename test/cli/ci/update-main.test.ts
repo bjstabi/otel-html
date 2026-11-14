@@ -444,6 +444,16 @@ describe('runUpdateRun', () => {
     expect(all.some((f) => f.endsWith('.parquet.js'))).toBe(false);
   });
 
+  test('every file the run report lists is in the update, rollup files included', async () => {
+    const report = await runReportDir();
+    await runUpdateRun(runOpts(report), ioOf({ GITHUB_TOKEN: 't' }), deps, api);
+    const folder = join(dir, 'u', outputs().name ?? '', 'report');
+    const manifest = await readRunManifest(deps.fs, folder);
+    const listed = (manifest?.partitions ?? []).flatMap((p) => Object.values(p.files).map((f) => f.path));
+    expect(listed.some((f) => f.endsWith('/log_rollups.parquet'))).toBe(true);
+    for (const f of listed) expect(existsSync(join(folder, f)), f).toBe(true);
+  });
+
   test('a run with no channel publishes nothing', async () => {
     const report = await runReportDir();
     const noPulls = async (url: string): Promise<Response> =>
