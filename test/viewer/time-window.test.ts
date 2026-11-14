@@ -15,6 +15,12 @@ describe('isLongWindow', () => {
     expect(isLongWindow(null, { start: 5, end: 4 + LONG_WINDOW_NS })).toBe(false);
     expect(isLongWindow(null, null)).toBe(false);
   });
+  test('with a known range the window is clipped to it: a long window on a short report is short', () => {
+    const hour = 3_600_000_000_000;
+    expect(isLongWindow({ start: hour, end: 7 * hour }, { start: 0, end: 2 * hour })).toBe(false);
+    expect(isLongWindow({ start: -hour, end: 7 * hour }, { start: 0, end: 6 * hour })).toBe(true);
+    expect(isLongWindow({ start: 0, end: 7 * hour }, null)).toBe(true);
+  });
   test('a window decides over the range', () => {
     expect(isLongWindow({ start: 0, end: 1 }, { start: 0, end: 10 * LONG_WINDOW_NS })).toBe(false);
   });

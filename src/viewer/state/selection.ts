@@ -100,20 +100,28 @@ export type SelectionData = Omit<
 >;
 
 /**
- * A long window sits on absolute grains (spec §6.3); a short one, or any window when the epoch is unknown, stays as
- * given. The URL cannot carry a start before the epoch, so a start that alignment moves below 0 stays 0: nothing
+ * A long window (clipped to the report's range, when `range` knows it) sits on absolute grains (spec §6.3); a short
+ * one, or any window when the epoch is unknown, stays as given. The URL cannot carry a start before the epoch, so a start that alignment moves below 0 stays 0: nothing
  * starts earlier, and the data source aligns the window again for its own use (it can move a clamped start below 0
  * again: the window then differs, the answers and the buckets do not).
  */
-function aligned(w: TimeWindow | null, epoch: bigint | undefined): TimeWindow | null {
-  if (w === null || epoch === undefined || !isLongWindow(w, null)) return w;
+function aligned(
+  w: TimeWindow | null,
+  epoch: bigint | undefined,
+  range: () => TimeWindow | null,
+): TimeWindow | null {
+  if (w === null || epoch === undefined || !isLongWindow(w, range())) return w;
   const a = alignLongWindow(w, epoch);
   return { start: Math.max(0, a.start), end: a.end };
 }
 
-function dataFromUrl(u: UrlState, epoch?: bigint): SelectionData {
+function dataFromUrl(
+  u: UrlState,
+  epoch?: bigint,
+  range: () => TimeWindow | null = () => null,
+): SelectionData {
   return {
-    window: aligned(u.t === undefined ? null : parseWindow(u.t), epoch),
+    window: aligned(u.t === undefined ? null : parseWindow(u.t), epoch, range),
     condition: u.q ?? null,
     text: u.text ?? '',
     traceId: u.trace ?? null,
@@ -218,12 +226,16 @@ function assertOttl(c: string): void {
   }
 }
 
-export function createSelectionStore(initial: UrlState, epoch?: bigint): StoreApi<Selection> {
+export function createSelectionStore(
+  initial: UrlState,
+  epoch?: bigint,
+  range: () => TimeWindow | null = () => null,
+): StoreApi<Selection> {
   return createStore<Selection>()((set, get) => ({
-    ...dataFromUrl(initial, epoch),
+    ...dataFromUrl(initial, epoch, range),
     setWindow: (w) => {
       if (w !== null) formatWindow(w); // validates
-      set({ window: aligned(w, epoch) });
+      set({ window: aligned(w, epoch, range) });
     },
     setCondition: (c) => {
       if (c !== null) assertOttl(c);
@@ -308,6 +320,7 @@ export function bindUrl(
   history: HistoryPort,
   onErrors: (errors: string[]) => void,
   epoch?: bigint,
+  range: () => TimeWindow | null = () => null,
 ): () => void {
   const current = (): string => serializeUrlState(selectionToUrlState(store.getState()));
   let applying = false;
@@ -317,7 +330,7 @@ export function bindUrl(
     const { state, errors } = parseUrlState(history.read());
     applying = true;
     try {
-      store.setState(dataFromUrl(state, epoch));
+      store.setState(dataFromUrl(state, epoch, range));
     } finally {
       applying = false;
     }
