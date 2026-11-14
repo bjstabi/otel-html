@@ -13,6 +13,7 @@ import { completeStatistics, fileStatistics } from '../../src/format/parquet/sta
 import { partitionKey, partitionWrapperPath } from '../../src/format/paths.js';
 import { encodeServiceShare, type ShareSpan, serviceShareOf } from '../../src/format/service-share.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
+import { shareSpanOf } from '../../src/viewer/data/trace-tree.js';
 import type { CompactOptions } from '../../src/writer/compaction.js';
 import { COMPACTION_SPAN_NS, compactPartitions, timeGroups } from '../../src/writer/compaction.js';
 import { mergeReports } from '../../src/writer/merge.js';
@@ -27,10 +28,11 @@ import {
 } from '../../src/writer/rollup-rows.js';
 import { openSession } from '../../src/writer/session.js';
 import { traceRows } from '../../src/writer/trace-summaries.js';
-import { withoutServiceShare } from '../../test-support/format6.js';
+import { withoutColumn, withoutServiceShare } from '../../test-support/format6.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 import { logRecord, logsRequest, span, traceRequest } from '../../test-support/otlp-builders.js';
 import { chunksOf } from '../../test-support/parquet-footer.js';
+import { viewerRow } from '../../test-support/viewer-row.js';
 import {
   createTestWriter,
   EPOCH_NS,
@@ -1353,6 +1355,7 @@ interface SpanSpec {
   service: string;
   start: number;
   end: number;
+  provisional?: boolean;
 }
 
 const BASE = BigInt(EPOCH_NS);
@@ -1461,7 +1464,7 @@ function writeSpansParts(fs: FileSystem, parts: readonly (readonly SpanSpec[])[]
           start_time_unix_nano: BASE + BigInt(x.start),
           end_time_unix_nano: BASE + BigInt(x.end),
           duration_ns: BigInt(x.end - x.start),
-          attributes: '{}',
+          attributes: x.provisional === true ? JSON.stringify({ 'otel_html.ci.provisional': true }) : '{}',
           service_name: x.service,
           status_code: 0,
         }),
@@ -1504,6 +1507,49 @@ describe('compaction and the stored service share', () => {
       expectStoredShares(ofPartition('traces'), ofPartition('spans'));
     }
     expect(spans).toHaveLength(2 * FLUSHES.flat().length);
+  });
+
+  test('a provisional copy in one input and the final copy in another resolve as the viewer resolves them', async () => {
+    const fs = createMemoryFileSystem();
+    const entries = await writeSpansParts(fs, [
+      [
+        { trace: 1, id: 1, parent: null, service: 'api', start: 0, end: 100, provisional: true },
+        { trace: 1, id: 2, parent: 1, service: 'db', start: 10, end: 40, provisional: true },
+      ],
+      [
+        { trace: 1, id: 1, parent: null, service: 'api', start: 0, end: 120 },
+        { trace: 1, id: 2, parent: 1, service: 'db', start: 10, end: 90 },
+      ],
+    ]);
+    const out = await compactPartitions(fs, OUT, entries, opts(2));
+    const traces = decodeTable('traces', await bytesOf(fs, out, 'traces'));
+    const spans = decodeTable('spans', await bytesOf(fs, out, 'spans'));
+    expect(spans).toHaveLength(4);
+    const origin = BASE; // the earliest span start
+    const fallback = serviceShareOf(spans.map((r) => shareSpanOf(viewerRow(r, origin))));
+    expect(fallback).toEqual(
+      [
+        { service: 'api', ns: 40n },
+        { service: 'db', ns: 80n },
+      ].sort((a, b) => Number(b.ns - a.ns)),
+    );
+    expect(Reflect.get(traces[0] ?? {}, 'service_share')).toBe(encodeServiceShare(fallback));
+  });
+
+  test('a traces file missing a column other than service_share is still refused', async () => {
+    for (const missing of ['log_count', 'span_count']) {
+      const fs = createMemoryFileSystem();
+      const entries = await writeSpansParts(fs, [FLUSHES[0] ?? [], FLUSHES[1] ?? []]);
+      const f = entries[1]?.files.traces;
+      if (f === undefined) throw new Error('no traces file');
+      await fs.writeBytes(`${OUT}/${f.path}`, withoutColumn(await fs.readBytes(`${OUT}/${f.path}`), missing));
+      const err = await compactPartitions(fs, OUT, entries, opts(2)).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err, missing).toBeInstanceOf(OtelHtmlError);
+      expect((err as OtelHtmlError).code).toBe('invalid-report');
+    }
   });
 
   describe('with a format-5 copy', () => {

@@ -148,17 +148,20 @@ export async function format6Fixture(
   return { manifest, files, epoch: manifestAnchor(manifest), dir: report.dir, close: report.close };
 }
 
-/** A traces file's bytes without its `service_share` column (what a format-5 flush wrote). */
-export function withoutServiceShare(bytes: Uint8Array): Uint8Array {
+/** A traces file's bytes without the column `name`, the other fields kept as the file has them. */
+export function withoutColumn(bytes: Uint8Array, name: string): Uint8Array {
   ensureParquetWasm();
   const arrow = tableFromIPC(readParquet(bytes).intoIPCStream());
-  const kept = arrow.select(
-    arrow.schema.fields.map((f) => f.name).filter((n) => n !== SERVICE_SHARE_COLUMN.name),
-  );
+  const kept = arrow.select(arrow.schema.fields.map((f) => f.name).filter((n) => n !== name));
   return writeParquet(
     WasmTable.fromIPCStream(tableToIPC(kept, 'stream')),
     writerProperties({ rowGroupRows: 1000 }),
   );
+}
+
+/** A traces file's bytes without its `service_share` column (what a format-5 flush wrote). */
+export function withoutServiceShare(bytes: Uint8Array): Uint8Array {
+  return withoutColumn(bytes, SERVICE_SHARE_COLUMN.name);
 }
 
 /** `manifest` as the format 5 a writer wrote before format 6: `epochUnixNano` as given, no `serviceShare`, traces `sizes` from `bytesOf`. */
