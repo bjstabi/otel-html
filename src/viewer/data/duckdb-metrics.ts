@@ -1,9 +1,10 @@
+import { tableFromArrays } from '@uwdata/flechette';
 import { and, type ExprNode, type Query } from '@uwdata/mosaic-sql';
 import type { ManifestV4 } from '../../format/manifest.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import { compileCondition } from '../../ottl/compile.js';
 import { parseCondition } from '../../ottl/parse.js';
-import { pathsOf, rejectPerPointPaths } from '../../query/metric-paths.js';
+import { canonical, pathsOf, rejectPerPointPaths } from '../../query/metric-paths.js';
 import { buildFilter, whereOf } from '../../query/sql/filter.js';
 import {
   type ByExpr,
@@ -38,6 +39,7 @@ import {
 } from './metric-mappers.js';
 import {
   type CatalogRows,
+  type CatalogSeries,
   catalogFrom,
   chartWidthNs,
   type MetricMethods,
@@ -45,13 +47,13 @@ import {
   type MetricQueryResult,
   type MetricRunQueryRequest,
   pickWidthNs,
-  summaryShowOptions,
   upperMedian,
 } from './metric-results.js';
 import { checkShow, kindOf, NOTES, SHOW_BY_KIND } from './metric-tables.js';
 import { filesFor, runPrepared, throwIfAborted } from './query-common.js';
 import type { QueryEngine } from './query-engine.js';
 import { dropResidualTable, idTable, servedResidual } from './residual.js';
+import { leftOutOf, runStatisticsKey, runsInWindow, runValues } from './run-files.js';
 import { cell, rowsOf, toNumber } from './span-results.js';
 
 export interface MetricContext {
@@ -70,6 +72,9 @@ const EXEMPLAR_ROWS_CAP = 5_000;
 
 /** A lower bound no point lies below, for the baseline of a counter's running total. */
 const BEFORE_EVERYTHING = Number.MIN_SAFE_INTEGER;
+
+/** Later than any point: the end of a window that has none (2^62 ns plus the epoch stays below 2^63). */
+const NO_END = 2 ** 62;
 
 const usage = (path: string, expected: string, actual: string): OtelHtmlError =>
   new OtelHtmlError('usage', { path, expected, actual });
@@ -97,12 +102,13 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
 
   const load = async (): Promise<CatalogRows> => {
     const spec = bucketSpec(null, range, SPARK_BUCKETS);
-    const [defs, identities, spark] = await Promise.all([
+    const [defs, identities, spark, quantiles] = await Promise.all([
       read(undefined, metricDefsQuery()),
       read(undefined, metricIdentitiesQuery()),
       read(undefined, metricSparkQuery(spec, epoch)),
+      read(undefined, summaryQuantilesQuery()),
     ]);
-    return catalogFrom(defs, identities, spark, spec);
+    return catalogFrom(defs, identities, spark, spec, quantiles);
   };
   const metricCatalog = (): Promise<CatalogRows> => {
     if (catalog === null) {
@@ -132,6 +138,10 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
       identity: MetricIdentity;
       condition: string | null;
       window: RelWindow | null;
+      /** The lower time bound with no upper bound (report-relative ns): files that end before it are not read. */
+      from?: number | null;
+      /** A statistics key and the values a file must hold one of to be read (`runStatisticsKey`'s key). */
+      runs?: { key: string; values: ReadonlySet<string> } | null;
       resourceTexts: readonly string[] | null;
       seriesIds: Query | null;
     },
@@ -143,9 +153,12 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
       table: 'points',
       condition: o.condition,
       text: '',
-      window: o.window,
+      window: o.from == null ? o.window : { start: o.from, end: NO_END },
       // `points` keeps `metric_name` statistics: a partition without the metric is not read.
-      hints: new Map([['metric_name', new Set([o.identity.name])]]),
+      hints: new Map([
+        ['metric_name', new Set([o.identity.name])],
+        ...(o.runs == null ? [] : ([[o.runs.key, o.runs.values]] as const)),
+      ]),
     });
     // seriesQuery adds the files term itself: the rest (translated condition, window) is the series' where.
     const terms: ExprNode[] = whereOf({ ...filter, files: { ...filter.files, all: true } }, 'points');
@@ -351,135 +364,220 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
     const runBy = byExpr(req.runBy);
     const cat = await metricCatalog();
     const identity = identityOf(cat, entry.id);
+    const texts = resourceTextsOf(cat, req.resources);
+    const failedWhen = req.failedWhen !== null && req.failedWhen.trim() !== '' ? req.failedWhen : null;
+    const input = (notes: string[]) => ({
+      query: q,
+      entry,
+      kind,
+      window: req.window,
+      runBy: req.runBy,
+      notes,
+    });
+    const labelsOf = (rows: ReturnType<typeof seriesRowsFrom>) => ({
+      baseLabel: entry.name,
+      seriesLabels: new Map(rows.map((r) => [r.seriesId, seriesLabel(r, entry)])),
+    });
 
-    return scoped(
+    /** Step 2 (or the whole read): the runs' rows, cells, failed cells and summary labels over the files `runs` keeps. */
+    const readRuns = (
+      runs: { key: string; values: ReadonlySet<string> } | null,
+      leftOut: number | null,
+      only: readonly string[] | null,
+    ) =>
+      scoped(
+        {
+          entry,
+          identity,
+          condition: q.where,
+          window: null,
+          runs,
+          resourceTexts: texts,
+          seriesIds: null,
+        },
+        signal,
+        async (scope) => {
+          const notes = notesOf(entry, scope.residual);
+          if (scope.files.files.length === 0)
+            return { runs: [], lines: [], leftOut: 0, queryId: q.id, window: req.window, notes };
+          const series = scope.seriesFor(by);
+          const summary = kind === 'summary';
+          const [runTable, cells, failed, labelRows] = await Promise.all([
+            read(
+              scope.files,
+              runsQuery(identity, scope.seriesFor([runBy]), scope.files, epoch, { leftOut, only }),
+              signal,
+            ),
+            read(
+              scope.files,
+              metricCellsQuery({
+                identity,
+                kind,
+                show: q.show,
+                series,
+                files: scope.files,
+                window: null,
+                cell: { kind: 'run', run: runBy },
+                epoch,
+                byCount: by.length,
+              }),
+              signal,
+            ),
+            // The failing series are among the query's: the same cells over those alone.
+            failedWhen === null
+              ? null
+              : scoped(
+                  {
+                    entry,
+                    identity,
+                    condition: failedWhen,
+                    window: null,
+                    runs,
+                    resourceTexts: texts,
+                    seriesIds: seriesIdsQuery(series),
+                  },
+                  signal,
+                  (failedScope) =>
+                    read(
+                      failedScope.files,
+                      metricCellsQuery({
+                        identity,
+                        kind,
+                        show: q.show,
+                        series: failedScope.seriesFor(by),
+                        files: failedScope.files,
+                        window: null,
+                        cell: { kind: 'run', run: runBy },
+                        epoch,
+                        byCount: by.length,
+                      }),
+                      signal,
+                    ),
+                ),
+            summary ? seriesRowsTable(series, scope.files, signal) : null,
+          ]);
+          const rows = labelRows === null ? [] : seriesRowsFrom(labelRows, by.length);
+          return runsFrom(runTable, cells, failed, { ...input(notes), ctx: labelsOf(rows) });
+        },
+      );
+
+    // The two steps need the run to name a statistics key the points files hold, and the catalogue to count the
+    // series left out; otherwise every file is read at once, as it always was.
+    const key = runStatisticsKey(req.runBy);
+    const leftOut =
+      key !== null && manifest.statisticsKeys.points.includes(key) ? catalogLeftOut(cat, req, runBy) : null;
+    if (key === null || leftOut === null) return readRuns(null, null, null);
+
+    // Step 1: which runs. The files that can hold a point at or after the window's start give each run's latest point.
+    // A relative time above 2^53 ns rounds, so the bound is widened by one unit: step 1 only has to be a superset.
+    const start = req.window.start;
+    const from = Number.isFinite(start) ? start - Math.max(1, Math.abs(start) * 2 ** -52) : null;
+    const pruned = (condition: string | null, lower: number | null) =>
+      buildFilter({
+        manifest,
+        table: 'points',
+        condition,
+        text: '',
+        window: lower === null ? null : { start: lower, end: NO_END },
+        hints: new Map([['metric_name', new Set([identity.name])]]),
+      });
+    const whole = pruned(q.where, null);
+    // Every file can hold a point of the window (a report no longer than it): one read gives the answer.
+    if (from === null || pruned(q.where, from).filter.files.files.length === whole.filter.files.files.length)
+      return readRuns(null, leftOut, null);
+    const first = await scoped(
       {
         entry,
         identity,
         condition: q.where,
         window: null,
-        resourceTexts: resourceTextsOf(cat, req.resources),
+        from,
+        resourceTexts: texts,
         seriesIds: null,
       },
       signal,
-      async (scope) => {
-        const input = {
-          query: q,
-          entry,
-          kind,
-          window: req.window,
-          runBy: req.runBy,
-          notes: notesOf(entry, scope.residual),
-        };
-        const none = {
-          runs: [],
-          lines: [],
-          leftOut: 0,
-          queryId: q.id,
-          window: req.window,
-          notes: input.notes,
-        };
-        if (scope.files.files.length === 0) return none;
-        const series = scope.seriesFor(by);
-        const summary = kind === 'summary';
-        const failedWhen = req.failedWhen !== null && req.failedWhen.trim() !== '' ? req.failedWhen : null;
-        const [runs, cells, failed, labelRows] = await Promise.all([
-          read(scope.files, runsQuery(identity, scope.seriesFor([runBy]), scope.files, epoch), signal),
-          read(
-            scope.files,
-            metricCellsQuery({
-              identity,
-              kind,
-              show: q.show,
-              series,
-              files: scope.files,
-              window: null,
-              cell: { kind: 'run', run: runBy },
-              epoch,
-              byCount: by.length,
-            }),
-            signal,
-          ),
-          // The failing series are among the query's: the same cells over those alone.
-          failedWhen === null
+      async (scope) => ({
+        notes: notesOf(entry, scope.residual),
+        table:
+          scope.files.files.length === 0
             ? null
-            : scoped(
-                {
-                  entry,
-                  identity,
-                  condition: failedWhen,
-                  window: null,
-                  resourceTexts: resourceTextsOf(cat, req.resources),
-                  seriesIds: seriesIdsQuery(series),
-                },
+            : await read(
+                scope.files,
+                runsQuery(identity, scope.seriesFor([runBy]), scope.files, epoch, { leftOut }),
                 signal,
-                (failedScope) =>
-                  read(
-                    failedScope.files,
-                    metricCellsQuery({
-                      identity,
-                      kind,
-                      show: q.show,
-                      series: failedScope.seriesFor(by),
-                      files: failedScope.files,
-                      window: null,
-                      cell: { kind: 'run', run: runBy },
-                      epoch,
-                      byCount: by.length,
-                    }),
-                    signal,
-                  ),
               ),
-          summary ? seriesRowsTable(series, scope.files, signal) : null,
-        ]);
-        const rows = labelRows === null ? [] : seriesRowsFrom(labelRows, by.length);
-        return runsFrom(runs, cells, failed, {
-          ...input,
-          ctx: {
-            baseLabel: entry.name,
-            seriesLabels: new Map(rows.map((r) => [r.seriesId, seriesLabel(r, entry)])),
-          },
-        });
-      },
+      }),
+    );
+    // No file can hold a run of the window, or no run is in it: no line, only the series left out, which the same mapper words.
+    const chosen = first.table === null ? [] : runsInWindow(first.table, req.window);
+    if (chosen.length === 0) {
+      // The whole read would have needed the browser to evaluate a residual term, which a served engine cannot do.
+      if (whole.filter.files.files.length > 0 && !engine.tempTables) {
+        if (whole.residual !== null) throw servedResidual(whole.residual);
+        // As `scoped`: a condition whose own pruning keeps no file evaluates nothing, so it cannot need the browser.
+        const failed = failedWhen === null ? null : pruned(failedWhen, null);
+        if (failed !== null && failed.residual !== null && failed.filter.files.files.length > 0)
+          throw servedResidual(failed.residual);
+      }
+      const empty = tableFromArrays({});
+      const left = tableFromArrays({
+        run: [null],
+        t: [null],
+        revision: [null],
+        n_series: [0],
+        left_out: [leftOut],
+      });
+      return runsFrom(first.table ?? left, empty, failedWhen === null ? null : empty, {
+        ...input(first.notes),
+        ctx: labelsOf([]),
+      });
+    }
+    // Step 2: their points, from the files that hold them (the whole run, wherever it began).
+    const values = runValues(chosen);
+    return readRuns(values === null ? null : { key, values }, leftOut, chosen);
+  }
+
+  /**
+   * The series with no run value among the catalogue's series of `req.entry` that pass the query's condition and
+   * resources, or null when the catalogue cannot say (a condition on the description, which its rows do not read, or
+   * one that does not compile, or a run expression other than a plain resource attribute).
+   */
+  function catalogLeftOut(cat: CatalogRows, req: MetricRunQueryRequest, runBy: ByExpr): number | null {
+    const { entry, query: q } = req;
+    let passes: (row: CatalogSeries) => boolean = () => true;
+    if (q.where !== null && q.where.trim() !== '') {
+      if (pathsOf(parseCondition(q.where)).some((p) => canonical(p).join('.') === 'metric.description'))
+        return null;
+      let compiled: ReturnType<typeof compileCondition<'datapoint'>>;
+      try {
+        compiled = compileCondition(q.where, 'datapoint');
+      } catch {
+        return null;
+      }
+      passes = (row) => compiled.test(seriesTarget(entry, row));
+    }
+    const texts = resourceTextsOf(cat, req.resources);
+    const allowed = texts === null ? null : new Set(texts);
+    return leftOutOf(
+      cat.seriesOf(entry.id),
+      (row) => (allowed === null || allowed.has(row.resourceText)) && passes(row),
+      runBy,
     );
   }
 
-  // Show options do not depend on the window: one read per entry, dropped again when it fails.
-  const showOptions = new Map<number, Promise<readonly string[]>>();
+  // Show options do not depend on the window: a summary's quantiles came with the catalogue.
   async function showOptionsOf(entryId: number): Promise<readonly string[]> {
     const cat = await metricCatalog();
     const entry = cat.entries[entryId];
-    const identity = cat.identities[entryId];
-    if (entry === undefined || identity === undefined) {
-      throw usage('metric entry', 'an entry of the catalog', String(entryId));
-    }
+    if (entry === undefined) throw usage('metric entry', 'an entry of the catalog', String(entryId));
     const kind = kindOf(entry);
     if (kind !== 'summary') return SHOW_BY_KIND[kind];
-    // `points` keeps `metric_name` statistics: a partition without the metric is not read.
-    const { filter } = buildFilter({
-      manifest,
-      table: 'points',
-      condition: null,
-      text: '',
-      window: null,
-      hints: new Map([['metric_name', new Set([identity.name])]]),
-    });
-    return summaryShowOptions(await read(filter.files, summaryQuantilesQuery(identity, filter.files)));
+    return cat.quantiles.get(entryId) ?? SHOW_BY_KIND.summary;
   }
 
   return {
     metricCatalog,
-    metricShowOptions(entryId) {
-      const held = showOptions.get(entryId);
-      if (held !== undefined) return held;
-      const run = showOptionsOf(entryId);
-      showOptions.set(entryId, run);
-      // A rejection is not kept: the next call retries.
-      run.catch(() => {
-        if (showOptions.get(entryId) === run) showOptions.delete(entryId);
-      });
-      return run;
-    },
+    metricShowOptions: showOptionsOf,
     metricQuery,
     metricRunQuery,
     async metricsForResources(resources) {

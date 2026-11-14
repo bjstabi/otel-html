@@ -101,23 +101,21 @@ export function metricSparkQuery(spec: BucketSpec, epoch: bigint): Query {
     .orderby(...IDENTITY_COLUMNS.map((c) => sql`${verbatim(c)}`), sql`bucket`);
 }
 
-/** The distinct `q` (DOUBLE) values of the definition's `quantiles` JSON (in `files` when given), ascending (a whole-numbered quantile is stored as `{"$d": "1"}`). */
-export function summaryQuantilesQuery(identity: MetricIdentity, files?: Pruned): Query {
+/**
+ * Per definition (the identity columns) and distinct `q` (DOUBLE) of its summary points' `quantiles` JSON, over the
+ * whole table, ordered by definition and ascending `q` (a whole-numbered quantile is stored as `{"$d": "1"}`).
+ */
+export function summaryQuantilesQuery(): Query {
   const entries = Query.from('points')
-    .select({ e: sql`unnest(from_json(quantiles, '["JSON"]'))` })
-    .where(
-      and(
-        ...identityTerms(identity),
-        ...(files === undefined ? [] : [filenameTerm(files)].filter((t) => t !== null)),
-        sql`quantiles IS NOT NULL`,
-      ),
-    );
+    .select({ ...identitySelect(), e: sql`unnest(from_json(quantiles, '["JSON"]'))` })
+    .where(sql`quantiles IS NOT NULL`);
   return Query.from({ t: entries })
     .distinct()
     .select({
+      ...identitySelect(),
       q: sql`CAST(coalesce(json_extract_string(e, '$.quantile."$d"'), json_extract_string(e, '$.quantile')) AS DOUBLE)`,
     })
-    .orderby(sql`q`);
+    .orderby(...IDENTITY_COLUMNS.map((c) => sql`${verbatim(c)}`), sql`q`);
 }
 
 /** A `by` path as the SQL expression of its JSON text: `src` as written, `identity` when it reads attributes, resource or scope. */
@@ -612,7 +610,19 @@ export function exemplarsQuery(
  * Per run (`g0` of `series`, built with the `runBy` expression): `t`, the relative time of its latest point, `revision`
  * (D28) of that point and `n_series`; plus the row with `run IS NULL` whose `left_out` counts the series with a NULL or empty run value.
  */
-export function runsQuery(identity: MetricIdentity, series: Query, files: Pruned, epoch: bigint): Query {
+export function runsQuery(
+  identity: MetricIdentity,
+  series: Query,
+  files: Pruned,
+  epoch: bigint,
+  opts: {
+    /** The count of series with no run value when the caller knows it (the catalogue lists every series): the row then carries it and the points are not scanned for it. */
+    leftOut?: number | null;
+    /** Only these runs (their `g0` texts): the files read may hold the points of other runs, cut short. */
+    only?: readonly string[] | null;
+  } = {},
+): Query {
+  const { leftOut = null, only = null } = opts;
   const rows = seriesPoints(
     identity,
     series,
@@ -635,15 +645,31 @@ export function runsQuery(identity: MetricIdentity, series: Query, files: Pruned
       n_series: sql`count(DISTINCT sid)`,
       left_out: sql`0`,
     })
-    .where(sql`NOT ${empty}`)
+    .where(
+      only === null
+        ? sql`NOT ${empty}`
+        : and(
+            sql`NOT ${empty}`,
+            isIn(
+              col('g0'),
+              only.map((r) => literal(r)),
+            ),
+          ),
+    )
     .groupby(col('g0'));
-  const left = Query.from({ p: rows }).select({
+  const leftRow = {
     run: sql`CAST(NULL AS VARCHAR)`,
     t: sql`CAST(NULL AS BIGINT)`,
     revision: sql`CAST(NULL AS VARCHAR)`,
     n_series: sql`0`,
-    left_out: sql`count(DISTINCT sid) FILTER (WHERE ${empty})`,
-  });
+  };
+  const left =
+    leftOut === null
+      ? Query.from({ p: rows }).select({
+          ...leftRow,
+          left_out: sql`count(DISTINCT sid) FILTER (WHERE ${empty})`,
+        })
+      : Query.select({ ...leftRow, left_out: sql`CAST(${verbatim(String(leftOut))} AS BIGINT)` });
   return Query.from({ u: Query.unionAll(runs, left) })
     .select({ ...cols('run', 't', 'revision', 'n_series', 'left_out') })
     .orderby(sql`run IS NULL`, col('t'), col('run'));

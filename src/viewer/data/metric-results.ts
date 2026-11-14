@@ -184,6 +184,10 @@ const textOf = (row: ResultRow, name: string): string => {
   return v;
 };
 
+/** The key that joins a definition's rows across the catalogue's statements (defs, identities, sparkline, quantiles). */
+const defKey = (id: MetricIdentity): string =>
+  JSON.stringify([id.name, id.type, id.unit, id.temporality, id.monotonic]);
+
 /** The definition as `points` stores it: the key joining the defs, identity and sparkline rows. */
 function storedDef(row: ResultRow): MetricIdentity & { key: string } {
   const unit = cell(row, 'metric_unit');
@@ -197,7 +201,7 @@ function storedDef(row: ResultRow): MetricIdentity & { key: string } {
       temporality === null || temporality === undefined ? null : toNumber(temporality, 'temporality'),
     monotonic: typeof monotonic === 'boolean' ? monotonic : null,
   };
-  return { ...id, key: JSON.stringify([id.name, id.type, id.unit, id.temporality, id.monotonic]) };
+  return { ...id, key: defKey(id) };
 }
 
 /** The keys of an attribute JSON text without decoding its values; the `{"$m": [[key, value], ...]}` form lists its keys. */
@@ -236,10 +240,29 @@ export interface CatalogRows extends MetricCatalogData {
   resourceTexts: readonly string[][];
   /** Per entry (by id), the definition as `points` stores it. */
   identities: readonly MetricIdentity[];
+  /** Per summary entry (by id), its show options as `summaryShowOptions` makes them. */
+  quantiles: ReadonlyMap<number, readonly string[]>;
+  /**
+   * Per entry (by id), its distinct series as the catalogue's identity rows list them, decoded on first use. A series
+   * stored twice with its attribute JSON in two key orders is one row; `seriesId` is a canonical identity key (the
+   * rows carry no stored `series_id`), `description` is empty (the identity rows do not read it).
+   */
+  seriesOf(entryId: number): readonly CatalogSeries[];
 }
 
-/** The three catalog statements' results as the catalog (D20): attribute keys and resources come from the identity texts. */
-export function catalogFrom(defs: Table, identities: Table, spark: Table, spec: BucketSpec): CatalogRows {
+/** One series of the catalogue: a `SeriesRow` with the stored text of its resource attributes. */
+export interface CatalogSeries extends SeriesRow {
+  resourceText: string;
+}
+
+/** The four catalog statements' results as the catalog (D20): attribute keys and resources come from the identity texts. */
+export function catalogFrom(
+  defs: Table,
+  identities: Table,
+  spark: Table,
+  spec: BucketSpec,
+  quantiles: Table,
+): CatalogRows {
   const buckets = Math.floor((spec.endNs - spec.startNs) / spec.widthNs) + 1;
 
   interface Acc {
@@ -250,7 +273,9 @@ export function catalogFrom(defs: Table, identities: Table, spark: Table, spec: 
     sums: number[];
     counts: number[];
   }
+  const seriesMemo = new Map<number, readonly CatalogSeries[]>();
   const accs = new Map<string, Acc>();
+  const rowsByDef = new Map<string, number[]>();
   for (const row of rowsOf(defs)) {
     const d = storedDef(row);
     const { key, ...id } = d;
@@ -270,10 +295,13 @@ export function catalogFrom(defs: Table, identities: Table, spark: Table, spec: 
   // identity rows repeat the same resource and scope texts: decode each once
   const resourceByText = new Map<string, { key: string; record: ResourceRecord }>();
   const scopeByText = new Set<string>();
-  for (const row of rowsOf(identities)) {
+  for (const [at, row] of rowsOf(identities).entries()) {
     const def = storedDef(row);
     const acc = accs.get(def.key);
     if (acc === undefined) continue;
+    const held = rowsByDef.get(def.key);
+    if (held === undefined) rowsByDef.set(def.key, [at]);
+    else held.push(at);
     const attributes = textOf(row, 'attributes');
     const seen = `${def.key}\u0000${attributes}`;
     if (!seenAttributes.has(seen)) {
@@ -377,21 +405,119 @@ export function catalogFrom(defs: Table, identities: Table, spark: Table, spec: 
     };
   });
 
+  const qsByKey = new Map<string, number[]>();
+  for (const row of rowsOf(quantiles)) {
+    const q = cell(row, 'q');
+    if (typeof q !== 'number') throw invalid('q', 'a number', q);
+    const key = storedDef(row).key;
+    const held = qsByKey.get(key);
+    if (held === undefined) qsByKey.set(key, [q]);
+    else held.push(q);
+  }
+  const quantileOptions = new Map<number, readonly string[]>();
+  defsOf.forEach(({ acc, type }, id) => {
+    if (type !== 'summary') return;
+    const qs = qsByKey.get(defKey(acc.id)) ?? [];
+    // `q<quantile>` per quantile, then `count` and `sum`
+    quantileOptions.set(id, [...qs.map((q) => `q${q}`), ...SHOW_BY_KIND.summary]);
+  });
+
+  const indexByDef = new Map([...rowsByDef].map(([k, v]) => [k, Int32Array.from(v)] as const));
+
   return {
     entries,
+    quantiles: quantileOptions,
     resources: orderedResources.map(([, r]) => r.record),
     scopes: orderedScopes,
     resourceTexts: orderedResources.map(([, r]) => [...r.texts]),
     identities: defsOf.map(({ acc }) => acc.id),
+    seriesOf: (entryId) => {
+      const known = seriesMemo.get(entryId);
+      if (known !== undefined) return known;
+      const def = defsOf[entryId];
+      // the rows stay in the Arrow table; a definition's row indices decode when its series are first asked for
+      const at = def === undefined ? undefined : indexByDef.get(defKey(def.acc.id));
+      const rows = def === undefined ? [] : seriesRowsOf(at ?? new Int32Array(0), identities, def.acc.id);
+      seriesMemo.set(entryId, rows);
+      return rows;
+    },
   };
 }
 
-/** `q<quantile>` per quantile of a `summaryQuantilesQuery` result, then `count` and `sum`. */
-export function summaryShowOptions(t: Table): string[] {
-  const qs = rowsOf(t).map((r) => {
-    const q = cell(r, 'q');
-    if (typeof q !== 'number') throw invalid('q', 'a number', q);
-    return `q${q}`;
-  });
-  return [...qs, ...SHOW_BY_KIND.summary];
+/** The distinct series of identity rows (one definition), decoded; resource and scope texts are decoded once each. */
+function seriesRowsOf(at: Int32Array, identities: Table, id: MetricIdentity): CatalogSeries[] {
+  const resources = new Map<string, { record: ResourceRecord; part: string }>();
+  const scopes = new Map<string, { record: ScopeRecord; part: string }>();
+  const seen = new Map<string, CatalogSeries>();
+  for (const index of at) {
+    const row = identities.at(index) as ResultRow;
+    const resourceText = textOf(row, 'resource_attributes');
+    const rKey = JSON.stringify([
+      resourceText,
+      cell(row, 'resource_schema_url'),
+      String(cell(row, 'resource_dropped_attributes_count')),
+    ]);
+    let resource = resources.get(rKey);
+    if (resource === undefined) {
+      const record: ResourceRecord = {
+        attributes: attributesFromJson(resourceText),
+        droppedAttributesCount: toNumber(cell(row, 'resource_dropped_attributes_count'), 'resource dropped'),
+        schemaUrl: String(cell(row, 'resource_schema_url') ?? ''),
+      };
+      resource = {
+        record,
+        part: JSON.stringify([
+          record.schemaUrl,
+          record.droppedAttributesCount,
+          canonicalAttributesKey(record.attributes),
+        ]),
+      };
+      resources.set(rKey, resource);
+    }
+    const sKey = JSON.stringify([
+      cell(row, 'scope_name'),
+      cell(row, 'scope_version'),
+      cell(row, 'scope_attributes'),
+      cell(row, 'scope_schema_url'),
+      String(cell(row, 'scope_dropped_attributes_count')),
+    ]);
+    let scope = scopes.get(sKey);
+    if (scope === undefined) {
+      const record: ScopeRecord = {
+        name: String(cell(row, 'scope_name') ?? ''),
+        version: String(cell(row, 'scope_version') ?? ''),
+        attributes: attributesFromJson(String(cell(row, 'scope_attributes'))),
+        droppedAttributesCount: toNumber(cell(row, 'scope_dropped_attributes_count'), 'scope dropped'),
+        schemaUrl: String(cell(row, 'scope_schema_url') ?? ''),
+      };
+      scope = { record, part: scopeKey(record) };
+      scopes.set(sKey, scope);
+    }
+    const attributes = attributesFromJson(textOf(row, 'attributes'));
+    const bounds = cell(row, 'explicit_bounds');
+    const boundsList =
+      bounds === null || bounds === undefined
+        ? null
+        : Array.from(bounds as ArrayLike<unknown>).map((b) => Number(b ?? 0));
+    // as the writer's `seriesIdOf` names a series: bounds only for an explicit histogram, attributes by sorted key
+    const seriesId = JSON.stringify([
+      defKey(id),
+      id.type === 'histogram' ? boundsList : null,
+      resource.part,
+      scope.part,
+      canonicalAttributesKey(attributes),
+    ]);
+    if (seen.has(seriesId)) continue;
+    seen.set(seriesId, {
+      seriesId,
+      description: '',
+      attributes,
+      resource: resource.record,
+      scope: scope.record,
+      bounds: boundsList,
+      groups: [],
+      resourceText,
+    });
+  }
+  return [...seen.values()];
 }
