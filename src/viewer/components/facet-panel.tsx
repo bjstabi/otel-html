@@ -1,4 +1,4 @@
-import { type JSX, type ReactNode, useCallback, useRef, useState } from 'react';
+import { type JSX, type ReactNode, useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { FacetCounts } from '../../rollups/facets.js';
 import { DEFAULT_LOG_FACETS } from '../../semconv/default-facets.js';
@@ -558,7 +558,10 @@ export function useAttributeFacets(
 ): { facets: FacetCounts | null; notice: JSX.Element | null } {
   const [requested, setRequested] = useState<Requested | null>(null);
   const loadRef = useRef(load);
-  loadRef.current = load;
+  // the committed loader: a render that never commits must not change what a click runs
+  useLayoutEffect(() => {
+    loadRef.current = load;
+  }, [load]);
   // the latest request: a response applies only while no newer request replaced it (moving away and back does not)
   const latest = useRef<object | null>(null);
   const request = useCallback((): void => {

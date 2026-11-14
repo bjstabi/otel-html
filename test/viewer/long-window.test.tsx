@@ -1,6 +1,7 @@
 import { Tooltip } from '@base-ui/react/tooltip';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
+import { Suspense, startTransition } from 'react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { ManifestV4 } from '../../src/format/manifest.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
@@ -187,6 +188,20 @@ function Harness(props: { k: string; source: object; load: () => Promise<FacetCo
   );
 }
 
+const NEVER = new Promise<never>(() => {});
+function Gate(props: { k: string }): null {
+  if (props.k === 'b') throw NEVER;
+  return null;
+}
+function Host(props: { k: string; source: object; load: () => Promise<FacetCounts> }): React.JSX.Element {
+  return (
+    <>
+      <Harness {...props} />
+      <Gate k={props.k} />
+    </>
+  );
+}
+
 describe('useAttributeFacets', () => {
   const pending = (): { load: () => Promise<FacetCounts>; resolve: () => void } => {
     let resolve: () => void = () => {};
@@ -212,6 +227,26 @@ describe('useAttributeFacets', () => {
     expect((button() as HTMLButtonElement).disabled).toBe(true);
     await act(async () => b.resolve());
     expect(await screen.findByText('loaded')).toBeTruthy();
+  });
+
+  test('a render that never commits does not change the loader a click runs', async () => {
+    const user = userEvent.setup();
+    const source = {};
+    const a = vi.fn(pending().load);
+    const b = vi.fn(pending().load);
+    const tree = (k: string): React.JSX.Element => (
+      <Suspense fallback={null}>
+        <Host k={k} source={source} load={k === 'a' ? a : b} />
+      </Suspense>
+    );
+    const { rerender } = render(tree('a'));
+    // the render for key b suspends: it runs the hook, but the transition keeps the committed tree for key a
+    await act(async () => {
+      startTransition(() => rerender(tree('b')));
+    });
+    await user.click(button());
+    expect(a).toHaveBeenCalledTimes(1);
+    expect(b).not.toHaveBeenCalled();
   });
 
   test('loaded facets are for the data source that loaded them: a Refresh brings the button back', async () => {
