@@ -91,4 +91,28 @@ describe('originNs', () => {
     expect(b.toJSON().originNs).toBe(3);
     expect('originNs' in new TimeBuckets(['a']).toJSON()).toBe(false);
   });
+  test('growth and coarsening keep a restored origin', () => {
+    const w = 1_000_000;
+    const mk = (maxBuckets: number) =>
+      TimeBuckets.from({
+        maxBuckets,
+        widthNs: w,
+        originNs: 3,
+        startNs: w + 3,
+        keys: ['count'],
+        counts: [[1]],
+      });
+    const b = mk(4);
+    expect(() => b.add((w + 3) as never, 'count')).not.toThrow();
+    expect(b.total('count')).toBe(2);
+    b.add((w * 3 + 5) as never, 'count'); // grows right on the origin grid
+    b.add(3 as never, 'count'); // grows left
+    expect(b.startNs).toBe(3);
+    expect(b.counts('count')).toEqual([1, 2, 0, 1]);
+    b.add((w * 9 + 7) as never, 'count'); // coarsens
+    expect(b.widthNs).toBe(w * 4);
+    expect((b.startNs - 3) % b.widthNs).toBe(0);
+    expect(b.total('count')).toBe(5);
+    expect(b.toJSON().originNs).toBe(3);
+  });
 });

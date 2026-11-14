@@ -121,12 +121,13 @@ export class TimeBuckets<K extends string> {
     let w = this.#width;
     let lo = this.#len === 0 ? t : Math.min(this.#start, t);
     let hi = this.#len === 0 ? t : Math.max(this.#start + (this.#len - 1) * w, t);
-    lo = lo - mod(lo, w);
-    hi = hi - mod(hi, w);
+    const o = this.#origin;
+    lo = lo - mod(lo - o, w);
+    hi = hi - mod(hi - o, w);
     while ((hi - lo) / w + 1 > this.maxBuckets) {
       w *= 2;
-      lo = lo - mod(lo, w);
-      hi = hi - mod(hi, w);
+      lo = lo - mod(lo - o, w);
+      hi = hi - mod(hi - o, w);
     }
     const len = (hi - lo) / w + 1;
     if (this.#len === 0) {
@@ -148,7 +149,7 @@ export class TimeBuckets<K extends string> {
         const next = new Array<number>(len).fill(0);
         row.forEach((n, j) => {
           const abs = this.#start + j * this.#width;
-          const k = (abs - mod(abs, w) - lo) / w;
+          const k = (abs - mod(abs - o, w) - lo) / w;
           next[k] = (next[k] ?? 0) + n;
         });
         row.length = 0;
