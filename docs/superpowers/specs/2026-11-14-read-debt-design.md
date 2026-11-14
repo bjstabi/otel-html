@@ -1,6 +1,7 @@
 # Read debt: a trace read by id and metric run queries follow what they ask
 
-**Status: awaiting the maintainer's approval.** Written 2026-11-14 after the query-scaling project
+**Status: approved 2026-11-14.** The maintainer approved the three points of §6 as written (format 6; the listed
+code the deployer runs, readers first; the summary's quantiles in the catalogue's load). Written 2026-11-14 after the query-scaling project
 (`2026-11-11-query-scaling-design.md`) closed with five lines on its known-debt list. The maintainer chose to pay
 them next (#291, #295) under the **unattended** process (`docs/agents/process-unattended.md`), skipped the
 questions, and asked for #306 and #307 to be noted, not built. The calls below are the author's; §6 lists the ones
@@ -158,7 +159,7 @@ PR 4 also records, in the plan, the harness numbers before and after for the tra
 (`mise run predict:queries`); a live measurement waits for a release and the end of #307's transition, and is added
 to #307.
 
-## 6. For the maintainer before anything is built
+## 6. Approved by the maintainer on 2026-11-14
 
 1. **Format 6** (§5.3): a new nullable column in `traces.parquet`, the version bump, a new frozen fixture. The
    alternative (no format change) is to leave `trace.get`/`trace.share` owed.
