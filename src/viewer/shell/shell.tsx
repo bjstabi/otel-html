@@ -16,7 +16,7 @@ import { MetricsCatalog } from '../metrics/catalog.js';
 import { MetricsExplorer } from '../metrics/explorer.js';
 import { applyPatch, carryTo, type DroppedParam } from '../state/carry.js';
 import { PAGE_TITLES, type Page, pageOfRoute } from '../state/page-options.js';
-import { bindUrl, createSelectionStore, type HistoryPort } from '../state/selection.js';
+import { bindUrl, createSelectionStore, type HistoryPort, refollowDefault } from '../state/selection.js';
 import { SelectionProvider } from '../state/selection-context.js';
 import { parseUrlState, serializeUrlState } from '../state/url-state.js';
 import { ColorsProvider } from '../theme/colors-context.js';
@@ -140,6 +140,16 @@ export function Shell(props: {
     // the default is anchored once, at the range as it stands when the store is made
     [history, epoch, range, defaultText],
   );
+  // a Refresh grows the range: the default window is anchored again, and a selection still on it follows
+  useLayoutEffect(() => {
+    refollowDefault(
+      store,
+      defaultWindowOf(defaultText, manifestRange(manifest)),
+      epoch,
+      range,
+      parseUrlState(history.read()).state.t !== undefined,
+    );
+  }, [store, manifest, defaultText, epoch, range, history]);
   const [errors, setErrors] = useState<readonly string[]>([]);
   const [helpOpen, setHelpOpen] = useState(false);
   const [carried, setCarried] = useState<Carried | null>(null);

@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'vitest';
 import {
+  alignedIn,
   alignLongWindow,
   defaultWindowOf,
   durationNs,
   isLongWindow,
   LONG_WINDOW_NS,
+  presetMatches,
 } from '../../src/viewer/data/time-window.js';
 
 const EPOCH = 1_700_000_000_000_000_000n;
@@ -56,5 +58,19 @@ describe('durationNs and defaultWindowOf', () => {
     expect(defaultWindowOf('12h', range)).toBeNull();
     expect(defaultWindowOf('7d', range)).toBeNull();
     expect(defaultWindowOf('6h', null)).toBeNull();
+  });
+});
+
+describe('presetMatches', () => {
+  const HOUR = 3_600_000_000_000;
+  const range = { start: 0, end: 12 * HOUR };
+  test('a short preset is the window anchored at the end; a long one after alignment; none when the run is not longer', () => {
+    expect(presetMatches({ start: 11 * HOUR, end: 12 * HOUR }, HOUR, range, EPOCH)).toBe(true);
+    expect(presetMatches({ start: 10 * HOUR, end: 12 * HOUR }, HOUR, range, EPOCH)).toBe(false);
+    const six = alignedIn({ start: 6 * HOUR, end: 12 * HOUR }, EPOCH, range);
+    expect(six).not.toBeNull();
+    if (six !== null) expect(presetMatches(six, 6 * HOUR, range, EPOCH)).toBe(true);
+    expect(presetMatches({ start: 6 * HOUR, end: 12 * HOUR }, 6 * HOUR, range, EPOCH)).toBe(false);
+    expect(presetMatches({ start: 0, end: 12 * HOUR }, 12 * HOUR, range, EPOCH)).toBe(false);
   });
 });

@@ -17,12 +17,13 @@ import {
   tokensToOttl,
 } from '../components/filter-tokens.js';
 import type { LogRef } from '../data/log-query.js';
-import { alignLongWindow, isLongWindow, type TimeWindow } from '../data/time-window.js';
+import { alignedIn, type TimeWindow } from '../data/time-window.js';
 import { isLogTabId, LOG_TAB_IDS, type LogTabId } from '../logs/tabs.js';
 import { isTraceTabId, TRACE_TAB_IDS, type TraceTabId } from '../traces/tabs.js';
 import { type DashboardPageState, isPristine } from './dashboard-state.js';
 import type { ExplorerView } from './explorer-view.js';
 import {
+  formatWindow,
   parseUrlState,
   serializeUrlState,
   type UrlState,
@@ -114,14 +115,12 @@ export type SelectionData = Omit<
  * starts earlier, and the data source aligns the window again for its own use (it can move a clamped start below 0
  * again: the window then differs, the answers and the buckets do not).
  */
-export function aligned(
+function aligned(
   w: TimeWindow | null,
   epoch: bigint | undefined,
   range: () => TimeWindow | null,
 ): TimeWindow | null {
-  if (w === null || epoch === undefined || !isLongWindow(w, range())) return w;
-  const a = alignLongWindow(w, epoch);
-  return { start: Math.max(0, a.start), end: a.end };
+  return alignedIn(w, epoch, range());
 }
 
 function dataFromUrl(
@@ -238,6 +237,27 @@ function assertOttl(c: string): void {
   }
 }
 
+/**
+ * The report's range changed (a Refresh): the default window is worked out again from the new range. A selection that
+ * was on the old default (the URL has no `t`) moves to the new one; an explicit `t`, `t=all` included, stays.
+ */
+export function refollowDefault(
+  store: StoreApi<Selection>,
+  next: TimeWindow | null,
+  epoch: bigint | undefined,
+  range: () => TimeWindow | null,
+  hasT: boolean,
+): void {
+  const fallback = aligned(next, epoch, range);
+  const { defaultWindow: old, window: w } = store.getState();
+  const same = (a: TimeWindow | null, b: TimeWindow | null): boolean =>
+    a === b || (a !== null && b !== null && a.start === b.start && a.end === b.end);
+  if (same(old, fallback)) return;
+  store.setState(
+    hasT || !same(w, old) ? { defaultWindow: fallback } : { defaultWindow: fallback, window: fallback },
+  );
+}
+
 export function createSelectionStore(
   initial: UrlState,
   epoch?: bigint,
@@ -248,7 +268,7 @@ export function createSelectionStore(
   return createStore<Selection>()((set, get) => ({
     ...dataFromUrl(initial, epoch, range, fallback),
     setWindow: (w) => {
-      if (w !== null) windowParam(w, null); // validates
+      if (w !== null) formatWindow(w); // validates
       set({ window: aligned(w, epoch, range) });
     },
     setCondition: (c) => {

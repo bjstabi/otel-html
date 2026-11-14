@@ -4,8 +4,7 @@ import type { AnyManifest, Manifest } from '../../format/manifest.js';
 import { parseUnixNanos, type RelNanos, type UnixNanos } from '../../model/ids.js';
 import { formatTime } from '../../semconv/formatters.js';
 import { manifestRange } from '../data/manifest-range.js';
-import { isLongWindow, type TimeWindow } from '../data/time-window.js';
-import { aligned } from '../state/selection.js';
+import { isLongWindow, presetMatches, type TimeWindow } from '../data/time-window.js';
 import { useSelection } from '../state/selection-context.js';
 import { Tip } from './tip.js';
 
@@ -64,9 +63,7 @@ function zoomOutWindow(w: TimeWindow, range: Range): TimeWindow | null {
 function activePreset(w: TimeWindow | null, range: Range, epoch: bigint): string | null {
   if (w === null) return 'Entire run';
   const hit = PRESETS.find((p) => {
-    if (p.widthNs === null || !offered(p, range)) return false;
-    const e = aligned(presetWindow(range, p.widthNs), epoch, () => range);
-    return e !== null && e.start === w.start && e.end === w.end;
+    return p.widthNs !== null && presetMatches(w, p.widthNs, range, epoch);
   });
   return hit?.label ?? null;
 }
