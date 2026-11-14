@@ -168,7 +168,9 @@ change in any PR (a need for one is a stop).
   buckets' origin under a long window); and `src/viewer/state/use-keyed-async.ts` (maintainer, 2026-11-14: an
   aborted keyed load is not an error). No build file.
 - **PR 7** — `src/writer/compaction.ts`, `src/writer/partition-session.ts`, `src/viewer/data/catalogue.ts`; and
-  `src/cli/commands/merge.ts` (maintainer, 2026-11-14: the `--compact` help text names the 24 h groups). No build
+  `src/cli/commands/merge.ts` (maintainer, 2026-11-14: the `--compact` help text names the 24 h groups); and
+  `.github/workflows/ci.yml` (maintainer, 2026-11-14: the binary smoke step asserts that every partition left by close is a
+  compaction, not that there is exactly one). No build
   file.
 - **PR 8** — `src/config/schema.ts`, `src/viewer/shell/shell.tsx`, `src/viewer/shell/time-range.tsx`,
   `src/viewer/state/selection.ts`, `src/viewer/state/url-state.ts`, `src/viewer/state/param-schemas.ts`,
