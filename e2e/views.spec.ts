@@ -3,6 +3,9 @@ import { copied, stubClipboard } from './clipboard.js';
 import { watchProblems } from './metric-chart.js';
 import { expect, HTTP, test } from './test.js';
 
+// A window that holds all of the report's data. The report is format 6, so its times are absolute unix nanoseconds.
+const T = '1000~2000000000000000000';
+
 const views = (page: Page) => page.getByRole('button', { name: 'Views' });
 
 test(
@@ -12,13 +15,13 @@ test(
     const problems = watchProblems(page);
     const base = `${reportUrl('dashboards')}/index.html`;
 
-    await page.goto(`${base}#/traces?t=1000~2000000000000`);
+    await page.goto(`${base}#/traces?t=${T}`);
     await expect(page.getByRole('grid', { name: 'Results' })).toBeVisible();
     await views(page).click();
     await expect(page.getByText('From config')).toBeVisible();
     await page.getByRole('menuitem', { name: 'Spans by service' }).click();
     await expect(page).toHaveURL(/[?&]view=toplist/);
-    await expect(page).toHaveURL(/[?&]t=1000~2000000000000/);
+    await expect(page).toHaveURL(new RegExp(`[?&]t=${T}`));
 
     await page.goto(`${base}#/logs`);
     await expect(page.getByRole('grid', { name: 'Results' }).getByRole('row').nth(1)).toBeVisible();

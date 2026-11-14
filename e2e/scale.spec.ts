@@ -400,10 +400,11 @@ test(
   PERF_HTTP,
   async ({ page, reportUrl, browserName }, testInfo) => {
     const factor = perfFactor();
-    // `t` is nanoseconds from the run's first record; a minute of logs sits mid-run.
-    const start = 3000n * 1_000_000_000n;
+    // A minute of logs mid-run, `offset` after the run's first record. The report is format 6, so `t` is absolute unix nanoseconds.
+    const offset = 3000n * 1_000_000_000n;
+    const start = SCALE_LOG_IDS.epochNs + offset;
     const end = start + 60n * 1_000_000_000n;
-    expect(end / LOG_STEP_NS).toBeLessThan(BigInt(SCALE_LOGS));
+    expect((offset + 60n * 1_000_000_000n) / LOG_STEP_NS).toBeLessThan(BigInt(SCALE_LOGS));
     const hash = `#/logs?q=${encodeURIComponent(WARN_UP)}&t=${start}~${end}`;
     const { loads } = await loadSamples(page, `${reportUrl('scale')}/index.html${hash}`, 'logs');
     const ms = median(loads);

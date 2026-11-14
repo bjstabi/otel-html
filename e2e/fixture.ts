@@ -153,7 +153,9 @@ export type ReportName =
   | 'frozen-format-1'
   | 'frozen-format-2'
   | 'frozen-format-3'
-  | 'frozen-format-5';
+  | 'frozen-format-5'
+  | 'frozen-format-6'
+  | 'wide-format-6';
 
 /**
  * The metrics scale workload (spec §7): 200 metrics × 1,000 series × 360 points (1 h at a 10 s interval). The report
@@ -318,3 +320,5 @@ export function baseUrlFor(kind: UrlKind, report: ReportName = 'main'): string {
 export const FORMAT_6_T0 = 1_700_000_000_000_000_000n;
 export const FORMAT_6_STEP_NS = 60_000_000_000n;
 export const FORMAT_6_TRACES = 12;
+/** The `wide-format-6` report is two of those reports this far apart (about three years). */
+export const FORMAT_6_WIDE_GAP_NS: bigint = 95_000_000n * 1_000_000_000n;

@@ -1,4 +1,4 @@
-import { FORMAT_6_STEP_NS, FORMAT_6_T0, FORMAT_6_TRACES } from './fixture.js';
+import { FORMAT_6_STEP_NS, FORMAT_6_T0, FORMAT_6_TRACES, FORMAT_6_WIDE_GAP_NS } from './fixture.js';
 import { expect, HTTP, test } from './test.js';
 
 // Format 6 (a `site` report without `epochUnixNano`, with a stored service share): the viewer anchors on the range
@@ -48,3 +48,24 @@ test('a trace of the report opens and shows its services', HTTP, async ({ page, 
   await expect(page.getByRole('alert')).toHaveCount(0);
   await expect(page.getByText('checkout').first()).toBeVisible();
 });
+
+test(
+  'a report spanning three years opens, draws its timeline and takes a window in the later year',
+  HTTP,
+  async ({ page, reportUrl }) => {
+    const base = `${reportUrl('wide-format-6')}/index.html`;
+    const count = page.getByRole('main').locator('output', { hasText: /\bspans\b/ });
+    await page.goto(`${base}#/traces`);
+    await expect(count).toHaveText(new RegExp(`^${4 * FORMAT_6_TRACES} spans`));
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(page.getByRole('region', { name: 'Spans over time' })).toBeVisible();
+
+    // traces 2 to 6 of the later half: five traces of two spans
+    const later = FORMAT_6_T0 + FORMAT_6_WIDE_GAP_NS;
+    const t = `${later + 2n * FORMAT_6_STEP_NS - SECOND}~${later + 6n * FORMAT_6_STEP_NS + SECOND}`;
+    await page.goto(`${base}#/traces?t=${t}`);
+    await expect(count).toHaveText(/^10 spans/);
+    expect(new URL(page.url()).hash).toContain(`t=${t}`);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+  },
+);
