@@ -59,6 +59,9 @@ function col(name: string, type: ColumnType, nullable = true): ColumnDef {
 
 const required = (name: string, type: ColumnType): ColumnDef => col(name, type, false);
 
+/** Format 6: the trace's stored service share (JSON text in a utf8 column); not yet part of `TABLE_COLUMNS.traces`. */
+export const SERVICE_SHARE_COLUMN: ColumnDef = col('service_share', 'utf8');
+
 const resourceAndScope = (): ColumnDef[] => [
   col('resource_attributes', 'json'),
   col('resource_schema_url', 'utf8'),

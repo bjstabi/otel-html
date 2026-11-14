@@ -61,6 +61,7 @@ describe('exportRows', () => {
       durationNs: 9,
       spans: 3,
       errors: 1,
+      share: null,
     } satisfies TraceRow;
     const out = (await text(exportRows([row], 'csv'))).split('\r\n');
     expect(out[0]).toBe('start_rel_ns,trace_id,root_service,root_name,duration_ns,spans,errors');

@@ -1,4 +1,5 @@
 import type { JSX, ReactNode } from 'react';
+import type { ServiceShare as ServiceShareOf } from '../../format/service-share.js';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
 import type { TraceId, UnixNanos } from '../../model/ids.js';
 import { StatusCode } from '../../model/records.js';
@@ -184,12 +185,19 @@ const overCapDash = (
 function ServiceShare(props: {
   traceId: TraceId;
   spans: number;
+  stored: ServiceShareOf | null;
   load: ServiceShareLoader;
   colors: ColorAssigner;
 }): JSX.Element {
   const { colors } = props;
   const overCap = props.spans > SERVICE_SHARE_SPAN_CAP;
-  const state = useKeyedAsync(overCap ? null : props.traceId, props.load);
+  // a stored share is drawn as it is, whatever the trace's size, and nothing is loaded
+  const state = useKeyedAsync(props.stored !== null || overCap ? null : props.traceId, props.load);
+  if (props.stored !== null) {
+    return (
+      <ShareBar share={props.stored.map((s) => ({ service: s.service, ns: Number(s.ns) }))} colors={colors} />
+    );
+  }
   if (overCap) return overCapDash;
   if (state.status === 'loading') return <span className="text-xs text-muted">...</span>;
   if (state.status === 'error') {
@@ -199,7 +207,14 @@ function ServiceShare(props: {
       </span>
     );
   }
-  const share = state.value;
+  return <ShareBar share={state.value} colors={colors} />;
+}
+
+function ShareBar(props: {
+  share: readonly { service: string; ns: number }[];
+  colors: ColorAssigner;
+}): JSX.Element {
+  const { share, colors } = props;
   const total = share.reduce((a, s) => a + s.ns, 0);
   if (total === 0) return dash;
   return (
@@ -266,7 +281,13 @@ export const TRACE_COLUMNS_UI: readonly ColumnUi<TraceRow>[] = [
     header: 'Latency by service',
     width: 200,
     cell: (r, c) => (
-      <ServiceShare traceId={r.traceId} spans={r.spans} load={c.serviceShare} colors={c.colors} />
+      <ServiceShare
+        traceId={r.traceId}
+        spans={r.spans}
+        stored={r.share}
+        load={c.serviceShare}
+        colors={c.colors}
+      />
     ),
   },
 ];

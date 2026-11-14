@@ -55,15 +55,19 @@ export function defaultWindowOf(text: string | undefined, range: TimeWindow | nu
   return width >= range.end - range.start ? null : { start: range.end - width, end: range.end };
 }
 
-/** `alignLongWindow` where the window is long within `range` (the clipped rule), with a start kept at 0 or later; else as given. */
+/**
+ * `alignLongWindow` where the window is long within `range` (the clipped rule), with a start kept at 0 or later
+ * (unless `floor` is false: a format-6 report may start before its anchor); else as given.
+ */
 export function alignedIn(
   w: TimeWindow | null,
   epoch: bigint | undefined,
   range: TimeWindow | null,
+  floor = true,
 ): TimeWindow | null {
   if (w === null || epoch === undefined || !isLongWindow(w, range)) return w;
   const a = alignLongWindow(w, epoch);
-  return { start: Math.max(0, a.start), end: a.end };
+  return { start: floor ? Math.max(0, a.start) : a.start, end: a.end };
 }
 
 /** Whether `window` is the preset of `widthNs` anchored at the end of `range`, as the selection holds a window (aligned when long). */
@@ -72,8 +76,9 @@ export function presetMatches(
   widthNs: number,
   range: TimeWindow,
   epoch: bigint,
+  floor = true,
 ): boolean {
   if (range.end - range.start <= widthNs) return false;
-  const e = alignedIn({ start: range.end - widthNs, end: range.end }, epoch, range);
+  const e = alignedIn({ start: range.end - widthNs, end: range.end }, epoch, range, floor);
   return e !== null && e.start === window.start && e.end === window.end;
 }

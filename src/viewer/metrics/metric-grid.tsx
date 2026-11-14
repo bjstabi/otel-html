@@ -17,6 +17,7 @@ import { defaultShowOf, kindOf } from '../data/metric-tables.js';
 import type { TimeWindow } from '../data/time-window.js';
 import { CONTROL } from '../shell/controls.js';
 import { useGoTo } from '../shell/go-to.js';
+import { useAnchor } from '../state/selection-context.js';
 import { formatWindow } from '../state/url-state.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 import { exemplarTraceLookup, openChartPick } from './chart-pick.js';
@@ -400,6 +401,7 @@ export function MetricGrid(
 ): JSX.Element {
   const { dataSource, origin } = props;
   const goTo = useGoTo();
+  const anchor = useAnchor();
   const resources = useMemo(() => distinctResources(origin.resources), [origin.resources]);
   const by = useMemo(() => resourceLines(resources), [resources]);
   const catalogState = useKeyedAsync(dataSource, catalogOf);
@@ -451,7 +453,12 @@ export function MetricGrid(
   const onPick = (pick: ChartPick, query: MetricQuery): void => {
     try {
       setActionError(null);
-      openChartPick(pick, { goTo, queryOf: () => query, zoom: setZoom });
+      openChartPick(pick, {
+        goTo,
+        queryOf: () => query,
+        zoom: setZoom,
+        ...(anchor === null ? {} : { anchor }),
+      });
     } catch (e) {
       fail(e);
     }
@@ -480,8 +487,13 @@ export function MetricGrid(
             split: true,
             exemplars: true,
           };
-          // A URL window cannot start before the epoch (`t` is unsigned).
-          const t = formatWindow({ start: Math.max(0, shown.start), end: Math.max(0, shown.end) });
+          // A format-5 URL window cannot start before the epoch (`t` is unsigned); a format-6 one is absolute.
+          const t = formatWindow(
+            anchor === null
+              ? { start: Math.max(0, shown.start), end: Math.max(0, shown.end) }
+              : { start: shown.start, end: shown.end },
+            anchor ?? undefined,
+          );
           goTo('metrics', '/metrics', { m, t, q: null });
         } catch (e) {
           fail(e);

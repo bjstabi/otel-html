@@ -122,6 +122,8 @@ export function Shell(props: {
   const { dataSource, history } = props;
   const manifest = dataSource.manifest;
   const epoch = BigInt(manifest.epochUnixNano);
+  // a format-6 report's URLs carry absolute unix nanoseconds against its anchor (frozen at load, also across a Refresh)
+  const absolute = manifest.formatVersion === 6;
   // the report's range as of the committed render (a Refresh grows it): the selection aligns a long window against it
   const rangeRef = useRef<TimeWindow | null>(manifestRange(manifest));
   useLayoutEffect(() => {
@@ -136,9 +138,10 @@ export function Shell(props: {
         epoch,
         range,
         defaultWindowOf(defaultText, rangeRef.current),
+        absolute ? epoch : null,
       ),
     // the default is anchored once, at the range as it stands when the store is made
-    [history, epoch, range, defaultText],
+    [history, epoch, range, defaultText, absolute],
   );
   // a Refresh grows the range: the default window is anchored again, and a selection still on it follows
   useLayoutEffect(() => {

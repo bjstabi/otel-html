@@ -127,6 +127,7 @@ export function MetricsCatalog(props: { dataSource: DataSource }): JSX.Element {
   const rows = useMemo(() => (needle === '' ? all : all.filter((e) => matches(e, needle))), [all, needle]);
   const window = useSelection((s) => s.window);
   const defaultWindow = useSelection((s) => s.defaultWindow);
+  const anchor = useSelection((s) => s.anchor);
 
   // A summary click navigates after an async lookup: only the latest click, on a mounted page, may.
   const clicks = useRef(0);
@@ -161,13 +162,13 @@ export function MetricsCatalog(props: { dataSource: DataSource }): JSX.Element {
   /** The Explore cell is a real link to the same place, so it can open in a new tab; the window carries like `goTo`. */
   const hrefOf = useCallback(
     (e: MetricEntry): string => {
-      const t = windowParam(window, defaultWindow);
+      const t = windowParam(window, defaultWindow, anchor ?? undefined);
       return `${routeHref('/metrics')}?${serializeUrlState({
         m: explorerState(e),
         ...(t === undefined ? {} : { t }),
       })}`;
     },
-    [window, defaultWindow],
+    [window, defaultWindow, anchor],
   );
   const columns = useMemo(
     () => [

@@ -21,7 +21,10 @@ const SerializedTimeBucketsSchema: z.ZodType<SerializedTimeBuckets> = z
   .strictObject({
     maxBuckets: z.number().int().min(2),
     widthNs: z.number().int().positive(),
-    startNs: z.number().int(),
+    // past 2^53 ns from the anchor a start is a rounded double: any integer-valued double up to int64
+    startNs: z
+      .number()
+      .refine((n) => Number.isInteger(n) && Math.abs(n) <= MAX_NS, 'an integer within int64'),
     originNs: nonNegInt.optional(),
     keys: z.array(z.string()),
     counts: z.array(z.array(nonNegInt)),
@@ -31,7 +34,7 @@ const SerializedTimeBucketsSchema: z.ZodType<SerializedTimeBuckets> = z
     path: ['widthNs'],
   })
   .refine((s) => (s.originNs ?? 0) < s.widthNs, { message: 'originNs below widthNs', path: ['originNs'] })
-  .refine((s) => mod(s.startNs - (s.originNs ?? 0), s.widthNs) === 0, {
+  .refine((s) => aligned(s.startNs, s.originNs ?? 0, s.widthNs), {
     message: 'startNs aligned to widthNs (and originNs)',
     path: ['startNs'],
   })
@@ -44,6 +47,16 @@ const SerializedTimeBucketsSchema: z.ZodType<SerializedTimeBuckets> = z
     message: 'at most maxBuckets buckets',
     path: ['counts'],
   });
+
+const MAX_NS = 2 ** 63;
+
+/** Aligned to the width and origin: exactly in the safe range, within the doubles' rounding beyond 2^53. */
+function aligned(start: number, origin: number, width: number): boolean {
+  const r = mod(start - origin, width);
+  if (r === 0) return true;
+  if (Math.abs(start) <= Number.MAX_SAFE_INTEGER) return false;
+  return Math.min(r, width - r) <= 2 * Math.abs(start) * Number.EPSILON;
+}
 
 /** Exact modulo with a non-negative result (the `%` operator is exact for doubles). */
 function mod(a: number, b: number): number {

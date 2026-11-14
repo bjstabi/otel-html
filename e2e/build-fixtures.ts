@@ -3,12 +3,19 @@ import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Report } from '../src/api/index.js';
+import { reviveDataJson, unwrapDataFile } from '../src/format/data-file.js';
+import { isPartitioned, parseAnyManifest } from '../src/format/manifest.js';
+import { MANIFEST_KEY } from '../src/format/paths.js';
+import { withServiceShare } from '../test-support/format6.js';
 import {
   DASHBOARDS_CONFIG,
   DASHBOARDS_HOSTILE_DEFAULT,
   DASHBOARDS_HOSTILE_DESCRIPTION,
   DASHBOARDS_HOSTILE_TITLE,
   FIXTURE_REPORTS,
+  FORMAT_6_STEP_NS,
+  FORMAT_6_T0,
+  FORMAT_6_TRACES,
   fixtureFiles,
   HOSTILE_REPORT_DIR,
   HOSTILE_SPAN_NAME,
@@ -547,6 +554,65 @@ async function buildRefreshReport(): Promise<void> {
 }
 
 /**
+ * The `format-6` report (see `ReportName`): a `site` report of 12 two-span traces (`checkout` calling `payments`) one
+ * minute apart, written as format 5 and then upgraded as the CI path does: no `epochUnixNano`, `serviceShare` stored.
+ */
+async function buildFormat6Report(): Promise<void> {
+  const out = fileURLToPath(reportDir('format-6', 'http'));
+  const hex = (n: number, width: number): string => (n + 1).toString(16).padStart(width, '0');
+  const spans = Array.from({ length: FORMAT_6_TRACES }, (_, i) => {
+    const start = FORMAT_6_T0 + BigInt(i) * FORMAT_6_STEP_NS;
+    const trace = hex(i, 32);
+    return [
+      {
+        traceId: trace,
+        spanId: hex(2 * i, 16),
+        name: 'POST /pay',
+        kind: 2,
+        startTimeUnixNano: String(start),
+        endTimeUnixNano: String(start + 40_000_000n),
+        resourceIndex: 0,
+      },
+      {
+        traceId: trace,
+        spanId: hex(2 * i + 1, 16),
+        parentSpanId: hex(2 * i, 16),
+        name: 'charge',
+        kind: 3,
+        startTimeUnixNano: String(start + 5_000_000n),
+        endTimeUnixNano: String(start + 25_000_000n),
+        resourceIndex: 1,
+      },
+    ];
+  });
+  const scope = (rows: ReturnType<typeof Array.prototype.filter>): unknown[] => [
+    { scope: { name: 'e2e-format-6' }, spans: rows },
+  ];
+  const strip = (r: { resourceIndex: number }): object => {
+    const { resourceIndex: _i, ...rest } = r;
+    return rest;
+  };
+  const request = {
+    resourceSpans: [0, 1].map((k) => ({
+      resource: { attributes: [str('service.name', k === 0 ? 'checkout' : 'payments')] },
+      scopeSpans: scope(
+        spans
+          .flat()
+          .filter((r) => r.resourceIndex === k)
+          .map(strip),
+      ),
+    })),
+  };
+  const report = await Report.create({ out, title: 'format 6 run', format: 'site' });
+  await report.addSpans(request);
+  await report.close();
+  const text = await readFile(`${out}data/manifest.js`, 'utf8');
+  const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
+  if (!isPartitioned(manifest)) throw new Error('the format-6 fixture did not write a partition manifest');
+  await withServiceShare(out, manifest);
+}
+
+/**
  * The frozen data folders (`fixtures/reports/format-<n>/`, never edited) converted into format-5 reports by
  * `otel-html merge`, which writes the current viewer beside the data (D12: the viewer reads format 5 only).
  */
@@ -630,3 +696,4 @@ await Promise.all([
   buildFrozenReports(),
 ]);
 await buildSiteCopies();
+await buildFormat6Report();

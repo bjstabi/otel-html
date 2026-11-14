@@ -14,7 +14,7 @@ import {
   type HistoryPort,
   selectionToUrlState,
 } from '../../src/viewer/state/selection.js';
-import { formatWindow } from '../../src/viewer/state/url-state.js';
+import { formatWindow, parseUrlState } from '../../src/viewer/state/url-state.js';
 
 const TRACE = 'a'.repeat(32) as TraceId;
 const SPAN = 'b'.repeat(16) as SpanId;
@@ -122,6 +122,26 @@ describe('store state', () => {
   });
 });
 
+type TimeWindowLike = { start: number; end: number };
+
+describe('relative windows past 2^53 ns', () => {
+  test('setWindow applies a preset-sized window of a run of years, and the URL reads it back', () => {
+    const start = 2 ** 53 + 1024;
+    const w = { start, end: start + 900e9 * 1e3 };
+    const store = createSelectionStore({}, 1_700_000_000_000_000_000n);
+    store.getState().setWindow(w);
+    const got = store.getState().window;
+    expect(got).not.toBeNull();
+    expect(got?.start).toBeLessThanOrEqual(w.start);
+    expect(got?.end).toBeGreaterThanOrEqual(w.end);
+    const fromUrl = createSelectionStore(
+      { t: formatWindow(got as TimeWindowLike) },
+      1_700_000_000_000_000_000n,
+    );
+    expect(fromUrl.getState().window).toEqual(got);
+  });
+});
+
 describe('long windows', () => {
   const EPOCH = 1_700_000_000_000_000_000n;
   const long = { start: 100_000_000_001, end: 100_000_000_001 + 16_777_216_000_000 };
@@ -197,6 +217,39 @@ describe('bindUrl', () => {
     expect(h.listeners).toBe(0);
     store.getState().selectTrace(TRACE);
     expect(h.writes).toEqual([]);
+  });
+});
+
+describe('a format-6 anchor', () => {
+  const ANCHOR = 1_700_000_000_000_000_000n;
+
+  test('the URL carries absolute times, also before the anchor, and a reload reads the same window', () => {
+    const store = createSelectionStore({}, ANCHOR, () => null, null, ANCHOR);
+    const h = fakeHistory('');
+    bindUrl(store, h, () => undefined);
+    store.getState().setWindow({ start: -5, end: 10 });
+    expect(h.writes).toEqual([{ s: 't=1699999999999999995~1700000000000000010', mode: 'replace' }]);
+    const again = createSelectionStore(parseUrlState(h.read()).state, ANCHOR, () => null, null, ANCHOR);
+    expect(again.getState().window).toEqual({ start: -5, end: 10 });
+  });
+
+  test('a window that starts before the anchor is not clamped to it when long', () => {
+    const day = 86_400_000_000_000;
+    const range = { start: -3 * day, end: 3 * day };
+    const store = createSelectionStore(
+      { t: formatWindow({ start: -2 * day, end: day }, ANCHOR) },
+      ANCHOR,
+      () => range,
+      null,
+      ANCHOR,
+    );
+    expect(store.getState().window?.start).toBeLessThan(0);
+  });
+
+  test('a format-5 store still writes relative times and refuses a start before the epoch', () => {
+    const store = createSelectionStore({});
+    expect(store.getState().anchor).toBeNull();
+    expect(() => store.getState().setWindow({ start: -1, end: 2 })).toThrow(OtelHtmlError);
   });
 });
 

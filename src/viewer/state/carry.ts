@@ -32,14 +32,14 @@ export function carryTo(
     case 'dashboards': {
       // A dashboard has its own selection (`d`) and no query bar: only the time range comes along.
       const url: UrlState = {};
-      const t = windowParam(s.window, s.defaultWindow);
+      const t = windowParam(s.window, s.defaultWindow, s.anchor ?? undefined);
       if (t !== undefined) url.t = t;
       return { url, dropped: [] };
     }
     case 'metrics': {
       // Metrics has no `text` and no `q`: a compiling `q` seeds the first query's `where` instead.
       const url: UrlState = {};
-      const t = windowParam(s.window, s.defaultWindow);
+      const t = windowParam(s.window, s.defaultWindow, s.anchor ?? undefined);
       if (t !== undefined) url.t = t;
       const { condition, dropped } = conditionFor(s.condition, 'datapoint');
       if (condition !== null) {
@@ -52,7 +52,7 @@ export function carryTo(
     case 'logs': {
       const url: UrlState = {};
       if (s.text !== '') url.text = s.text;
-      const t = windowParam(s.window, s.defaultWindow);
+      const t = windowParam(s.window, s.defaultWindow, s.anchor ?? undefined);
       if (t !== undefined) url.t = t;
       const { condition, dropped } = conditionFor(s.condition, PAGE_OPTIONS[to].context);
       if (condition !== null) url.q = condition;
@@ -128,8 +128,9 @@ export function metricWindowLink(
   q: MetricQuery,
   window: TimeWindow,
   to: 'traces' | 'logs',
+  anchor?: bigint,
 ): { url: UrlState; dropped: DroppedParam[] } {
-  const url: UrlState = { t: formatWindow(window) };
+  const url: UrlState = { t: formatWindow(window, anchor) };
   if (q.where === null) return { url, dropped: [] };
   const paths: Value[] = [];
   exprPaths(parseCondition(q.where), paths);

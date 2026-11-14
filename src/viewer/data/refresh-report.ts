@@ -38,7 +38,7 @@ export async function refreshReport(
   now: () => number,
 ): Promise<{ dataSource: DataSource | null; manifest: ManifestV4 }> {
   const raw = await deps.loader.load(`${MANIFEST_PATH}?r=${now()}`, MANIFEST_KEY);
-  const manifest = requireFormat4(parseAnyManifest(raw));
+  const manifest = keepAnchor(requireFormat4(parseAnyManifest(raw)), previous);
 
   const had = new Set(manifestFiles(previous).map((f) => f.path));
   const wanted = manifestFiles(manifest);
@@ -93,6 +93,16 @@ export async function refreshReport(
     createDuckDbDataSource({ engine: queryEngine, manifest, logger: deps.logger, replaceRollupViews: true }),
   );
   return { dataSource, manifest };
+}
+
+/**
+ * A format-6 manifest derives its anchor from its range start, which a refresh that finds older data moves. The page's
+ * anchor is frozen at load: URLs and the shown windows stay put, so the refreshed manifest keeps the previous one's.
+ */
+export function keepAnchor(next: ManifestV4, previous: ManifestV4): ManifestV4 {
+  return next.formatVersion === 6 && previous.formatVersion === 6
+    ? { ...next, epochUnixNano: previous.epochUnixNano }
+    : next;
 }
 
 const held = <T>(engine: Engine, change: () => Promise<T>): Promise<T> =>

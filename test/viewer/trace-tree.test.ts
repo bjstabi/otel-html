@@ -1,9 +1,15 @@
 import { describe, expect, test } from 'vitest';
 import { PROVISIONAL_ATTR } from '../../src/cli/ci/workflow-trace.js';
+import { serviceShareOf } from '../../src/format/service-share.js';
 import type { RelNanos, SpanId, TraceId } from '../../src/model/ids.js';
 import { type ResourceRef, type ScopeRef, type SpanRecord, StatusCode } from '../../src/model/records.js';
 import type { SpanRow } from '../../src/viewer/data/results.js';
-import { buildTraceTree, exclusiveTimeByService } from '../../src/viewer/data/trace-tree.js';
+import {
+  buildTraceTree,
+  exclusiveNs,
+  exclusiveTimeByService,
+  shareSpanOf,
+} from '../../src/viewer/data/trace-tree.js';
 
 const id = (n: number): SpanId => n.toString(16).padStart(16, '0') as SpanId;
 
@@ -123,5 +129,55 @@ describe('exclusiveTimeByService', () => {
       { service: 'c', ns: 60 },
       { service: 'a', ns: 30 },
     ]);
+  });
+});
+
+describe('exclusiveTimeByService agrees with the shared service share', () => {
+  const traces: Record<string, SpanRow[]> = {
+    duplicates: [
+      row(1, null, 0, 100, 'a', true),
+      row(1, null, 0, 80, 'a'),
+      row(2, 1, 10, 40, 'b'),
+      row(2, 1, 10, 41, 'b'),
+    ],
+    overlaps: [
+      row(1, null, 0, 100, 'a'),
+      row(2, 1, 10, 50, 'b'),
+      row(3, 1, 30, 70, 'c'),
+      row(4, 3, 60, 90, 'b'),
+    ],
+    cycle: [row(1, 2, 0, 100, 'a'), row(2, 1, 10, 40, 'b'), row(3, 2, 20, 30, 'c')],
+    selfParent: [row(1, 1, 0, 50, 'a'), row(2, 1, 10, 20, 'b'), row(3, null, 5, 9, 'c')],
+    childBeforeParent: [row(1, null, 20, 100, 'a'), row(2, 1, 10, 50, 'b'), row(3, 2, 12, 15, 'c')],
+    orphans: [
+      row(1, 9, 0, 30, 'a'),
+      row(2, 1, 5, 10, 'b'),
+      row(3, 8, 20, 60, 'c'),
+      row(4, 5, 0, 4, 'a'),
+      row(5, 4, 1, 2, 'd'),
+    ],
+  };
+  /** The tree's own result: `exclusiveNs` of every node `buildTraceTree` produced, summed per service. */
+  function fromTree(rows: SpanRow[]): { service: string; ns: number }[] {
+    const totals = new Map<string, number>();
+    const stack = [...buildTraceTree(rows).roots];
+    for (let n = stack.pop(); n !== undefined; n = stack.pop()) {
+      stack.push(...n.children);
+      totals.set(n.row.service, (totals.get(n.row.service) ?? 0) + exclusiveNs(n));
+    }
+    return [...totals]
+      .map(([service, ns]) => ({ service, ns }))
+      .sort((a, b) => b.ns - a.ns || (a.service < b.service ? -1 : a.service > b.service ? 1 : 0));
+  }
+  test.each(Object.keys(traces))('%s', (name) => {
+    const rows = traces[name] ?? [];
+    const expected = fromTree(rows);
+    const shared = serviceShareOf(rows.map(shareSpanOf)).map(({ service, ns }) => ({
+      service,
+      ns: Number(ns),
+    }));
+    expect(shared).toEqual(expected);
+    expect(exclusiveTimeByService(buildTraceTree(rows))).toEqual(expected);
+    expect(expected.length).toBeGreaterThan(0);
   });
 });

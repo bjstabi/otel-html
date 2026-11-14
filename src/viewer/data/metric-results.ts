@@ -10,7 +10,7 @@ import type { MetricIdentity } from '../../query/sql/points.js';
 import type { BucketSpec } from '../../query/sql/time.js';
 import { type MetricCatalogData, type MetricDef, type MetricEntry, resourceKey } from './metric-catalog.js';
 import { SHOW_BY_KIND } from './metric-tables.js';
-import { cell, rowsOf, toNumber } from './span-results.js';
+import { cell, relTime, rowsOf, toNumber } from './span-results.js';
 import type { TimeWindow } from './time-window.js';
 
 /** Request and result shapes of the metric data layer. */
@@ -349,7 +349,7 @@ export function catalogFrom(
   for (const row of rowsOf(spark)) {
     const acc = accs.get(storedDef(row).key);
     if (acc === undefined) continue;
-    const i = Math.round((toNumber(cell(row, 'bucket'), 'bucket') - spec.startNs) / spec.widthNs);
+    const i = Math.round((relTime(cell(row, 'bucket'), 'bucket') - spec.startNs) / spec.widthNs);
     if (i < 0 || i >= buckets) continue;
     acc.sums[i] = Number(cell(row, 'sum') ?? 0);
     acc.counts[i] = toNumber(cell(row, 'n'), 'n');

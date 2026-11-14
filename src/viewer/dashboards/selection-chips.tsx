@@ -44,6 +44,8 @@ function shortTrace(id: string): string {
 export function SelectionChips(props: {
   state: DashboardPageState;
   epoch: UnixNanos;
+  /** A format-6 report's anchor: `sel.t` is absolute unix nanoseconds. */
+  anchor?: bigint;
   /** The selected window does not overlap the page's time range, so widgets do not apply it. */
   outside: boolean;
   onChange(next: DashboardPageState): void;
@@ -51,7 +53,7 @@ export function SelectionChips(props: {
   const { state, epoch } = props;
   const { t, trace } = state.sel;
   if (t === null && trace === null) return null;
-  const win = t === null ? null : parseWindow(t);
+  const win = t === null ? null : parseWindow(t, props.anchor);
   const set = (sel: DashboardPageState['sel']): void => props.onChange({ ...state, sel });
   return (
     <div className="flex flex-wrap items-center gap-2">

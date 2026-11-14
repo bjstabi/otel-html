@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { TraceId } from '../../model/ids.js';
 import { paramError, shown } from './param-error.js';
-import { TraceIdParamSchema, WindowTextSchema } from './param-schemas.js';
+import { TraceIdParamSchema, windowTextSchema } from './param-schemas.js';
 
 type LogViewMode = 'matches' | 'context';
 
@@ -28,7 +28,7 @@ export const DashboardPageStateSchema: z.ZodType<DashboardPageState> = z.strictO
   vars: z.record(z.string(), z.string().nullable()).default({}),
   sel: z
     .strictObject({
-      t: WindowTextSchema.nullable().default(null),
+      t: windowTextSchema().nullable().default(null),
       trace: TraceIdParamSchema.nullable().default(null),
     })
     .default({ t: null, trace: null }),

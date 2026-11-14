@@ -160,7 +160,22 @@ describe('ResultsTable', () => {
       durationNs: 100,
       spans: 4,
       errors: 0,
+      share: null,
     };
+
+    test('a stored share draws its bars and never loads, whatever the span count', () => {
+      const share = [
+        { service: 'web', ns: 70n },
+        { service: 'db', ns: 30n },
+      ];
+      for (const spans of [4, SERVICE_SHARE_SPAN_CAP + 1]) {
+        const serviceShare = vi.fn(() => Promise.resolve([{ service: 'x', ns: 1 }]));
+        mount({ rows: [{ ...t, spans, share }], columns: TRACE_COLUMNS_UI, serviceShare });
+        expect(screen.getByRole('img', { name: 'web 70 ns, db 30 ns' })).toBeTruthy();
+        expect(serviceShare).not.toHaveBeenCalled();
+        cleanup();
+      }
+    });
 
     test("loads the share of that row's trace and draws a bar, never a partial label", async () => {
       const serviceShare = vi.fn(() =>
@@ -171,6 +186,7 @@ describe('ResultsTable', () => {
       );
       mount({ rows: [t], columns: TRACE_COLUMNS_UI, serviceShare });
       expect(await screen.findByRole('img', { name: 'web 70 ns, db 30 ns' })).toBeTruthy();
+      expect(serviceShare).toHaveBeenCalledTimes(1);
       expect(serviceShare).toHaveBeenCalledWith('aa', expect.any(AbortSignal));
       expect(screen.queryByText('partial')).toBeNull();
       expect(screen.getByText('GET /')).toBeTruthy();

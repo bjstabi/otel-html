@@ -20,7 +20,13 @@ export function exemplarTraceLookup(ds: Pick<DataSource, 'hasTrace'>): (traceId:
  */
 export function openChartPick(
   pick: ChartPick,
-  ctx: { goTo: GoTo; queryOf(id: string): MetricQuery | undefined; zoom(w: TimeWindow): void },
+  ctx: {
+    goTo: GoTo;
+    queryOf(id: string): MetricQuery | undefined;
+    zoom(w: TimeWindow): void;
+    /** A format-6 report's anchor: the link's `t` is absolute unix nanoseconds. */
+    anchor?: bigint;
+  },
 ): void {
   switch (pick.kind) {
     case 'exemplar':
@@ -37,8 +43,8 @@ export function openChartPick(
       const q = ctx.queryOf(pick.queryId);
       const { url, dropped } =
         q === undefined
-          ? { url: { t: formatWindow(pick.window) }, dropped: [] }
-          : metricWindowLink(q, pick.window, pick.kind);
+          ? { url: { t: formatWindow(pick.window, ctx.anchor) }, dropped: [] }
+          : metricWindowLink(q, pick.window, pick.kind, ctx.anchor);
       ctx.goTo(pick.kind, `/${pick.kind}`, { t: url.t ?? null, q: url.q ?? null, text: null }, dropped);
       return;
     }

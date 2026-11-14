@@ -283,6 +283,7 @@ describe('TracesExplorer', () => {
       durationNs: 40,
       spans: 3,
       errors: 0,
+      share: null,
     });
     setup(
       () => Promise.resolve({ ...resultOf([]), rows: [trace('t1'), trace('t2')], total: 2 }),

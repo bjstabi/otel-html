@@ -4,6 +4,7 @@ import { ENGINE_VERSION } from '../../format/engine.js';
 import {
   isPartitioned,
   type ManifestV4,
+  manifestForWrite,
   type PartitionEntry,
   type PartitionFile,
   parseAnyManifest,
@@ -127,6 +128,16 @@ function entryFrom(
   return { n, source: p.source, files };
 }
 
+/**
+ * The manifest as a format-6 report when it is one or an added partition stores a service share (format 6, no stored
+ * epoch: `manifestForWrite` drops it, and a read derives the anchor), else as it is.
+ */
+function withSharesFormat(manifest: ManifestV4, added: readonly PartitionEntry[]): ManifestV4 {
+  const shares = added.some((e) => e.files.traces?.serviceShare === true);
+  if (manifest.formatVersion === 6 || !shares) return manifest;
+  return { ...manifest, formatVersion: 6 };
+}
+
 function totalsAndRange(partitions: readonly PartitionEntry[]): Pick<ManifestV4, 'totals' | 'range'> {
   const totals = { spans: 0, logs: 0, metrics: 0 };
   let start: bigint | null = null;
@@ -232,13 +243,13 @@ export function planSync(input: SyncInput): SyncPlan {
   );
   const sources = listing(top.update).map((l) => l.p.source);
   const result: ManifestV4 = {
-    ...manifest,
+    ...withSharesFormat(manifest, added),
     updatedAt: input.now,
     complete: false,
     ...totalsAndRange(partitions),
     partitions,
   };
-  parseAnyManifest(result);
+  parseAnyManifest(manifestForWrite(result));
   return {
     manifest: result,
     state: {
@@ -279,7 +290,7 @@ export function renumbered(
     return { ...e, n, files };
   });
   const result = { ...manifest, partitions };
-  parseAnyManifest(result);
+  parseAnyManifest(manifestForWrite(result));
   return { manifest: result, moves: [...down, ...up.reverse()] };
 }
 
@@ -290,7 +301,10 @@ export async function writeRunReport(
   manifest: ManifestV4,
 ): Promise<void> {
   await deps.fs.mkdirp(`${dir}/data`);
-  await deps.fs.writeTextAtomic(`${dir}/${MANIFEST_PATH}`, wrapDataFile(MANIFEST_KEY, manifest));
+  await deps.fs.writeTextAtomic(
+    `${dir}/${MANIFEST_PATH}`,
+    wrapDataFile(MANIFEST_KEY, manifestForWrite(manifest)),
+  );
   await deps.fs.writeTextAtomic(
     `${dir}/index.html`,
     renderIndexHtml(deps.viewerAssets.entry(), manifest.title, { assetsBase: manifest.engine.assetsBase }),

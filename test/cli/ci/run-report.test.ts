@@ -464,6 +464,42 @@ describe('writeRunReport', () => {
   });
 });
 
+describe('format 6 in a run report', () => {
+  const traces = (path: string, serviceShare: boolean): UpdatePartition['files'] => ({
+    spans: file(path.replace('traces', 'spans'), 3, '10', '20'),
+    traces: { ...file(path, 1, '10', '20'), ...(serviceShare ? { serviceShare: true as const } : {}) },
+  });
+  const upd = (shares: boolean) =>
+    push(1, [
+      { source: 'job:7#flush:0', files: traces('partitions/0/traces.parquet', shares), carried: true },
+    ]);
+
+  test('an added traces file with serviceShare makes the report format 6, the entry keeps it', async () => {
+    const plan = sync(await newManifest(), emptyRunState(1), [ju(upd(true))]);
+    expect(plan.manifest.formatVersion).toBe(6);
+    expect(plan.manifest.partitions[0]?.files.traces?.serviceShare).toBe(true);
+    // the manifest as written (no epoch) is valid, and parses back to the same partitions
+    const w = createTestWriter();
+    await writeRunReport(w.deps, 'site/run', plan.manifest);
+    expect(w.fs.snapshot().get('site/run/data/manifest.js')).not.toContain('epochUnixNano');
+    const back = await readRunManifest(w.fs, 'site/run');
+    expect(back?.formatVersion).toBe(6);
+    expect(back?.partitions).toEqual(plan.manifest.partitions);
+  });
+  test('without shares the report stays format 5, and a format-6 report stays format 6', async () => {
+    const m = await newManifest();
+    expect(sync(m, emptyRunState(1), [ju(upd(false))]).manifest.formatVersion).toBe(5);
+    const six = sync(m, emptyRunState(1), [ju(upd(true))]);
+    const later = sync(six.manifest, six.state, [ju({ ...upd(false), sequence: 2 })]);
+    expect(later.manifest.formatVersion).toBe(6);
+  });
+  test('renumbering a format-6 manifest keeps serviceShare', async () => {
+    const six = sync(await newManifest(), emptyRunState(1), [ju(upd(true))]);
+    const { manifest } = renumbered(six.manifest, 3);
+    expect(manifest.partitions[0]?.files.traces?.serviceShare).toBe(true);
+  });
+});
+
 describe('format 5 run reports', () => {
   const rollupFile = (path: string) => ({
     ...file(path, 2, '10', '20'),

@@ -3,6 +3,7 @@ import {
   type ColumnType,
   ROLLUP_OF,
   type RollupTable,
+  SERVICE_SHARE_COLUMN,
   TABLE_COLUMNS,
   TABLES,
   type Table,
@@ -44,6 +45,8 @@ const isRollup = (table: Table): table is RollupTable => table in ROLLUP_OF;
 
 type Head = 'CREATE OR REPLACE VIEW' | 'CREATE VIEW IF NOT EXISTS';
 
+const SHARE = quoteIdent(SERVICE_SHARE_COLUMN.name);
+
 function viewStatement(
   manifest: ManifestV4,
   table: Table,
@@ -51,13 +54,33 @@ function viewStatement(
   head: Head,
 ): string {
   const files = tableFiles(manifest, table, resolve);
+  // `traces` always has `service_share` (format 6): the stored text where a file has it, NULL where it does not.
+  const shared = table === 'traces';
   if (files.length === 0) {
     const columns = [
       ...TABLE_COLUMNS[table].map((c) => `NULL::${duckdbType(c.type)} AS ${quoteIdent(c.name)}`),
+      ...(shared ? [`NULL::VARCHAR AS ${SHARE}`] : []),
       'NULL::BIGINT AS file_row_number',
       'NULL::VARCHAR AS filename',
     ];
     return `${head} ${quoteIdent(table)} AS SELECT ${columns.join(', ')} WHERE false`;
+  }
+  if (shared) {
+    // Two homogeneous groups, each bound by one footer: files that store the share read as-is, the others get NULL.
+    const names = TABLE_COLUMNS.traces.map((c) => quoteIdent(c.name));
+    const select = (paths: string[], share: string): string =>
+      `SELECT ${[...names, share, 'file_row_number', 'filename'].join(', ')} FROM read_parquet([${paths.map(quoteString).join(', ')}], filename = true, file_row_number = true, union_by_name = false)`;
+    const stored: string[] = [];
+    const plain: string[] = [];
+    for (const partition of manifest.partitions) {
+      const file = partition.files.traces;
+      if (file !== undefined) (file.serviceShare === true ? stored : plain).push(resolve(file.path));
+    }
+    const groups = [
+      ...(stored.length > 0 ? [select(stored, SHARE)] : []),
+      ...(plain.length > 0 ? [select(plain, `NULL::VARCHAR AS ${SHARE}`)] : []),
+    ];
+    return `${head} ${quoteIdent(table)} AS ${groups.join(' UNION ALL ')}`;
   }
   const list = files.map(quoteString).join(', ');
   return `${head} ${quoteIdent(table)} AS SELECT * FROM read_parquet([${list}], filename = true, file_row_number = true, union_by_name = false)`;
@@ -67,7 +90,8 @@ function viewStatement(
  * One `CREATE OR REPLACE VIEW <table> AS SELECT * FROM read_parquet([...], filename = true, file_row_number = true,
  * union_by_name = false)` per table; a table with no file gets a typed empty view (`SELECT NULL::<type> AS <col>, ...,
  * NULL::BIGINT AS file_row_number, NULL::VARCHAR AS filename WHERE false`: the same columns in the same order as a
- * populated view, whose virtual columns end `file_row_number, filename`). `set` picks the tables: `'all'` (the default,
+ * populated view, whose virtual columns end `file_row_number, filename`). The `traces` view has a `service_share`
+ * VARCHAR column before them: files that store it (format 6) and files without it (NULL) are two `read_parquet` groups joined by `UNION ALL`. `set` picks the tables: `'all'` (the default,
  * what a host creates), `'base'` (the five tables every page reads, created when a report opens) or `'rollups'`.
  */
 export function viewStatements(

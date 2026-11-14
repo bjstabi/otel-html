@@ -2,21 +2,33 @@ import { z } from 'zod';
 import { parseTraceId, type TraceId } from '../../model/ids.js';
 
 export const T_FORMAT: RegExp = /^(\d+)~(\d+)$/;
-const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+/**
+ * The largest window value a URL may carry: the largest double below 2^63. A value up to it parses (`Number`) to at most
+ * itself, so the formatter's int64 check holds for every window read from a URL, with room for an anchor's rounding.
+ */
+export const MAX_T = 2n ** 63n - 1024n;
 
+/**
+ * Whether the window text has start <= end and an end within `MAX_T` (a window relative to the epoch in format 5, unix
+ * nanoseconds in format 6).
+ */
 export function tRange(s: string): boolean {
   const m = T_FORMAT.exec(s);
   if (m === null) return true; // the regex check reports the format problem
   const a = BigInt(m[1] ?? '');
   const b = BigInt(m[2] ?? '');
-  return a <= b && b <= MAX_SAFE;
+  return a <= b && b <= MAX_T;
 }
 
-/** The `<start>~<end>` window text, shared by the `t` key and the dashboard's `sel.t`. */
-export const WindowTextSchema: z.ZodType<string> = z
-  .string()
-  .regex(T_FORMAT, '<start>~<end> in nanoseconds')
-  .refine(tRange, `<start>~<end> with start <= end and values <= ${Number.MAX_SAFE_INTEGER}`);
+const RANGE_MESSAGE = `<start>~<end> with start <= end and values <= ${MAX_T}`;
+
+/** The `<start>~<end>` window text, shared by the `t` key and the dashboard's `sel.t`, relative to the epoch (format 5) or unix nanoseconds (format 6). */
+export function windowTextSchema(): z.ZodType<string> {
+  return z
+    .string()
+    .regex(T_FORMAT, '<start>~<end> in nanoseconds')
+    .refine((s) => tRange(s), RANGE_MESSAGE);
+}
 
 /** The `t` value for the entire run, written when the report has a default window and the person chose past it. */
 export const T_ALL = 'all';
@@ -24,7 +36,7 @@ export const T_ALL = 'all';
 /** The `t` key: a window, or `all`. */
 export const WindowParamSchema: z.ZodType<string> = z.string().superRefine((s, ctx) => {
   if (s === T_ALL) return;
-  const r = WindowTextSchema.safeParse(s);
+  const r = windowTextSchema().safeParse(s);
   if (!r.success) ctx.addIssue({ code: 'custom', message: r.error.issues[0]?.message ?? 'a window' });
 });
 

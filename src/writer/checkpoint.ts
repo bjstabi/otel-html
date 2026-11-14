@@ -1,5 +1,11 @@
 import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../format/data-file.js';
-import { type AnyManifest, isPartitioned, type ManifestV4, parseAnyManifest } from '../format/manifest.js';
+import {
+  type AnyManifest,
+  isPartitioned,
+  type ManifestV4,
+  manifestForWrite,
+  parseAnyManifest,
+} from '../format/manifest.js';
 import {
   LOCK_PATH,
   MANIFEST_KEY,
@@ -27,8 +33,8 @@ export interface PartitionCheckpoint {
 }
 
 export async function writeManifest(fs: FileSystem, out: string, manifest: AnyManifest): Promise<void> {
-  parseAnyManifest(manifest); // never write a manifest the viewer would reject
-  await fs.writeTextAtomic(at(out, MANIFEST_PATH), wrapDataFile(MANIFEST_KEY, manifest));
+  parseAnyManifest(manifestForWrite(manifest)); // never write a manifest the viewer would reject
+  await fs.writeTextAtomic(at(out, MANIFEST_PATH), wrapDataFile(MANIFEST_KEY, manifestForWrite(manifest)));
 }
 
 /** The format-5 state is small (no rollups, no trace index): one atomic write. */
@@ -157,7 +163,10 @@ export async function loadPartitionCheckpoint(
       const s = parseAnySessionState(raw);
       return s.formatVersion === 2 ? s : null;
     },
-    (s) => s.nextPartition === next && (s.epochUnixNano ?? '0') === manifest.epochUnixNano,
+    // Format 6 derives the manifest's epoch from the range (or createdAt), which the session's own epoch need not equal.
+    (s) =>
+      s.nextPartition === next &&
+      (manifest.formatVersion === 6 || (s.epochUnixNano ?? '0') === manifest.epochUnixNano),
     (s) => s.checkpoint,
   );
   return { manifest, state, slot };

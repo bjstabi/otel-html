@@ -205,6 +205,7 @@ function spanResult(q: SpanQuery): SpanQueryResult {
         durationNs: end - start,
         spans: kept.length,
         errors: kept.filter((r) => r.span.status.code === StatusCode.ERROR).length,
+        share: null,
       };
       result.rows = kept.length === 0 ? [] : [trace];
       result.total = result.rows.length;

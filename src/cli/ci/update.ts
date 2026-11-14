@@ -4,6 +4,7 @@ import type { PartitionFile } from '../../format/manifest.js';
 import {
   PartitionFileSchema,
   RollupPartitionFileSchema,
+  ShareTracesPartitionFileSchema,
   SOURCE_RE,
   TimeEndPartitionFileSchema,
 } from '../../format/manifest.js';
@@ -48,7 +49,8 @@ const partitionShape = {
     spans: z.exactOptional(TimeEndPartitionFileSchema),
     logs: z.exactOptional(PartitionFileSchema),
     points: z.exactOptional(PartitionFileSchema),
-    traces: z.exactOptional(TimeEndPartitionFileSchema),
+    // format 6: a traces file may state `serviceShare: true` (an update of a format-5 job never does)
+    traces: z.exactOptional(ShareTracesPartitionFileSchema),
     patterns: z.exactOptional(PartitionFileSchema),
     span_rollups: z.exactOptional(RollupPartitionFileSchema),
     log_rollups: z.exactOptional(RollupPartitionFileSchema),
