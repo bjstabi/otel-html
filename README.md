@@ -110,7 +110,7 @@ The root span is named after the command's basename (`.exe` stripped), has kind 
 
 ### `merge <reports...>`
 
-Combines report folders into one, for example the reports of parallel CI jobs. It reads reports of every format, so it works across otel-html versions (see [Report format compatibility](#report-format-compatibility)). A cumulative metric series that appears in two reports is two runs: the second report's stream starts from its own start time and is not counted as a counter reset.
+Combines report folders into one, for example the reports of parallel CI jobs. It reads reports of formats 1 to 3 and 5, so it works across otel-html versions (see [Report format compatibility](#report-format-compatibility)). A cumulative metric series that appears in two reports is two runs: the second report's stream starts from its own start time and is not counted as a counter reset.
 
 ```sh
 otel-html merge ./job-1 ./job-2 -o ./combined
@@ -397,7 +397,7 @@ report/
 
 Every data file is a classic script that registers its payload with a global, so the report works without `fetch`, ES modules or workers. All paths are relative and navigation uses the URL hash.
 
-### Format 4 (`--format local` or `site`)
+### Format 5 (`--format local` or `site`)
 
 The viewer reads this format, through DuckDB-WASM: it creates one view per table over the partition files and runs SQL against them. The tables and columns are listed in [docs/format/schema.md](docs/format/schema.md) (generated from the schema). The format-3 layout above is what older otel-html versions wrote; the viewer no longer opens it (see [Report format compatibility](#report-format-compatibility)).
 
