@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { literal, Query, sql } from '@uwdata/mosaic-sql';
 import { afterEach, describe, expect, test } from 'vitest';
 import { parseLogRef, refParts } from '../../src/viewer/data/log-query.js';
+import { COMPACTION_SPAN_NS } from '../../src/writer/compaction.js';
 import { openTestDb } from '../../test-support/duckdb-node.js';
 import { ROW_GROUP_ROWS } from '../../test-support/scaling/cost.js';
 import { HARNESS_SMALL_FILE_BYTES, openCountingEngine } from '../../test-support/scaling/counting-engine.js';
@@ -240,6 +241,31 @@ describe('the scaling report generator', { timeout: 120_000 }, () => {
       expect(
         await count('logs', sql`filename = ${literal(path ?? '')} AND file_row_number = ${literal(i)}`),
       ).toBe(1);
+    } finally {
+      await c.close();
+    }
+  });
+
+  test('a compacted shape is partitions of at most 24 h, and its log id names the first inside partition’s first log', async () => {
+    const shape: Shape = { ...BASE, outside: 4, inside: 2, compacted: true };
+    const r = await build(shape);
+    const spans = r.manifest.partitions.flatMap((p) => (p.files.spans === undefined ? [] : [p.files.spans]));
+    // six slots 12 h apart: three pairs, a third slot would make a group longer than 24 h
+    expect(spans.map((f) => f.rows)).toEqual([4 * ROW_GROUP_ROWS, 4 * ROW_GROUP_ROWS, 4 * ROW_GROUP_ROWS]);
+    for (const f of spans)
+      expect(BigInt(f.timeMax ?? 0) - BigInt(f.timeMin ?? 0)).toBeLessThanOrEqual(COMPACTION_SPAN_NS);
+    const c = await openCountingEngine(r.dir, r.manifest);
+    try {
+      const { n, i } = refParts(parseLogRef(r.ids.logRef, 'ids.logRef'));
+      const path = r.manifest.partitions.find((p) => p.n === n)?.files.logs?.path ?? '';
+      const t = await c.engine.query(
+        Query.from('logs')
+          .select({ n: sql`count(*)` })
+          .where(
+            sql`filename = ${literal(path)} AND file_row_number = ${literal(i)} AND time_unix_nano = ${literal(r.epoch + BigInt(r.window.start))}`,
+          ),
+      );
+      expect(Number((t.toArray()[0] as { n: unknown } | undefined)?.n)).toBe(1);
     } finally {
       await c.close();
     }

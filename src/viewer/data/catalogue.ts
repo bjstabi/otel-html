@@ -923,7 +923,7 @@ const owed = (
  * cause: #271 (paid by PR 6: the aggregates, the percentile, the trace list and `resourceValues` under a long window),
  * #281 (small files read serially; PR 3, done), #282 (paid by PR 6 for long-range reports: the rollup route answers
  * `resourceValues` without a window; on a short range it scans by design, §6.3, see `resourceValues.all.short`),
- * #283 (compaction), not yet measured, #291 (opening a trace reads the spans files of its partitions whole; no PR of
+ * #283 (paid by PR 7: compaction groups its inputs by time, so no file spans more than 24 h unless an input does), #291 (opening a trace reads the spans files of its partitions whole; no PR of
  * the plan fixes it, so PR 9 carries it) and #295 (the metrics entries with a window measure `files`, not `fixed`, on
  * retention: the points file of every partition outside the window is still loaded; PR 9).
  */
@@ -934,5 +934,4 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
     'metrics.runQuery',
     'metrics.runQuery.failed',
   ]),
-  ...owed(283, 7, 'retention', 'fixed', false, ['spans.total.short', 'spans.total.long']),
 ];

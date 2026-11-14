@@ -55,6 +55,70 @@ export interface CompactOptions {
   warn?: (message: string, attrs: Record<string, unknown>) => void;
 }
 
+/** The most time one compaction output may span, unless a single input does already: 24 hours, in nanoseconds. */
+export const COMPACTION_SPAN_NS = 86_400_000_000_000n;
+
+/**
+ * Splits `inputs` into groups that are compacted separately, so that no output covers more than
+ * `COMPACTION_SPAN_NS` between its earliest `timeMin` and its latest `timeMax`. Inputs are taken in order of `timeMin`
+ * and added to the open group while the union stays within the bound; one input that spans more than the bound is a
+ * group of its own (it is not made worse, and nothing else joins it). Inputs with no time share the first group.
+ * The members of a group keep the order the caller gave them, and the groups follow time.
+ */
+export function timeGroups<T extends { timeMin: string | null; timeMax: string | null }>(
+  inputs: readonly T[],
+): T[][] {
+  const timeless = inputs.filter((i) => i.timeMin === null || i.timeMax === null);
+  const timed = inputs
+    .filter((i) => i.timeMin !== null && i.timeMax !== null)
+    .map((input, order) => ({
+      input,
+      order,
+      min: BigInt(input.timeMin ?? 0),
+      max: BigInt(input.timeMax ?? 0),
+    }))
+    .sort((a, b) => (a.min < b.min ? -1 : a.min > b.min ? 1 : a.order - b.order));
+  const groups: { members: typeof timed; min: bigint; max: bigint; alone: boolean }[] = [];
+  for (const t of timed) {
+    const open = groups.at(-1);
+    const long = t.max - t.min > COMPACTION_SPAN_NS;
+    if (open !== undefined && !long && !open.alone) {
+      let max = open.max;
+      if (t.max > max) max = t.max;
+      if (max - open.min <= COMPACTION_SPAN_NS) {
+        open.members.push(t);
+        open.max = max;
+        continue;
+      }
+    }
+    groups.push({ members: [t], min: t.min, max: t.max, alone: long });
+  }
+  const out = groups.map((g) => [...g.members].sort((a, b) => a.order - b.order).map((m) => m.input));
+  if (timeless.length === 0) return out;
+  const first = out[0];
+  if (first === undefined) return [timeless];
+  first.unshift(...timeless);
+  return out;
+}
+
+/** The tables whose rows carry the time a partition covers (not the rollups, which repeat it, nor `patterns`). */
+const TIMED: readonly Table[] = ['spans', 'logs', 'points', 'traces'];
+
+/** The earliest `timeMin` and latest `timeMax` of the partition's timed files; null when none has a time. */
+export function timeRangeOf(entry: PartitionEntry): { timeMin: string | null; timeMax: string | null } {
+  let min: bigint | null = null;
+  let max: bigint | null = null;
+  for (const t of TIMED) {
+    const f = entry.files[t];
+    if (f?.timeMin == null || f.timeMax == null) continue;
+    const lo = BigInt(f.timeMin);
+    const hi = BigInt(f.timeMax);
+    if (min === null || lo < min) min = lo;
+    if (max === null || hi > max) max = hi;
+  }
+  return { timeMin: min === null ? null : String(min), timeMax: max === null ? null : String(max) };
+}
+
 /** Rows a merge holds before it hands them to the writer; the Parquet writer still cuts row groups of `rowGroupRows`. */
 const MERGE_CHUNK_ROWS = 4096;
 

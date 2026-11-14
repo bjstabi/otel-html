@@ -46,7 +46,7 @@ import {
   writeManifest,
   writeStateSlotV2,
 } from './checkpoint.js';
-import { compactPartitions } from './compaction.js';
+import { compactPartitions, timeGroups, timeRangeOf } from './compaction.js';
 import { DedupeSet } from './dedupe.js';
 import { renderIndexHtml } from './html.js';
 import { inheritDashboards } from './inherit-config.js';
@@ -1027,8 +1027,8 @@ class PartitionSession implements WriterSession {
 
   /**
    * At close, after the held rows and any copies are committed: compacts the flush partitions, and with
-   * `writer.compactOnMerge` each merge input's copies (one compacted partition per input, so a lineage is never
-   * summed with another's; see `#compactGroup`).
+   * `writer.compactOnMerge` each merge input's copies (compacted per input, so a lineage is never summed with
+   * another's, and in each input per time group, so no output spans more than 24 h; see `#compactGroup`).
    */
   async #compact(): Promise<void> {
     const flushed = new Set(this.#flushed);
@@ -1047,14 +1047,30 @@ class PartitionSession implements WriterSession {
   }
 
   /**
+   * Compacts `picks` group by group (`timeGroups` of their time ranges: no output spans more than 24 h unless one
+   * input does), each as `#compactOne` says.
+   */
+  async #compactGroup(
+    picks: readonly PartitionEntry[],
+    patternKey: 'cluster' | 'cluster-template' = 'cluster',
+  ): Promise<void> {
+    const ranged = picks.map((entry) => ({ entry, ...timeRangeOf(entry) }));
+    for (const group of timeGroups(ranged))
+      await this.#compactOne(
+        group.map((g) => g.entry).sort((a, b) => a.n - b.n),
+        patternKey,
+      );
+  }
+
+  /**
    * Compacts `picks` into one partition when there are two or more, as `compactPartitions` says. Writes only the new
    * partition's folder; the next checkpoint commits it, in this order: the state (numbering past it, no flush
    * partitions left), then the manifest (listing it in place of the picks). The folders it replaces are removed by
    * `#pruneCommitted` after that commit. Compaction is an optimisation, so a failure keeps the picks and is logged.
    */
-  async #compactGroup(
+  async #compactOne(
     picks: readonly PartitionEntry[],
-    patternKey: 'cluster' | 'cluster-template' = 'cluster',
+    patternKey: 'cluster' | 'cluster-template',
   ): Promise<void> {
     const first = picks[0];
     const last = picks.at(-1);
