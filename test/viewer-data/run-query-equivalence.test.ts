@@ -242,12 +242,12 @@ describe('metricRunQuery answers as the whole read does', () => {
   });
 
   test('a window start far from the epoch (the writer allows 2^53 ns, 104 days) reaches the files it names', async () => {
-    const day200 = 100 * 86_400;
-    const far = partition([job('r8', 'sha8', 'build', [day200]), job('r9', 'sha9', 'build', [day200 + 5])]);
+    const day100 = 100 * 86_400;
+    const far = partition([job('r8', 'sha8', 'build', [day100]), job('r9', 'sha9', 'build', [day100 + 5])]);
     const ctx = await open(KEYED, undefined, [P0, P1, far]);
-    const r = await check(ctx, { window: { start: day200 * S, end: (day200 + 10) * S } });
+    const r = await check(ctx, { window: { start: day100 * S, end: (day100 + 10) * S } });
     expect(r.runs.map((x) => x.id)).toEqual(['r8', 'r9']);
-    await check(ctx, { window: { start: (day200 + 5) * S, end: (day200 + 5) * S } });
+    await check(ctx, { window: { start: (day100 + 5) * S, end: (day100 + 5) * S } });
   });
 
   test('a window the whole report lies in is one read, as the whole read is', async () => {
