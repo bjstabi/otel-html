@@ -244,7 +244,7 @@ export interface RunOptions {
 }
 
 /** D64: the files a `run` update carries from the report; anything else the merge wrote is removed. */
-const RUN_KEEP = /^(index\.html|\.nojekyll|data\/manifest\.js|data\/partitions\/[0-9]{6}\/[a-z]+\.parquet)$/;
+const RUN_KEEP = /^(index\.html|\.nojekyll|data\/manifest\.js|data\/partitions\/[0-9]{6}\/[a-z_]+\.parquet)$/;
 
 async function pruneReport(deps: WriterDeps, root: string, rel = ''): Promise<void> {
   const { fs } = deps;
