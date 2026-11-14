@@ -137,6 +137,18 @@ describe('absolute windows (format 6)', () => {
     expect(windowParam({ start: 1, end: 2 }, null)).toBe('1~2');
   });
 
+  test('an absolute dashboard selection parses through parseUrlState, also before the anchor', () => {
+    const t = '1699999999999999995~1700000000000000100';
+    const d = JSON.stringify({ sel: { t } });
+    const { state, errors } = parseUrlState(`d=${encodeURIComponent(d)}`, true);
+    expect(errors).toEqual([]);
+    expect(state.d?.sel.t).toBe(t);
+    const win = parseWindow(t, ANCHOR);
+    expect(win).toEqual({ start: -5, end: 100 });
+    expect(formatWindow(win, ANCHOR)).toBe(t);
+    expect(parseUrlState(`d=${encodeURIComponent(d)}`).errors).toHaveLength(1);
+  });
+
   test('windowParam and windowFromParam carry the anchor; the default window still needs no t', () => {
     const fallback = { start: 0, end: 10 };
     expect(windowParam(fallback, fallback, ANCHOR)).toBeUndefined();

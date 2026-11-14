@@ -8,7 +8,11 @@ import { type LogRef, parseLogRef } from '../data/log-query.js';
 import type { TimeWindow } from '../data/time-window.js';
 import { LOG_TAB_IDS } from '../logs/tabs.js';
 import { TRACE_TAB_IDS } from '../traces/tabs.js';
-import { DashboardPageStateSchema, parseDashboardParam } from './dashboard-state.js';
+import {
+  DashboardPageStateSchema,
+  dashboardPageStateSchema,
+  parseDashboardParam,
+} from './dashboard-state.js';
 import { parseMetricParam } from './metric-state.js';
 import {
   T_ALL,
@@ -88,7 +92,10 @@ function isUrlKey(k: string): k is UrlKey {
 }
 
 const AbsoluteWindowParamSchema = windowParamSchema(true);
-const UrlStateAbsolutePartial = UrlStateSchema.extend({ t: AbsoluteWindowParamSchema }).partial();
+const UrlStateAbsolutePartial = UrlStateSchema.extend({
+  t: AbsoluteWindowParamSchema,
+  d: dashboardPageStateSchema(true),
+}).partial();
 
 /**
  * Accepts `a=1&b=2`, `?a=1`, or a whole hash such as `#/traces?a=1` (a prefix is stripped only at the start).

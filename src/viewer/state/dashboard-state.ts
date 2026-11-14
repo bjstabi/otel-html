@@ -25,7 +25,7 @@ export const EMPTY_DASHBOARD_STATE: DashboardPageState = {
 };
 
 /** `absolute`: the window text is unix nanoseconds (a format-6 report), not relative to the epoch. */
-function dashboardPageStateSchema(absolute: boolean): z.ZodType<DashboardPageState> {
+export function dashboardPageStateSchema(absolute: boolean): z.ZodType<DashboardPageState> {
   return z.strictObject({
     vars: z.record(z.string(), z.string().nullable()).default({}),
     sel: z
