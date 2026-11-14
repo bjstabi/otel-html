@@ -270,7 +270,7 @@ export const TimeEndPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObje
 });
 
 /** A format-6 `traces` file: `timeEndMax` and, when its rows carry `service_share`, `serviceShare: true`. */
-const ShareTracesPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
+export const ShareTracesPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
   ...PartitionFileShape,
   timeEndMax: z.exactOptional(int64Text.nullable()),
   serviceShare: z.exactOptional(z.literal(true)),

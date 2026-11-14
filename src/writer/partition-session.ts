@@ -102,6 +102,8 @@ interface Restored {
   createdAt: string;
   title: string;
   slot: StateSlot;
+  /** The format of the manifest this session writes: 6 when the report resumed as format 6 (a format-6 merge input raises it). */
+  formatVersion?: 5 | 6;
   /** Resumed from an existing report. */
   resumed: boolean;
   /** An existing report is being replaced; its data goes just before this session first writes. */
@@ -189,6 +191,7 @@ export async function openPartitionSession(
             ? null
             : { start: BigInt(cp.manifest.range.start), end: BigInt(cp.manifest.range.end) },
         createdAt: cp.manifest.createdAt,
+        formatVersion: cp.manifest.formatVersion,
         title: config.title ?? cp.manifest.title,
         slot: cp.slot,
         resumed: true,
@@ -242,6 +245,7 @@ class PartitionSession implements WriterSession {
   /** Set when close released the live state: only `close` (again) and `abort` remain. */
   #closing = false;
   #replacing: boolean;
+  #formatVersion: 5 | 6;
   #partial = false;
   /** `WriterDeps.beforeMetrics` runs once, when the first metric points arrive. */
   #metricsSeen = false;
@@ -296,6 +300,7 @@ class PartitionSession implements WriterSession {
     this.#checkpointSeq = r.checkpoint;
     this.#dirty = r.resumed;
     this.#replacing = r.replacing;
+    this.#formatVersion = r.formatVersion ?? 5;
     this.#everCommitted = r.resumed;
     this.#lastFlushMs = deps.clock.monotonicMs();
   }
@@ -456,6 +461,8 @@ class PartitionSession implements WriterSession {
       await this.#wipeReplaced();
       // An empty report's epoch is 0 and means "none": it must not become this report's.
       if (copy.partitions.length > 0) this.#ensureEpoch(copy.epoch);
+      // One format-6 input makes the output format 6, with or without stored shares (format 6 only drops the epoch).
+      if (copy.formatVersion === 6) this.#formatVersion = 6;
       const taken = this.#copied.get(copy.origin) ?? [];
       this.#copied.set(copy.origin, taken);
       for (const src of copy.partitions) {
@@ -1014,6 +1021,7 @@ class PartitionSession implements WriterSession {
           values,
           ...(f.timeEndMax === undefined ? {} : { timeEndMax: f.timeEndMax }),
           ...(f.rollup === undefined ? {} : { rollup: f.rollup }),
+          ...(f.serviceShare === undefined ? {} : { serviceShare: f.serviceShare }),
         };
       }
     } catch (e) {
@@ -1251,6 +1259,7 @@ class PartitionSession implements WriterSession {
             partitions: [...this.#committed, ...this.#pending],
             statisticsKeys: this.#statisticsKeys,
             config: this.#config,
+            formatVersion: this.#formatVersion,
           },
           p,
         ),

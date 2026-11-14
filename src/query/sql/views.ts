@@ -3,6 +3,7 @@ import {
   type ColumnType,
   ROLLUP_OF,
   type RollupTable,
+  SERVICE_SHARE_COLUMN,
   TABLE_COLUMNS,
   TABLES,
   type Table,
@@ -44,6 +45,13 @@ const isRollup = (table: Table): table is RollupTable => table in ROLLUP_OF;
 
 type Head = 'CREATE OR REPLACE VIEW' | 'CREATE VIEW IF NOT EXISTS';
 
+const SHARE = quoteIdent(SERVICE_SHARE_COLUMN.name);
+
+/** Whether any `traces` file of the manifest stores a service share (format 6, `serviceShare: true`). */
+function hasStoredShare(manifest: ManifestV4): boolean {
+  return manifest.partitions.some((p) => p.files.traces?.serviceShare === true);
+}
+
 function viewStatement(
   manifest: ManifestV4,
   table: Table,
@@ -51,15 +59,30 @@ function viewStatement(
   head: Head,
 ): string {
   const files = tableFiles(manifest, table, resolve);
+  // `traces` always has `service_share` (format 6): the stored text where a file has it, NULL where it does not.
+  const shared = table === 'traces';
   if (files.length === 0) {
     const columns = [
       ...TABLE_COLUMNS[table].map((c) => `NULL::${duckdbType(c.type)} AS ${quoteIdent(c.name)}`),
+      ...(shared ? [`NULL::VARCHAR AS ${SHARE}`] : []),
       'NULL::BIGINT AS file_row_number',
       'NULL::VARCHAR AS filename',
     ];
     return `${head} ${quoteIdent(table)} AS SELECT ${columns.join(', ')} WHERE false`;
   }
   const list = files.map(quoteString).join(', ');
+  if (shared) {
+    // Files without the column read as NULL under `union_by_name`; with none storing it the plain read is kept.
+    const stored = hasStoredShare(manifest);
+    const names = TABLE_COLUMNS.traces.map((c) => quoteIdent(c.name));
+    const projection = [
+      ...names,
+      stored ? SHARE : `NULL::VARCHAR AS ${SHARE}`,
+      'file_row_number',
+      'filename',
+    ].join(', ');
+    return `${head} ${quoteIdent(table)} AS SELECT ${projection} FROM read_parquet([${list}], filename = true, file_row_number = true, union_by_name = ${stored})`;
+  }
   return `${head} ${quoteIdent(table)} AS SELECT * FROM read_parquet([${list}], filename = true, file_row_number = true, union_by_name = false)`;
 }
 
@@ -67,7 +90,8 @@ function viewStatement(
  * One `CREATE OR REPLACE VIEW <table> AS SELECT * FROM read_parquet([...], filename = true, file_row_number = true,
  * union_by_name = false)` per table; a table with no file gets a typed empty view (`SELECT NULL::<type> AS <col>, ...,
  * NULL::BIGINT AS file_row_number, NULL::VARCHAR AS filename WHERE false`: the same columns in the same order as a
- * populated view, whose virtual columns end `file_row_number, filename`). `set` picks the tables: `'all'` (the default,
+ * populated view, whose virtual columns end `file_row_number, filename`). The `traces` view has a `service_share`
+ * VARCHAR column before them: a file that stores it (format 6) is read by name, a file without it gives NULL. `set` picks the tables: `'all'` (the default,
  * what a host creates), `'base'` (the five tables every page reads, created when a report opens) or `'rollups'`.
  */
 export function viewStatements(

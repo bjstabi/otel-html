@@ -120,6 +120,34 @@ describe('UpdateJsonSchema', () => {
   });
 });
 
+describe('format 6 traces files', () => {
+  const withTraces = (extra: object) =>
+    push({
+      partitions: [
+        {
+          source: 'job:7#flush:1',
+          files: { traces: { ...file('partitions/0/traces.parquet', 4), ...extra } },
+          carried: true,
+        },
+      ],
+    });
+  test('a traces file may state serviceShare: true, and no other file may', () => {
+    expect(UpdateJsonSchema.safeParse(withTraces({ serviceShare: true })).success).toBe(true);
+    expect(UpdateJsonSchema.safeParse(withTraces({})).success).toBe(true);
+    expect(UpdateJsonSchema.safeParse(withTraces({ serviceShare: false })).success).toBe(false);
+    const onSpans = push({
+      partitions: [
+        {
+          source: 'job:7#flush:1',
+          files: { spans: { ...file('partitions/0/spans.parquet', 4), serviceShare: true } },
+          carried: true,
+        } as UpdatePartition,
+      ],
+    });
+    expect(UpdateJsonSchema.safeParse(onSpans).success).toBe(false);
+  });
+});
+
 describe('stricter fields', () => {
   const ok = (v: unknown) => UpdateJsonSchema.safeParse(v).success;
   test('attempt and sequence are at least 1, createdAt is an ISO date-time, ci is carried', () => {

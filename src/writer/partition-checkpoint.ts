@@ -63,11 +63,13 @@ interface ManifestInputs {
   partitions: readonly PartitionEntry[];
   statisticsKeys: Record<Table, string[]>;
   config: ResolvedConfig;
+  /** 6 when the report is format 6 (a merge input was, or the report resumed as such); 5 otherwise. */
+  formatVersion?: ManifestV4['formatVersion'];
 }
 
 export function buildManifest(m: ManifestInputs, p: Prepared): ManifestV4 {
   return {
-    formatVersion: PARTITION_FORMAT_VERSION,
+    formatVersion: m.formatVersion ?? PARTITION_FORMAT_VERSION,
     otelHtmlVersion: m.version,
     title: m.title,
     epochUnixNano: p.epoch,

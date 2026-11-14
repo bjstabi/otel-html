@@ -15,6 +15,7 @@ import {
   openFixtureDb,
   spansOnlyRequest,
 } from '../../../test-support/format4-fixture.js';
+import { format6Fixture } from '../../../test-support/format6.js';
 
 type Row = Record<string, unknown>;
 const column = (rows: Row[], name: string): unknown[] => rows.map((r) => r[name]);
@@ -128,5 +129,77 @@ describe('format-4 views', () => {
     expect(bytes).toBeInstanceOf(Uint8Array);
     await db.connector.query({ type: 'exec', sql: 'SELECT 1' });
     expect(db.connector.requests.map((r) => r.type)).toEqual(['arrow', 'exec']);
+  });
+});
+
+describe('format-6 traces view', () => {
+  const requests = [spansOnlyRequest(2), spansOnlyRequest(2), spansOnlyRequest(2)];
+  const shareByPartition = (db: Awaited<ReturnType<typeof openFixtureDb>>): Map<number, unknown> => {
+    const rows = db.rows('SELECT filename, service_share FROM traces');
+    const shares = column(rows, 'service_share');
+    return new Map(column(rows, 'filename').map((f, i) => [partitionOfFilename(String(f)), shares[i]]));
+  };
+
+  test('a file that stores the share gives it, the others NULL', async () => {
+    const f = await buildFormat4Report(requests, { close: false });
+    const six = await format6Fixture(f, [1]);
+    try {
+      const db = await openFixtureDb(six);
+      const shares = shareByPartition(db);
+      const stored = shares.get(1);
+      expect(typeof stored).toBe('string');
+      expect(JSON.parse(String(stored))).toEqual([
+        ['svc-a', expect.stringMatching(/^[0-9]+$/)],
+        ['svc-b', expect.stringMatching(/^[0-9]+$/)],
+      ]);
+      expect(shares.get(0)).toBeNull();
+      expect(shares.get(2)).toBeNull();
+    } finally {
+      await six.close();
+    }
+  });
+  test('the order of the files does not matter', async () => {
+    for (const only of [[0], [2]]) {
+      const f = await buildFormat4Report(requests, { close: false });
+      const six = await format6Fixture(f, only);
+      try {
+        const shares = shareByPartition(await openFixtureDb(six));
+        for (const n of [0, 1, 2]) expect(shares.get(n) === null).toBe(!only.includes(n));
+      } finally {
+        await six.close();
+      }
+    }
+  });
+  test('with none stored every service_share is NULL, and the columns are the same as with some', async () => {
+    const f = await buildFormat4Report(requests, { close: false });
+    const none = await openFixtureDb(f);
+    expect([...shareByPartition(none).values()]).toEqual([null, null, null]);
+    const six = await format6Fixture(f, [1]);
+    try {
+      const some = await openFixtureDb(six);
+      const names = (db: typeof none) => column(db.rows('DESCRIBE traces'), 'column_name');
+      expect(names(some)).toEqual(names(none));
+      expect(names(none)).toEqual([
+        ...TABLE_COLUMNS.traces.map((c) => c.name),
+        'service_share',
+        'file_row_number',
+        'filename',
+      ]);
+      expect(column(none.rows('DESCRIBE traces'), 'column_type')).toEqual(
+        column(some.rows('DESCRIBE traces'), 'column_type'),
+      );
+    } finally {
+      await six.close();
+    }
+  });
+  test('an empty traces view has the column too', async () => {
+    const db = await openTestDb();
+    for (const s of viewStatements(emptyManifest(), (p) => p)) db.exec(s);
+    expect(column(db.rows('DESCRIBE traces'), 'column_name').slice(-3)).toEqual([
+      'service_share',
+      'file_row_number',
+      'filename',
+    ]);
+    db.close();
   });
 });

@@ -33,7 +33,7 @@ export interface PartitionCheckpoint {
 }
 
 export async function writeManifest(fs: FileSystem, out: string, manifest: AnyManifest): Promise<void> {
-  parseAnyManifest(manifest); // never write a manifest the viewer would reject
+  parseAnyManifest(manifestForWrite(manifest)); // never write a manifest the viewer would reject
   await fs.writeTextAtomic(at(out, MANIFEST_PATH), wrapDataFile(MANIFEST_KEY, manifestForWrite(manifest)));
 }
 

@@ -12,6 +12,7 @@ import { WORKER_SHIM } from '../../src/host/node-duckdb.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { buildFormat4Report, spansOnlyRequest } from '../../test-support/format4-fixture.js';
+import { format6Fixture } from '../../test-support/format6.js';
 import { packageHostEngineFiles } from '../../test-support/host-engine-files.js';
 import { writeReportDir } from '../../test-support/report-dir.js';
 
@@ -77,6 +78,28 @@ describe('startHostEngine', () => {
   it("has the JSON functions the viewer's SQL uses, loaded from the signed extension before the policy", async () => {
     const e = await started();
     expect(rows(await e.query(`SELECT json_extract_string('{"a":"x"}', '/a') AS v`))).toEqual([{ v: 'x' }]);
+  });
+
+  it('opens a format-6 report: the stored service share reads, a file without it gives NULL', async () => {
+    const base = await buildFormat4Report([spansOnlyRequest(2), spansOnlyRequest(2)], { close: false });
+    const six = await format6Fixture(base, [1]);
+    cleanups.push(six.close);
+    const e = await startHostEngine({
+      report: six.dir,
+      manifest: six.manifest,
+      files: packageHostEngineFiles(),
+      fs: createNodeFileSystem(),
+      logger,
+      timeoutMs: 30_000,
+      maxResultBytes: 64 * 1024 * 1024,
+    });
+    cleanups.push(() => e.close());
+    expect(six.manifest.formatVersion).toBe(6);
+    expect(rows(await e.query('SELECT count(*) AS n FROM spans'))).toEqual([{ n: 4n }]);
+    const shares = rows(
+      await e.query('SELECT service_share IS NULL AS missing FROM traces ORDER BY filename'),
+    );
+    expect(shares).toEqual([{ missing: true }, { missing: false }]);
   });
 
   it('filename values are the manifest paths', async () => {
