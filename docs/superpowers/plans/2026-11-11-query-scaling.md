@@ -32,7 +32,7 @@ in order; a PR starts from `main` after the previous one merged.
 | 5   | `feat/format-5`              | `feat(format): format 5 with rollup tables and the end-time statistic` |        | merged #293 |
 | 6   | `perf/rollup-router`         | `perf(viewer): long windows are answered from rollups`                 | #271   | merged #296 |
 | 7   | `perf/compaction-time-bound` | `perf(writer): compaction keeps files bounded in time`                 | #283   | merged #299 |
-| 8   | `feat/default-window`        | `feat(viewer): viewer.defaultWindow and longer presets`                |        |        |
+| 8   | `feat/default-window`        | `feat(viewer): viewer.defaultWindow and longer presets`                |        | merged #300 |
 | 9   | `docs/query-scaling-record`  | `docs(plan): query-scaling record`                                     |        |        |
 
 The status column is empty until a PR merges (`merged #N`) or is dropped (`dropped: <reason>`). PR 7 is conditional
