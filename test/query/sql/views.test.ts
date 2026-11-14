@@ -192,6 +192,17 @@ describe('format-6 traces view', () => {
       await six.close();
     }
   });
+  test('a mixed report reads two homogeneous groups without union_by_name', async () => {
+    const f = await buildFormat4Report(requests, { close: false });
+    const six = await format6Fixture(f, [1]);
+    try {
+      const sql = viewStatements(six.manifest, (p) => p).join('\n');
+      expect(sql).not.toContain('union_by_name = true');
+      expect(sql).toContain('UNION ALL');
+    } finally {
+      await six.close();
+    }
+  });
   test('an empty traces view has the column too', async () => {
     const db = await openTestDb();
     for (const s of viewStatements(emptyManifest(), (p) => p)) db.exec(s);

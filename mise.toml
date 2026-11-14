@@ -476,6 +476,7 @@ sources = [
   "test-support/scale-metrics.ts",
   "test-support/otlp-builders.ts",
   "test-support/fixture-ids.ts",
+  "test-support/format6.ts",
   "fixtures/**",
 ]
 outputs = ["e2e/.reports-site/**", "e2e/.reports/**"]

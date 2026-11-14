@@ -91,4 +91,34 @@ describe('merge and format 6', () => {
     expect(raw.epochUnixNano).toBeUndefined();
     expect(manifest.partitions.every((p) => p.files.traces?.serviceShare === undefined)).toBe(true);
   });
+  test('a merged format-6 report whose range starts before its epoch reopens for append', async () => {
+    const w = real();
+    const out = join(dir, 'old');
+    const s = await openSession(w.deps, { out, config: testConfig(cfg), mode: 'replace' });
+    await s.add(otlp(spansRequest(2, 0, 20)), 'a.json');
+    await s.add(otlp(spansRequest(2, -5_000_000_000, 30)), 'b.json');
+    await s.close();
+    await report('six', 0, true);
+    await merge(['six', 'old']);
+    expect(manifestAt('m').raw.formatVersion).toBe(6);
+    const again = await openSession(real().deps, {
+      out: join(dir, 'm'),
+      config: testConfig(cfg),
+      mode: 'append',
+    });
+    await again.add(otlp(spansRequest(2, 0, 40)), 'c.json');
+    await again.close();
+    expect(manifestAt('m').manifest.partitions.length).toBeGreaterThan(2);
+  });
+  test('an empty format-6 report reopens for append', async () => {
+    const w = real();
+    const out = join(dir, 'e');
+    const s = await openSession(w.deps, { out, config: testConfig(cfg), mode: 'replace' });
+    await s.close();
+    await asFormat6('e');
+    const again = await openSession(real().deps, { out, config: testConfig(cfg), mode: 'append' });
+    await again.add(otlp(spansRequest(2, 0, 40)), 'c.json');
+    await again.close();
+    expect(manifestAt('e').manifest.partitions).toHaveLength(1);
+  });
 });

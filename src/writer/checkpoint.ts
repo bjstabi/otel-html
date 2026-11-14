@@ -163,7 +163,10 @@ export async function loadPartitionCheckpoint(
       const s = parseAnySessionState(raw);
       return s.formatVersion === 2 ? s : null;
     },
-    (s) => s.nextPartition === next && (s.epochUnixNano ?? '0') === manifest.epochUnixNano,
+    // Format 6 derives the manifest's epoch from the range (or createdAt), which the session's own epoch need not equal.
+    (s) =>
+      s.nextPartition === next &&
+      (manifest.formatVersion === 6 || (s.epochUnixNano ?? '0') === manifest.epochUnixNano),
     (s) => s.checkpoint,
   );
   return { manifest, state, slot };
