@@ -2066,3 +2066,87 @@ requests Chromium makes. The four live checks, as predicted / live for the dashb
 therefore not in the row-group size, the trace ids or a large partition; the live partitions cost about 1.3 times the
 generated ones at the same size and the harness cannot say why. A later PR is held to the live baseline times the ratio
 the harness measures for it, which is what a change to the reads moves. See the Task 6c report.
+
+## Record
+
+Written by PR 9 on 2026-11-14. Every PR of the table merged; none was dropped (PR 7, the conditional one, was built
+because the live report's partition 166, `compact:0..29`, spanned 216 h).
+
+### Live, before and after
+
+Headless Chromium, cold (a new context per load, cache disabled), against
+`https://bjstabi.github.io/otel-html/branch/main/`, twice per page. A load has settled when no data request has started
+or been in flight for 4 s. Serial requests are the longest chain of range GETs and HEADs that each start after the
+previous one ended.
+
+| page                   | when                                 | requests | serial range requests | MB   | settles in  |
+| ---------------------- | ------------------------------------ | -------- | --------------------- | ---- | ----------- |
+| `#/dashboards/ci`      | 2026-11-11, design §1 (after #274)   | 769–777  | 708                   | 45–55 | 15.3–19.6 s |
+| `#/dashboards/ci`      | 2026-11-13, 0.2.1, format 4          | 732      | 638                   | 57.8 | 32.6 s      |
+| `#/dashboards/ci`      | 2026-11-14, 0.3.1 (93855883)         | 578      | 469                   | 48.0 | 12.8–14.0 s |
+| `#/traces?mode=traces` | 2026-11-11, design §1                | 1,065    |                       | 91   | 35 s        |
+| `#/traces?mode=traces` | 2026-11-14, 0.3.1 (93855883)         | 469      | 421                   | 41.4 | 12.4–15.8 s |
+
+The deployed report is format 5, written by 0.3.1 with `viewer.defaultWindow: 7d` (the 2026-11-13 load is the
+earlier scratchpad baseline with the same script; it ran on a larger report than §1's). The two loads of each page made the same
+requests; only the time differed.
+
+**Against §9: both pages miss.** The dashboard needs 469 serial requests and 12.8–14.0 s against at most 150 and
+5 s; the trace list 12.4–15.8 s against 5 s. The prediction for the same shape (Expectations row 8, live-anchored) is
+271 / 227 serial requests.
+
+**Where they part.** The rolling report is the merge of the 30 retained run reports, and 18 of its 26 partitions
+(115–132) are copies of run reports written in format 4 before 0.3.1 deployed. `merge` copies a partition without a
+rollup as it is (§9's "left to the builder": such a partition is answered from its raw files), so those partitions
+have no rollups and no `timeEndMax`. They hold 1.60 M of the report's 2.25 M spans, 63 of its 88 MB of spans files.
+The requests by file, one load each:
+
+- dashboard: 359 of 469 range requests on the format-4 partitions' spans files, 96 on the format-5 partitions'
+  spans files (the attribute-conditioned entries, raw by design, as row 6 records), 14 on small files;
+- trace list: 404 of 405 range requests on the format-4 partitions' spans files: the list's service-share reads by
+  trace id (#291) have no end time to bound them there.
+
+The harness predicts an all-format-5 report; the live one is mostly format 4 until those runs leave retention (about
+19 more main runs). The re-measurement then, and what to do if the dashboard still exceeds 150, is #307.
+
+### What moved in the catalogue, per PR
+
+| PR | what moved | `KNOWN_DEBT` lines |
+| -- | ---------- | ------------------ |
+| 1 #285 | the catalogue (one runnable entry per request), the harness, the measured classes as the baseline | 90 |
+| 2 #288 | none (test spans keep real times) | 90 |
+| 3 #289 | every #281 line: 16 entries retention → files, 7 window → files (the metrics queries, `runQuery`), 11 logs entries scan → files, 13 density scan → files | 74 |
+| 4 #292 | `trace.has`, `trace.logs` density scan → files; `traces.list.all` (and `.long`) scan → files on retention and density; `.statkey.` entries on the `merged` shape as on the plain one; new `resourceValues.*` and `logs.total.*` | 67 |
+| 5 #293 | none (format 5; no entry worse) | 67 |
+| 6 #296 | retention fixed 24 → 52, scan 36 → 3; window files 21 → 32, scan 32 → 21; density fixed 11 → 27, scan 38 → 26; #271 and #282 paid; `resourceValues.all.short` declared `scan` (§6.3) | 7 |
+| 7 #299 | the #283 line paid: `spans.total.short`/`.long` fixed on retention on the `compacted` shape | 5 |
+| 8 #300 | none (75 entries, same classes) | 5 |
+
+### Final prediction
+
+`mise run predict:queries -- --after 8 --window 7d` on main at 93855883, serial requests, dashboard / trace list:
+
+| shape | rolling (harness) | rolling (live-anchored on PR 1's 433.9 / 553.6) | 30x150k | 90x150k | 30x1.5M |
+| ----- | ----------------- | ----------------------------------------------- | ------- | ------- | ------- |
+| after 8, window 7d | 132 / 118 | 271 / 227 | 40 / 87 | 47 / 134 | 480 / 315 |
+
+Every cell equals Expectations row 8. The script's own live-anchored column prints 290 / 510: it anchors on its own
+`--after 1` row (405.2 / 245.8), which stopped being the baseline once paid debt lines were deleted (PR 6).
+
+### Known debt left
+
+Five lines, `DEBT_MAX` 5, each still marked `pr: 9` in `src/viewer/data/catalogue.ts` because no PR of this plan pays
+them:
+
+- `trace.get`, `trace.share` (density, #291): opening a trace reads the spans files of its partitions whole. Bloom
+  filters on the spans file made opening a trace dearer (PR 4), and no other PR touches a read by trace id. #273 (the
+  service share stored in `traces.parquet`) would remove `trace.share` from the trace list.
+- `metrics.query.summary`, `metrics.runQuery`, `metrics.runQuery.failed` (retention, measured `files`, #295): a
+  windowed metric query still loads every partition's points file; pruning them by window needs `points.ts`.
+
+The line's `pr` field moves to whichever plan takes #291 or #295.
+
+### Follow-ups filed
+
+#284, #287 (live partitions cost 1.3–5x generated ones), #290, #291, #294, #295, #297, #298, #302, #306 (the threaded
+engine build, §2's first later task) and #307 (the live re-measurement once the format-4 runs are gone).
