@@ -332,7 +332,7 @@ describe('presets and the default window', () => {
   });
 
   test('a Refresh that grows the range moves a window that is still the default, and nothing else', () => {
-    const refreshed = (hash: string): { before: string; after: string } => {
+    const refreshed = (hash: string): { before: string; after: string; url: string } => {
       window.location.hash = hash;
       const history = createHashHistory(window);
       const ui = (ds: DataSource) => (
@@ -344,17 +344,21 @@ describe('presets and the default window', () => {
       const before = screen.getByLabelText('Absolute range').textContent ?? '';
       view.rerender(ui(withDefault('6h', 12)));
       const after = screen.getByLabelText('Absolute range').textContent ?? '';
+      const url = window.location.hash;
       cleanup();
-      return { before, after };
+      return { before, after, url };
     };
     const noT = refreshed('#/traces');
     expect(noT.after).not.toBe(noT.before);
     expect(noT.after).toContain('2023-11-15T10:13'); // the new end (12 h in), to the grain
+    expect(noT.url).not.toContain('t='); // the default stays out of the URL
     const explicit = refreshed(`#/traces?t=${HOUR}~${2 * HOUR}`);
     expect(explicit.after).toBe(explicit.before);
+    expect(explicit.url).toContain(`t=${HOUR}~${2 * HOUR}`);
     const all = refreshed('#/traces?t=all');
     expect(all.before).toMatch(/^2023-11-14T22:13:20.*→ 2023-11-15T08:13:20/);
     expect(all.after).toMatch(/^2023-11-14T22:13:20.*→ 2023-11-15T10:13:20/);
+    expect(all.url).toContain('t=all');
   });
 
   test('the sidebar links carry t=all, and carry the default as no t', () => {

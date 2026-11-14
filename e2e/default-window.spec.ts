@@ -21,7 +21,8 @@ test(
     await expect(pressed('Entire run')).toHaveAttribute('aria-pressed', 'false');
     expect(new URL(page.url()).hash).not.toContain('t=');
     await expect(page.getByRole('alert')).toHaveCount(0);
-    // the traces starting in the last 6 h of a run of 48 traces 15 minutes apart: 25 of 48
+    // 48 traces 15 minutes apart; the range ends 3 ms after the last start, and the 6 h window is long, so its start
+    // is aligned down to a 65.5 s grain, about 17 s earlier: that takes in the trace at 5 h 45 min, so 25 of 48
     const traces = page.locator('[data-widget="traces"]');
     await expect.poll(() => traceCount(traces)).toBe(25);
 
