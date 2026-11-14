@@ -1,5 +1,70 @@
 # Changelog
 
+## [0.3.0](https://github.com/bjstabi/otel-html/compare/otel-html-v0.2.1...otel-html-v0.3.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **ci:** the site deploys from a Pages artifact through one deployer; jobs publish updates; gh-pages retired ([#262](https://github.com/bjstabi/otel-html/issues/262))
+* writer.metricSeriesCap and writer.metricExemplars are no longer accepted.
+* **api:** the types Clock, FileSystem, Timers and WriterDeps are no longer exported; Report.createResolved is removed from the public class; the deps argument of Report.create, convert, merge and startReceiver is now Partial<ReportDeps> (logger and tracer only), and other keys are ignored.
+* **cli:** run exits with the command's exit code; a report failure is printed and never fails a passing command ([#111](https://github.com/bjstabi/otel-html/issues/111))
+
+### Features
+
+* **ci:** a detached pusher uploads a job's partitions while it runs ([#266](https://github.com/bjstabi/otel-html/issues/266)) ([f1d0d1f](https://github.com/bjstabi/otel-html/commit/f1d0d1f21e1fa70807a7feb112612408b5e10ce6))
+* **ci:** a live badge and screenshot of the default branch's report ([#131](https://github.com/bjstabi/otel-html/issues/131)) ([ffda2ef](https://github.com/bjstabi/otel-html/commit/ffda2ef29489f551b7340225bdc7d5446bd776c1))
+* **ci:** otel-html ci deploy plans, applies and prunes site updates; ci update writes them; ci link reads the live index ([#257](https://github.com/bjstabi/otel-html/issues/257)) ([5b32b5b](https://github.com/bjstabi/otel-html/commit/5b32b5b079407362ca78a0b079459cb84f322824))
+* **ci:** site updates, the run-report sync and provisional CI spans ([#256](https://github.com/bjstabi/otel-html/issues/256)) ([5bf79b2](https://github.com/bjstabi/otel-html/commit/5bf79b2222edd72c5bc51a55189e1d72b54514cb))
+* **ci:** the site deploys from a Pages artifact through one deployer; jobs publish updates; gh-pages retired ([#262](https://github.com/bjstabi/otel-html/issues/262)) ([b8c88c0](https://github.com/bjstabi/otel-html/commit/b8c88c0f12e5e9e0039db231be2cc8cb32b0153e))
+* **dashboards:** toplist and table widgets rank spans by a duration measure; the timeline counts points at the range end; an unknown groupBy names the report's facets ([#113](https://github.com/bjstabi/otel-html/issues/113)) ([08e2fba](https://github.com/bjstabi/otel-html/commit/08e2fbac8aa7e5143f4119707116b6f1fa545c76))
+* **demo:** made-up CI runs and the CI dashboard; the demo over SSH ([#126](https://github.com/bjstabi/otel-html/issues/126)) ([b6e265f](https://github.com/bjstabi/otel-html/commit/b6e265f2b19a43d542d53f459c5ced617b902dff))
+* format 4, Parquet partitions queried by DuckDB in the browser ([#253](https://github.com/bjstabi/otel-html/issues/253)) ([d4e2bb4](https://github.com/bjstabi/otel-html/commit/d4e2bb4f09830d3d8f12f9a8c829548008c128b3))
+* **format:** format 5 with rollup tables and the end-time statistic ([#293](https://github.com/bjstabi/otel-html/issues/293)) ([bdffdd0](https://github.com/bjstabi/otel-html/commit/bdffdd0b1dcdf6ac4af34b0638b092ca895dbde6))
+* OpenTelemetry spans from the viewer and a span per test ([#124](https://github.com/bjstabi/otel-html/issues/124)) ([ea17c25](https://github.com/bjstabi/otel-html/commit/ea17c2540b7d8a168afb1154b6548ddefe873de2))
+* **receiver:** --export-otlp forwards every accepted OTLP request to a collector over HTTP ([#260](https://github.com/bjstabi/otel-html/issues/260)) ([987aa52](https://github.com/bjstabi/otel-html/commit/987aa520476c112ce7b7f49402b078bca6f2416d))
+* **viewer:** in-progress reports show their age, Refresh re-reads the manifest, polling is opt-in ([#258](https://github.com/bjstabi/otel-html/issues/258)) ([c590fca](https://github.com/bjstabi/otel-html/commit/c590fcaf11da8b4f6a9f123cc9cc708453e2dac1))
+* **viewer:** viewer.defaultWindow and longer presets ([#300](https://github.com/bjstabi/otel-html/issues/300)) ([b229b81](https://github.com/bjstabi/otel-html/commit/b229b8179cbf23c42e8a5d011e2e2806cd548284))
+
+
+### Bug fixes
+
+* **api:** report.abort(), a public deps type of logger and tracer, viewer packages as devDependencies ([#194](https://github.com/bjstabi/otel-html/issues/194)) ([4a05c35](https://github.com/bjstabi/otel-html/commit/4a05c35ca962ef3762a915dafc940314c98d60f0))
+* **ci:** approximate job ids agree, retention keeps the published run, escaped names, install.sh latest path ([#200](https://github.com/bjstabi/otel-html/issues/200)) ([4cb8dad](https://github.com/bjstabi/otel-html/commit/4cb8dad887eb39cd93b1a43d620273d097f852e9))
+* **ci:** dispatch the deployer with a GitHub App token; ci dispatch warns when the run cannot start ([#265](https://github.com/bjstabi/otel-html/issues/265)) ([e5f6811](https://github.com/bjstabi/otel-html/commit/e5f6811b1844aa6804df9ff59098ea76fec6e945))
+* **ci:** the Runs list keeps a job's runs, and skipped jobs chart no 0 s points ([#130](https://github.com/bjstabi/otel-html/issues/130)) ([17d95b8](https://github.com/bjstabi/otel-html/commit/17d95b8dfd148f6aec9f09c3f77950abf36af143))
+* **cli:** run exits with the command's exit code; a report failure is printed and never fails a passing command ([#111](https://github.com/bjstabi/otel-html/issues/111)) ([079807e](https://github.com/bjstabi/otel-html/commit/079807ebf8281e5c92de4b74857fe967acbf666b))
+* **model:** __proto__ keys, empty config files, dotted config keys, per-point where paths, id bytes, nested repetition ([#196](https://github.com/bjstabi/otel-html/issues/196)) ([dbd32ea](https://github.com/bjstabi/otel-html/commit/dbd32ea1b08992b4a0c6d5c634327ca1bd0139a3))
+* **model:** empty documents in a receiver body, nested bounded repetition, snake_case OTLP JSON ([#189](https://github.com/bjstabi/otel-html/issues/189)) ([441bf19](https://github.com/bjstabi/otel-html/commit/441bf19209755d4a0458dfc5c5535b08a176fb4a))
+* **test:** test spans keep real times under a faked clock ([#288](https://github.com/bjstabi/otel-html/issues/288)) ([f8a2f84](https://github.com/bjstabi/otel-html/commit/f8a2f841ba0d5d5bb14725a108a16ad6949bc1df))
+* **viewer:** a measured whole-run scan keeps only the rows it lists and notes groups past the cap ([#132](https://github.com/bjstabi/otel-html/issues/132)) ([6e509f5](https://github.com/bjstabi/otel-html/commit/6e509f5f0d7de501349672bda473f09fc1f59a52))
+* **viewer:** a whole-run scan covers the run, scans follow the sort, facet caps come from the report ([#190](https://github.com/bjstabi/otel-html/issues/190)) ([0f48872](https://github.com/bjstabi/otel-html/commit/0f48872102154ad3d68a9c7d7f31be1c3394e125))
+* **viewer:** dashboard variables and widgets read only what they draw ([#274](https://github.com/bjstabi/otel-html/issues/274)) ([5c2a680](https://github.com/bjstabi/otel-html/commit/5c2a680d0497471c703fd0137af7a5bae49eaca2))
+* **viewer:** log row heights, Waterfall focus, flame-graph cost and clipping, chip drafts, duration labels ([#199](https://github.com/bjstabi/otel-html/issues/199)) ([f9a5eaf](https://github.com/bjstabi/otel-html/commit/f9a5eafbf51fabce89de0f79d07cb058bd4bf8a5))
+* **viewer:** rollup baselines, heatmap cell width, bounded level caches, run-chart cost, labels ([#197](https://github.com/bjstabi/otel-html/issues/197)) ([42844ef](https://github.com/bjstabi/otel-html/commit/42844ef13a299c99959be46aa35ae8739fe835ba))
+* **viewer:** the Duration facet keeps its axis while a duration filter is set ([#191](https://github.com/bjstabi/otel-html/issues/191)) ([a74749b](https://github.com/bjstabi/otel-html/commit/a74749bf52a1f6bbd48f18f1747a0e1398359eea))
+* **viewer:** traces-mode scans drop unmatched rows, abortable eager scans, cheaper hot paths ([#198](https://github.com/bjstabi/otel-html/issues/198)) ([0cb1eec](https://github.com/bjstabi/otel-html/commit/0cb1eecc849260d2f097d30eda60bb0671bec953))
+* **writer:** cumulative summaries, long-series merges without spread, close() after a failed prune ([#187](https://github.com/bjstabi/otel-html/issues/187)) ([6e08e90](https://github.com/bjstabi/otel-html/commit/6e08e9095ba016e6528e89ca0665b8c22efdd8e3))
+* **writer:** the buffer merge agrees with mergeAgg, MetricBuffer tests, the --replace memory note ([#192](https://github.com/bjstabi/otel-html/issues/192)) ([c21dbca](https://github.com/bjstabi/otel-html/commit/c21dbca1100179587dde36be09f05644515e7b24))
+
+
+### Performance
+
+* **query:** statistics survive merges and reads follow the window ([#292](https://github.com/bjstabi/otel-html/issues/292)) ([e819e15](https://github.com/bjstabi/otel-html/commit/e819e15b5e5f2d4b86dd4b1144a3e0d7d762f454))
+* **viewer:** long windows are answered from rollups ([#296](https://github.com/bjstabi/otel-html/issues/296)) ([cedd4d8](https://github.com/bjstabi/otel-html/commit/cedd4d895c498930441236a4a975bf16857bd2cb))
+* **viewer:** small site files load whole and in parallel ([#289](https://github.com/bjstabi/otel-html/issues/289)) ([3e4ffd4](https://github.com/bjstabi/otel-html/commit/3e4ffd4e099166be15abb54c0f1b48cd11cb8d28))
+* **writer:** compaction keeps files bounded in time ([#299](https://github.com/bjstabi/otel-html/issues/299)) ([f4ca2a5](https://github.com/bjstabi/otel-html/commit/f4ca2a54c9df76f8122aad742f545ee00bab5355))
+
+
+### Documentation
+
+* clone with --single-branch to skip the gh-pages site ([#218](https://github.com/bjstabi/otel-html/issues/218)) ([1cc9243](https://github.com/bjstabi/otel-html/commit/1cc9243b7c932e276f8a9417ec3d752b04070bd1))
+* **plan:** publishing plan record, measured latencies, kickoff prompts ([#269](https://github.com/bjstabi/otel-html/issues/269)) ([7033672](https://github.com/bjstabi/otel-html/commit/7033672e15c9cfda74fc1f7156c8f55e62af1286))
+* **plan:** query-scaling plan ([#277](https://github.com/bjstabi/otel-html/issues/277)) ([73cff46](https://github.com/bjstabi/otel-html/commit/73cff46e30f180f7f583fe5baf008e41fdf05c23))
+* **plan:** the incremental CI publishing plan and its execution prompt ([#255](https://github.com/bjstabi/otel-html/issues/255)) ([f6450d3](https://github.com/bjstabi/otel-html/commit/f6450d330819db89a33881c26e40f56631966856))
+* **spec:** query-scaling design approved ([#276](https://github.com/bjstabi/otel-html/issues/276)) ([1234661](https://github.com/bjstabi/otel-html/commit/1234661b8694571aab928d9e333f6b5a8afc7ee6))
+* **spec:** query-scaling design draft and the /perf-1 skill ([#275](https://github.com/bjstabi/otel-html/issues/275)) ([d376399](https://github.com/bjstabi/otel-html/commit/d3763998c2d98f50b9ed73e383b27219d8ff81d9))
+
 ## [0.2.1](https://github.com/bjstabi/otel-html/compare/otel-html-v0.2.0...otel-html-v0.2.1) (2026-11-02)
 
 
