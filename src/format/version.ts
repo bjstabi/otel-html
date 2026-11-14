@@ -3,7 +3,7 @@
  * may also hold rollup files, a file may state `timeEndMax`, and the config may state `viewer.defaultWindow`.
  * Format 4 (the same without those) is no longer read.
  */
-export const PARTITION_FORMAT_VERSION = 5;
+export const PARTITION_FORMAT_VERSION = 6;
 /** The partition formats this otel-html reads. */
 export const READABLE_PARTITION_FORMATS = [5, 6] as const;
 /**

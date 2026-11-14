@@ -61,7 +61,8 @@ describe('create -> add -> close', () => {
     expect(summary.totals).toEqual({ spans: 2_000, logs: 0, metrics: 0 });
     const m = manifestOf(w, OUT);
     expect(m.complete).toBe(true);
-    expect(m.epochUnixNano).toBe(EPOCH_NS);
+    // Format 6 stores no epoch: a reader's anchor is the range start (Task 8 reworks the session's own anchor).
+    expect(m.epochUnixNano).toBe(m.range?.start);
     expect(m.totals.spans).toBe(2_000);
     expect(summary.chunks).toBe(m.partitions.length);
     expect(summary.bytes).toBe(
@@ -220,7 +221,7 @@ describe('epoch', () => {
     await s.add(otlp(spansRequest(1, 0, 1)), 'b.json');
     await s.close();
     const m = manifestOf(w, OUT);
-    expect(m.epochUnixNano).toBe(String(BigInt(EPOCH_NS) + 1_000n));
+    expect(m.epochUnixNano).toBe(m.range?.start);
     expect(
       allSpans(w, OUT)
         .map((x) => cell(x, 'start_time_unix_nano'))

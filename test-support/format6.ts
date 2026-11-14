@@ -110,7 +110,11 @@ export async function withServiceShare(
     const arrow = tableFromIPC(readParquet(await readFile(`${dir}/${traces.path}`)).intoIPCStream());
     const column = arrow.getChild('trace_id');
     const cells = Array.from({ length: arrow.numRows }, (_, i) => shares.get(String(column?.get(i))) ?? null);
-    const named = Object.fromEntries(arrow.schema.fields.map((f) => [f.name, arrow.getChild(f.name)]));
+    const named = Object.fromEntries(
+      arrow.schema.fields
+        .filter((f) => f.name !== SERVICE_SHARE_COLUMN.name)
+        .map((f) => [f.name, arrow.getChild(f.name)]),
+    );
     const withColumn = new ArrowTable({
       ...(named as Record<string, Vector>),
       [SERVICE_SHARE_COLUMN.name]: vectorFromArray(cells, new Utf8()),
@@ -151,4 +155,52 @@ export async function format6Fixture(
     }
   }
   return { manifest, files, epoch: manifestAnchor(manifest), dir: report.dir, close: report.close };
+}
+
+/** A traces file's bytes without its `service_share` column (what a format-5 flush wrote). */
+export function withoutServiceShare(bytes: Uint8Array): Uint8Array {
+  ensureParquetWasm();
+  const arrow = tableFromIPC(readParquet(bytes).intoIPCStream());
+  const named = Object.fromEntries(
+    arrow.schema.fields
+      .filter((f) => f.name !== SERVICE_SHARE_COLUMN.name)
+      .map((f) => [f.name, arrow.getChild(f.name)]),
+  );
+  return writeParquet(
+    WasmTable.fromIPCStream(tableToIPC(new ArrowTable(named as Record<string, Vector>), 'stream')),
+    writerProperties({ rowGroupRows: 1000 }),
+  );
+}
+
+/** `manifest` as the format 5 a writer wrote before format 6: `epochUnixNano` as given, no `serviceShare`, traces `sizes` from `bytesOf`. */
+export function asFormat5Manifest(
+  manifest: ManifestV4,
+  epochUnixNano: string,
+  bytesOf: (path: string) => number,
+): ManifestV4 {
+  const partitions = manifest.partitions.map((entry) => {
+    const { traces } = entry.files;
+    if (traces === undefined) return entry;
+    const { serviceShare: _dropped, ...kept } = traces;
+    return { ...entry, files: { ...entry.files, traces: { ...kept, bytes: bytesOf(traces.path) } } };
+  });
+  return { ...manifest, formatVersion: 5, epochUnixNano, partitions };
+}
+
+/**
+ * The test stand-in for a format-5 report: every traces file of `dir` rewritten without its `service_share` column,
+ * `serviceShare` dropped from the listing, and the manifest written as format 5 with the epoch `manifest` carries.
+ */
+export async function asFormat5(dir: string, manifest: ManifestV4): Promise<ManifestV4> {
+  const sizes = new Map<string, number>();
+  for (const entry of manifest.partitions) {
+    const { traces } = entry.files;
+    if (traces === undefined) continue;
+    const bytes = withoutServiceShare(await readFile(`${dir}/${traces.path}`));
+    await writeFile(`${dir}/${traces.path}`, bytes);
+    sizes.set(traces.path, bytes.length);
+  }
+  const out = asFormat5Manifest(manifest, manifest.epochUnixNano, (p) => sizes.get(p) ?? 0);
+  await writeFile(`${dir}/data/manifest.js`, wrapDataFile(MANIFEST_KEY, out));
+  return out;
 }

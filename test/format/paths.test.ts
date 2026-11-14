@@ -16,7 +16,7 @@ import {
 
 describe('partition paths', () => {
   test('versions', () => {
-    expect(PARTITION_FORMAT_VERSION).toBe(5);
+    expect(PARTITION_FORMAT_VERSION).toBe(6);
     expect(CHUNK_READABLE_FORMAT_VERSIONS).toEqual([1, 2, 3]);
     expect(READABLE_FORMAT_VERSIONS).toEqual([1, 2, 3, 5, 6]);
   });

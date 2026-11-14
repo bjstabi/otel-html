@@ -4,10 +4,12 @@ import { ENGINE_VERSION } from '../src/format/engine.js';
 import { isPartitioned, type ManifestV4, parseAnyManifest } from '../src/format/manifest.js';
 import { TABLES } from '../src/format/parquet/columns.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
+import { parseAnySessionState } from '../src/format/state.js';
 import type { OtlpRequest } from '../src/model/otlp-json.js';
 import { viewStatements } from '../src/query/sql/views.js';
 import { openSession } from '../src/writer/session.js';
 import { openTestDb, type TestDb } from './duckdb-node.js';
+import { asFormat5Manifest, withoutServiceShare } from './format6.js';
 import { span, traceRequest } from './otlp-builders.js';
 import { createTestWriter, EPOCH_NS, otlp, testConfig } from './writer-deps.js';
 
@@ -38,14 +40,33 @@ export async function buildFormat4Report(
   if (text === undefined) throw new Error('no manifest');
   const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
   if (!isPartitioned(manifest)) throw new Error('not a partition manifest');
+  // The fixture stays the format-5 shape these tests were written against: no stored share, the session's epoch.
+  // `format6Fixture` (format6.ts) turns it into a format-6 one.
   const files = new Map<string, Uint8Array>();
   for (const partition of manifest.partitions) {
     for (const table of TABLES) {
       const file = partition.files[table];
-      if (file !== undefined) files.set(file.path, await w.fs.readBytes(`${OUT}/${file.path}`));
+      if (file === undefined) continue;
+      const bytes = await w.fs.readBytes(`${OUT}/${file.path}`);
+      files.set(file.path, table === 'traces' ? withoutServiceShare(bytes) : bytes);
     }
   }
-  return { manifest, files, epoch: BigInt(manifest.epochUnixNano) };
+  const epoch = sessionEpoch(w.fs.snapshot()) ?? BigInt(manifest.epochUnixNano);
+  const sized = asFormat5Manifest(manifest, epoch.toString(), (p) => files.get(p)?.length ?? 0);
+  return { manifest: sized, files, epoch };
+}
+
+/** The epoch of the newest session state in a report's snapshot (format 6 no longer stores one in the manifest). */
+function sessionEpoch(snapshot: ReadonlyMap<string, string>): bigint | null {
+  let best: { checkpoint: number; epoch: bigint } | null = null;
+  for (const [path, text] of snapshot) {
+    if (!path.startsWith(`${OUT}/data/state/session.`)) continue;
+    const s = parseAnySessionState(JSON.parse(text));
+    if (s.formatVersion !== 2 || s.epochUnixNano == null) continue;
+    if (best === null || s.checkpoint > best.checkpoint)
+      best = { checkpoint: s.checkpoint, epoch: BigInt(s.epochUnixNano) };
+  }
+  return best?.epoch ?? null;
 }
 
 /** `openTestDb()` with every listed file registered under its manifest path and the views created. */

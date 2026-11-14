@@ -14,7 +14,7 @@ import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { writeManifest } from '../../src/writer/checkpoint.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { openSession } from '../../src/writer/session.js';
-import { withServiceShare } from '../../test-support/format6.js';
+import { asFormat5, withServiceShare } from '../../test-support/format6.js';
 import { createTestWriter, otlp, testConfig } from '../../test-support/writer-deps.js';
 import { spansRequest } from './helpers.js';
 
@@ -46,14 +46,16 @@ function manifestAt(out: string): {
   return { raw, manifest };
 }
 
-/** A format-5 report of one partition (spans from index `first`); with `shares` it is rewritten as format 6 with stored shares. */
+/** A report of one partition (spans from index `first`): format 6 with the flush's stored shares, or with `shares` false rewritten as format 5 without them. */
 async function report(name: string, first: number, shares: boolean): Promise<void> {
   const w = real();
   const out = join(dir, name);
   const s = await openSession(w.deps, { out, config: testConfig(cfg), mode: 'replace' });
   await s.add(otlp(spansRequest(2, 0, first)), 'in.json');
   await s.close();
-  if (shares) await withServiceShare(out, manifestAt(name).manifest);
+  const { manifest } = manifestAt(name);
+  if (shares) await withServiceShare(out, manifest);
+  else await asFormat5(out, manifest);
 }
 
 /** The input rewritten as format 6 without stored shares (an upgraded report): the manifest only. */

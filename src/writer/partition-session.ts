@@ -284,6 +284,8 @@ class PartitionSession implements WriterSession {
           rollups: r.descriptions,
           commit: () => {
             this.#drain = p.drain;
+            // A flushed partition carries the service share, which only a format-6 manifest lists.
+            this.#formatVersion = 6;
           },
         };
       },

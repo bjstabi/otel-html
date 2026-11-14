@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { batchFromRows } from '../../src/format/parquet/batch.js';
 import type { Row } from '../../src/format/parquet/rows.js';
+import { decodeServiceShare } from '../../src/format/service-share.js';
 import { traceRows as traceRowsOf } from '../../src/writer/trace-summaries.js';
 
 const traceRows = (spans: readonly Row[], logs: readonly Row[]): Row[] =>
@@ -35,6 +36,7 @@ describe('traceRows', () => {
         root_name: null,
         root_resource: null,
         log_count: 0,
+        service_share: expect.any(String),
       },
     ]);
   });
@@ -103,5 +105,35 @@ describe('traceRows', () => {
   test('a logs-only trace whose logs carry no time has null start and end', () => {
     const [row] = traceRows([], [{ trace_id: 't', time_unix_nano: null, observed_time_unix_nano: null }]);
     expect(row).toMatchObject({ start_time_unix_nano: null, end_time_unix_nano: null, log_count: 1 });
+  });
+});
+
+describe('traceRows service share', () => {
+  const shareOf = (rows: Row[]) => decodeServiceShare(String(Reflect.get(rows[0] ?? {}, 'service_share')));
+
+  test('is exclusive time per service, with a provisional copy giving way to the final one', () => {
+    const attrs = (provisional: boolean) => JSON.stringify({ 'otel_html.ci.provisional': provisional });
+    const rows = traceRows(
+      [
+        span('t', 'r', 0n, 100n, { parent_span_id: null, service_name: 'a', duration_ns: 100n }),
+        span('t', 'c', 10n, 40n, { parent_span_id: 'r', service_name: 'b', duration_ns: 30n }),
+        span('t', 'c', 10n, 90n, {
+          parent_span_id: 'r',
+          service_name: 'b',
+          duration_ns: 80n,
+          attributes: attrs(true),
+        }),
+      ],
+      [],
+    );
+    expect(shareOf(rows)).toEqual([
+      { service: 'a', ns: 70n },
+      { service: 'b', ns: 30n },
+    ]);
+  });
+
+  test('a trace with only logs has an empty share', () => {
+    const rows = traceRows([], [{ trace_id: 't', time_unix_nano: 1n }]);
+    expect(shareOf(rows)).toEqual([]);
   });
 });

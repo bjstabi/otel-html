@@ -124,7 +124,8 @@ test('three inputs with the same spans are deduplicated and the earliest epoch i
   await mergeWith({ inputs: ['format-1', 'format-2', 'format-3'], out: 'm', config }, w.deps);
   const m = v4Manifest(w, 'm');
   expect(m.totals.spans).toBe(one.totals.spans);
-  expect(m.epochUnixNano).toBe(one.epochUnixNano);
+  // A conversion flushes, so the output is format 6: it stores no epoch and a reader anchors on the range start.
+  expect(m.epochUnixNano).toBe(m.range?.start);
   // Points are not deduplicated: 3 x 230.
   expect(m.totals.metrics).toBe(3 * one.totals.metrics);
   expect(one.totals.metrics).toBe(230);

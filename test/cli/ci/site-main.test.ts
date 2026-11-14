@@ -255,7 +255,7 @@ describe('placeFinishedRun in site format', () => {
 /** Makes the run report at `report` a format-4 one: its manifest says so, as a report an older otel-html wrote. */
 const asFormat4 = (report: string, assetsBase?: string): void => {
   const path = join(report, 'data/manifest.js');
-  let text = readFileSync(path, 'utf8').replace('"formatVersion":5', '"formatVersion":4');
+  let text = readFileSync(path, 'utf8').replace('"formatVersion":6', '"formatVersion":4');
   if (assetsBase !== undefined) text = text.replace(/"assetsBase":"[^"]*"/, `"assetsBase":"${assetsBase}"`);
   writeFileSync(path, text);
 };
@@ -281,7 +281,7 @@ describe('a format-4 report on the site', () => {
     expect(await publish(await runReport('b', 62), 62)).toEqual({ rolling: 'built' });
     expect(out.join('')).toMatch(/::warning::otel-html report: skipping .*runs[\\/]60/);
     expect(existsSync(join(site, 'branch/main/data/manifest.js'))).toBe(true);
-    expect(readFileSync(join(site, 'branch/main/data/manifest.js'), 'utf8')).toContain('"formatVersion":5');
+    expect(readFileSync(join(site, 'branch/main/data/manifest.js'), 'utf8')).toContain('"formatVersion":6');
     expect(existsSync(join(site, 'branch/main/index.html'))).toBe(true);
     expect(readFileSync(join(site, 'branch/main/index.html'), 'utf8')).not.toContain('url=runs/');
   });

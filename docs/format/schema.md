@@ -158,6 +158,7 @@ One row per trace seen in the partition: a summary of its spans.
 | `root_name` | Utf8 | utf8 | yes |
 | `root_resource` | Utf8 | utf8 | yes |
 | `log_count` | Int32 | int32 | yes |
+| `service_share` | Utf8 | utf8 | yes |
 
 ## Table `patterns`
 

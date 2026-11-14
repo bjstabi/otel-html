@@ -397,6 +397,7 @@ function trace(id: string, over: Row = {}): Row {
     root_name: null,
     root_resource: null,
     log_count: 0,
+    service_share: null,
     ...over,
   };
 }

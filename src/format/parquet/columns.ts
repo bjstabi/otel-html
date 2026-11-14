@@ -59,7 +59,7 @@ function col(name: string, type: ColumnType, nullable = true): ColumnDef {
 
 const required = (name: string, type: ColumnType): ColumnDef => col(name, type, false);
 
-/** Format 6: the trace's stored service share (JSON text in a utf8 column); not yet part of `TABLE_COLUMNS.traces`. */
+/** Format 6: the trace's stored service share (JSON text in a utf8 column). */
 export const SERVICE_SHARE_COLUMN: ColumnDef = col('service_share', 'utf8');
 
 const resourceAndScope = (): ColumnDef[] => [
@@ -167,6 +167,7 @@ const TRACES: readonly ColumnDef[] = [
   col('root_name', 'utf8'),
   col('root_resource', 'utf8'),
   col('log_count', 'int32'),
+  SERVICE_SHARE_COLUMN,
 ];
 
 const PATTERNS: readonly ColumnDef[] = [

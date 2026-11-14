@@ -4,6 +4,7 @@ import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { isPartitioned, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
 import { LOCK_PATH, MANIFEST_KEY } from '../../src/format/paths.js';
+import { decodeServiceShare, serviceShareOf } from '../../src/format/service-share.js';
 import { parseAnySessionState, type SessionStateV2 } from '../../src/format/state.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { writeManifest, writeStateSlotV2 } from '../../src/writer/checkpoint.js';
@@ -89,7 +90,7 @@ describe('PartitionSession', () => {
     await s.add(logs(2), 'b.json');
     await s.flush();
     const m = manifest(w);
-    expect(m.formatVersion).toBe(5);
+    expect(m.formatVersion).toBe(6);
     expect(m.partitions).toHaveLength(1);
     expect(m.partitions[0]?.source).toBe('flush:0');
     expect(m.partitions[0]?.files.spans?.rows).toBe(3);
@@ -455,7 +456,7 @@ describe('format mismatches', () => {
     await s.close();
     const path = `${OUT}/data/manifest.js`;
     const text = w.fs.snapshot().get(path) ?? '';
-    await w.fs.writeTextAtomic(path, text.replace('"formatVersion":5', '"formatVersion":4'));
+    await w.fs.writeTextAtomic(path, text.replace('"formatVersion":6', '"formatVersion":4'));
     for (const mode of ['open', 'append'] as const) {
       const e = await failure(open(w, cfg(), mode));
       expect(e.code).toBe('version-mismatch');
@@ -519,7 +520,7 @@ describe('format mismatches', () => {
     const s = await open(w);
     await s.add(spans(1, 0, 2), 'a.json');
     await s.close();
-    expect(manifest(w).formatVersion).toBe(5);
+    expect(manifest(w).formatVersion).toBe(6);
     expect([...w.fs.snapshot().keys()].some((k) => k.includes('data/chunks/spans/0'))).toBe(false);
   });
 });
@@ -549,6 +550,45 @@ describe('trace summaries per partition', () => {
     expect(file?.path).toBe('data/partitions/000000/traces.parquet');
     expect(file?.rows).toBe(3);
     expect((await traceIds(w, 0)).sort()).toEqual([traceIdOf(0), traceIdOf(1), traceIdOf(7)].sort());
+    await s.close();
+  });
+
+  test("a flushed partition is format 6 and stores each trace's service share", async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(spans(3), 'a.json');
+    await s.add(otlp(logsRequest([logRecord({ traceId: traceIdOf(9) })])), 'l.json');
+    await s.flush();
+    const m = manifest(w);
+    expect(m.formatVersion).toBe(6);
+    expect(m.partitions[0]?.files.traces?.serviceShare).toBe(true);
+    const dir = `${OUT}/data/partitions/000000`;
+    const spanRows = decodeTable('spans', await w.fs.readBytes(`${dir}/spans.parquet`));
+    const traces = decodeTable('traces', await w.fs.readBytes(`${dir}/traces.parquet`));
+    expect(traces).toHaveLength(4);
+    const big = (r: unknown, k: string): bigint => BigInt(Reflect.get(r as object, k) as bigint);
+    for (const t of traces) {
+      const id = String(Reflect.get(t, 'trace_id'));
+      const mine = spanRows.filter((r) => Reflect.get(r, 'trace_id') === id);
+      const starts = mine
+        .map((r) => big(r, 'start_time_unix_nano'))
+        .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      const origin = starts[0] ?? 0n;
+      const expected = serviceShareOf(
+        mine.map((r) => ({
+          spanId: String(Reflect.get(r, 'span_id')),
+          parentId: (Reflect.get(r, 'parent_span_id') as string | null) ?? null,
+          service: String(Reflect.get(r, 'service_name') ?? ''),
+          start: Number(big(r, 'start_time_unix_nano') - origin),
+          end: Number(big(r, 'end_time_unix_nano') - origin),
+          durationNs: Number(big(r, 'duration_ns')),
+          provisional: false,
+        })),
+      );
+      const stored = decodeServiceShare(String(Reflect.get(t, 'service_share')));
+      expect(stored).toEqual(expected);
+      if (mine.length === 0) expect(stored).toEqual([]);
+    }
     await s.close();
   });
 

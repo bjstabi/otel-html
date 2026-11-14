@@ -13,7 +13,6 @@ import {
 import { ROLLUP_OF, TABLES } from '../../format/parquet/columns.js';
 import { statisticsKeysFor } from '../../format/parquet/stats.js';
 import { MANIFEST_KEY, MANIFEST_PATH, partitionFilePath } from '../../format/paths.js';
-import { PARTITION_FORMAT_VERSION } from '../../format/version.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import { renderIndexHtml } from '../../writer/html.js';
 import type { FileSystem } from '../../writer/ports.js';
@@ -38,13 +37,13 @@ export interface NewManifestOptions {
   version: string;
 }
 
-/** An empty, `complete: false` format-5 manifest in `site` format with `statisticsKeysFor` each table from `config`. */
+/** An empty, `complete: false` format-5 manifest (it becomes format 6 when a partition with a stored share is added) in `site` format with `statisticsKeysFor` each table from `config`. */
 export function newRunManifest(o: NewManifestOptions): ManifestV4 {
   const statisticsKeys = Object.fromEntries(
     TABLES.map((t) => [t, statisticsKeysFor(t, o.config)]),
   ) as StatisticsKeys;
   return {
-    formatVersion: PARTITION_FORMAT_VERSION,
+    formatVersion: 5,
     otelHtmlVersion: o.version,
     title: o.title,
     epochUnixNano: o.epochUnixNano,

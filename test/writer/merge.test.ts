@@ -226,7 +226,7 @@ describe('mergeReports', () => {
     await writeReport(w, 'a', [spansRequest(1)]);
     await copyFrozenReport(w, 'b', 'format-1');
     await merge(w, ['a', 'b']);
-    expect(manifestOf(w, 'out').formatVersion).toBe(5);
+    expect(manifestOf(w, 'out').formatVersion).toBe(6);
   });
 
   test('a manifest without a usable formatVersion is an invalid report', async () => {

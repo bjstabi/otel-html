@@ -167,6 +167,7 @@ export class PartitionWriter {
           ...fileStatistics(table, batch, this.#opts.statisticsKeys[table], this.#opts.facetValueCap),
           ...(hasTimeEndMax(table) ? { timeEndMax: timeEndMaxOf(batch) } : {}),
           ...(rollup === undefined ? {} : { rollup }),
+          ...(table === 'traces' ? { serviceShare: true as const } : {}),
         };
       }
       derived?.commit?.(); // before the number advances: a throw here leaves the cut retryable

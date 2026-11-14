@@ -465,7 +465,8 @@ describe('an empty format-4 input', () => {
     const v3 = await chunksInput(w, 'v3');
     await mergeWith({ inputs: ['e', 'v3'], out: 'm', config: cfg('site') }, w.deps);
     const m = v4Manifest(w, 'm');
-    expect(m.epochUnixNano).toBe(v3.epochUnixNano);
+    // The conversion flushes: format 6 stores no epoch, a reader anchors on the range start.
+    expect(m.epochUnixNano).toBe(m.range?.start);
     expect(m.totals.spans).toBe(v3.totals.spans);
   });
 
