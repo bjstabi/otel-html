@@ -110,9 +110,9 @@ const expectConfigured = async (page: Page, host: Locator): Promise<void> => {
   await expect(toggle(page, 'Split')).toHaveAttribute('aria-pressed', 'true');
   await expect(toggle(page, 'Legend')).toHaveAttribute('aria-pressed', 'false');
   await expect.poll(async () => (await readRunChart(host)).grids.length).toBe(RUN_CHART_JOBS.length);
-  const r = await readRunChart(host);
-  expect(r.lines).toHaveLength(RUN_CHART_JOBS.length);
-  expect(runsInZoom(r)).toEqual([...Array(RUNS).keys()]);
+  // A new window's chart replaces the old one when its query returns: wait for it rather than read the old chart.
+  await expect.poll(async () => runsInZoom(await readRunChart(host))).toEqual([...Array(RUNS).keys()]);
+  expect((await readRunChart(host)).lines).toHaveLength(RUN_CHART_JOBS.length);
   await expect(toggle(page, 'Reset')).toBeDisabled();
 };
 
@@ -466,6 +466,8 @@ test("the dashboard window's change clears the zoom", async ({ page, reportUrl }
   await zoomPastOldest(page, host);
   await expect(toggle(page, 'Reset')).toBeEnabled();
   await page.getByRole('button', { name: '1h', exact: true }).click();
+  // The card drops its zoom when a result for another window arrives: let the 1h chart arrive before going back.
+  await expect.poll(async () => (await readRunChart(host)).lines[0]?.xs.length).toBeLessThan(RUNS);
   await page.getByRole('button', { name: 'Entire run', exact: true }).click();
   await expectConfigured(page, hostOf(page));
 });
