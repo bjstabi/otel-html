@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/bjstabi/otel-html/compare/otel-html-v0.4.0...otel-html-v0.4.1) (2026-11-14)
+
+
+### Performance
+
+* **viewer:** metric run queries read only their runs' files ([#313](https://github.com/bjstabi/otel-html/issues/313)) ([3bf4f24](https://github.com/bjstabi/otel-html/commit/3bf4f241a312fd814b4993b0f24ab5762dcaa8b2))
+
 ## [0.4.0](https://github.com/bjstabi/otel-html/compare/otel-html-v0.3.1...otel-html-v0.4.0) (2026-11-14)
 
 
