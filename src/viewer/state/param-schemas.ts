@@ -2,10 +2,14 @@ import { z } from 'zod';
 import { parseTraceId, type TraceId } from '../../model/ids.js';
 
 export const T_FORMAT: RegExp = /^(\d+)~(\d+)$/;
-const MAX_INT64 = 2n ** 63n - 1n;
+/**
+ * The largest window value a URL may carry: the largest double below 2^63. A value up to it parses (`Number`) to at most
+ * itself, so the formatter's int64 check holds for every window read from a URL, with room for an anchor's rounding.
+ */
+export const MAX_T = 2n ** 63n - 1024n;
 
 /**
- * Whether the window text has start <= end and an end within an int64 (a window relative to the epoch in format 5, unix
+ * Whether the window text has start <= end and an end within `MAX_T` (a window relative to the epoch in format 5, unix
  * nanoseconds in format 6).
  */
 export function tRange(s: string): boolean {
@@ -13,10 +17,10 @@ export function tRange(s: string): boolean {
   if (m === null) return true; // the regex check reports the format problem
   const a = BigInt(m[1] ?? '');
   const b = BigInt(m[2] ?? '');
-  return a <= b && b <= MAX_INT64;
+  return a <= b && b <= MAX_T;
 }
 
-const RANGE_MESSAGE = `<start>~<end> with start <= end and values <= ${MAX_INT64}`;
+const RANGE_MESSAGE = `<start>~<end> with start <= end and values <= ${MAX_T}`;
 
 /** The `<start>~<end>` window text, shared by the `t` key and the dashboard's `sel.t`, relative to the epoch (format 5) or unix nanoseconds (format 6). */
 export function windowTextSchema(): z.ZodType<string> {

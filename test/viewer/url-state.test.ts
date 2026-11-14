@@ -39,7 +39,7 @@ describe('parseUrlState', () => {
     const r = parseUrlState('t=0~9223372036854775808');
     expect(r.state).toEqual({});
     expect(r.errors).toEqual([
-      't: expected <start>~<end> with start <= end and values <= 9223372036854775807, got 0~9223372036854775808',
+      't: expected <start>~<end> with start <= end and values <= 9223372036854774784, got 0~9223372036854775808',
     ]);
     expect(parseUrlState('t=5~4').errors).toHaveLength(1);
     expect(parseUrlState('t=9007199254740991~9007199254740991').state).toEqual({
@@ -147,7 +147,7 @@ describe('absolute windows (format 6)', () => {
     expect(parseUrlState(abs).state.t).toBe('1700000000000000010~1700000000000000020');
     const over = 't=1~9223372036854775808';
     expect(parseUrlState(over).errors).toEqual([
-      `t: expected <start>~<end> with start <= end and values <= ${2n ** 63n - 1n}, got ${over.slice(2)}`,
+      `t: expected <start>~<end> with start <= end and values <= ${2n ** 63n - 1024n}, got ${over.slice(2)}`,
     ]);
     expect(parseUrlState(over).errors).toHaveLength(1);
     expect(parseUrlState('t=10~20').state.t).toBe('10~20');
@@ -263,5 +263,19 @@ describe('t=all and the default window', () => {
     expect(windowFromParam('all', d)).toBeNull();
     expect(windowFromParam('all', null)).toBeNull();
     expect(windowFromParam('1~2', d)).toEqual({ start: 1, end: 2 });
+  });
+});
+
+describe('window values at the top of the int64 range', () => {
+  const top = 2n ** 63n - 1024n;
+  test('the largest accepted end parses and formats back unchanged, relative and absolute', () => {
+    const w = parseWindow(`0~${top}`);
+    expect(formatWindow(w)).toBe(`0~${top}`);
+    const anchor = 1_700_000_000_000_000_000n;
+    const abs = parseWindow(`${anchor}~${top}`, anchor);
+    expect(() => formatWindow(abs, anchor)).not.toThrow();
+  });
+  test('an end above it is refused at parse, before it can reach the formatter', () => {
+    expect(() => parseWindow(`0~${2n ** 63n - 1n}`)).toThrow();
   });
 });

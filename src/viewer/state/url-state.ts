@@ -10,7 +10,7 @@ import { LOG_TAB_IDS } from '../logs/tabs.js';
 import { TRACE_TAB_IDS } from '../traces/tabs.js';
 import { DashboardPageStateSchema, parseDashboardParam } from './dashboard-state.js';
 import { parseMetricParam } from './metric-state.js';
-import { T_ALL, T_FORMAT, TraceIdParamSchema, tRange, WindowParamSchema } from './param-schemas.js';
+import { MAX_T, T_ALL, T_FORMAT, TraceIdParamSchema, tRange, WindowParamSchema } from './param-schemas.js';
 
 const MAX_INT64 = 2n ** 63n - 1n;
 const LOG_FORMAT = /^\d+\.\d+$/;
@@ -148,7 +148,7 @@ export function parseWindow(t: string, anchor?: bigint): TimeWindow {
       path: 'window',
       expected:
         anchor === undefined
-          ? `<start>~<end> in nanoseconds, start <= end, values <= ${MAX_INT64}`
+          ? `<start>~<end> in nanoseconds, start <= end, values <= ${MAX_T}`
           : '<start>~<end> in unix nanoseconds, start <= end',
       actual: JSON.stringify(t),
     });
