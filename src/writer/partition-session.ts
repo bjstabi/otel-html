@@ -1063,7 +1063,16 @@ class PartitionSession implements WriterSession {
             this.#deps.fs,
             this.#out,
             [...picks].sort((a, b) => a.n - b.n),
-          ).catch(() => undefined)
+          ).catch((error: unknown) => {
+            // each group then keeps its own latest template: the Patterns page may show a pattern once per template
+            this.#deps.logger.warn(
+              'could not read the patterns to share templates across compaction groups',
+              {
+                error: error instanceof Error ? error.message : String(error),
+              },
+            );
+            return undefined;
+          })
         : undefined;
     for (const group of groups) {
       const members = group.map((g) => g.entry).sort((a, b) => a.n - b.n);
