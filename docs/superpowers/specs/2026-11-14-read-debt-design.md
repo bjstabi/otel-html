@@ -169,6 +169,13 @@ to #307.
 3. **The summary's quantiles join the catalogue's load** (§5.1) instead of following the window: no answer changes,
    and the cost moves into a read every metrics page already makes.
 
+4. **Format 4 is dropped first** (added 2026-11-14 after the approval above). There are no external users, so
+   compatibility is kept for the previous format only. It is needed because jobs push run updates through the
+   released actions while the deployer runs `main`. The plan's PR 0 makes `main` read format 5 only. The deployer
+   then skips the 18 retained format-4 runs, so the rolling report loses 10–13 November and most of #307's cost at
+   the next deploy. PR 2 reads 5 and 6; format 5 support can go once format 6 is released and the format-5 runs have
+   aged out.
+
 PR 1 needs none of these and can go first.
 
 ## 7. Left to the builder
