@@ -68,7 +68,6 @@ describe.each([
   ['format-1', 1],
   ['format-2', 2],
   ['format-3', 3],
-  ['format-4', 4],
   ['format-5', 5],
 ])('the viewer opens frozen %s after merge', (name, version) => {
   test('reads the totals and one trace', async () => {
@@ -148,10 +147,7 @@ async function openAsWritten(name: string) {
   };
 }
 
-describe.each([
-  ['format-4', 4],
-  ['format-5', 5],
-])('the viewer opens the frozen %s report as written', (name, version) => {
+describe.each([['format-5', 5]])('the viewer opens the frozen %s report as written', (name, version) => {
   test('its manifest and .parquet.js wrappers are read directly, as after `otel-html upgrade` of a local report', async () => {
     const r = await openAsWritten(name);
     try {
@@ -187,16 +183,6 @@ test('the frozen format-5 report opens and its checksums hold', async () => {
     expect(await r.count('span_rollups')).toBeGreaterThan(0);
     expect(await r.count('log_rollups')).toBe(0);
     expect((await r.ds.querySpans(query({}))).total).toBe(1228);
-  } finally {
-    await r.close();
-  }
-});
-
-test('the frozen format-4 report still opens, with empty rollup views', async () => {
-  const r = await openAsWritten('format-4');
-  try {
-    expect(await r.count('span_rollups')).toBe(0);
-    expect(await r.count('log_rollups')).toBe(0);
   } finally {
     await r.close();
   }

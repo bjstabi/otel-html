@@ -112,20 +112,16 @@ function entryFrom(
   dir: string,
   keys: StatisticsKeys,
   copies: FileMove[],
-  format: ManifestV4['formatVersion'],
 ): PartitionEntry {
   const files: PartitionEntry['files'] = {};
   for (const t of TABLES) {
     const f = p.files[t];
     if (f === undefined) continue;
-    // A format-4 run report lists no rollup file and no format-5 field; the files are not copied either.
-    if (format === 4 && (t === 'span_rollups' || t === 'log_rollups')) continue;
     const values: PartitionFile['values'] = {};
     // A key the job did not compute stays absent ("not computed"); the merge computes it. `null` is "over the cap".
     for (const k of keys[t] ?? []) if (f.values[k] !== undefined) values[k] = f.values[k];
     const to = partitionFilePath(n, t);
-    const { timeEndMax: _end, rollup: _rollup, ...v4 } = f;
-    files[t] = format === 4 ? { ...v4, path: to, values } : { ...f, path: to, values };
+    files[t] = { ...f, path: to, values };
     copies.push({ fromDir: dir, from: f.path, to });
   }
   return { n, source: p.source, files };
@@ -227,9 +223,7 @@ export function planSync(input: SyncInput): SyncPlan {
           .flatMap((u) => listing(u.update).map((l) => ({ dir: u.dir, p: l.p })))
           .find((c) => c.p.source === p.source && c.p.carried);
     if (carrier === undefined) return none('pending');
-    added.push(
-      entryFrom(next++, carrier.p, carrier.dir, manifest.statisticsKeys, copies, manifest.formatVersion),
-    );
+    added.push(entryFrom(next++, carrier.p, carrier.dir, manifest.statisticsKeys, copies));
   }
 
   const dropped = manifest.partitions.filter((e) => dropSources.has(e.source) && !kept.has(e.source));
@@ -309,7 +303,6 @@ export async function readRunManifest(fs: FileSystem, dir: string): Promise<Mani
   const path = `${dir}/${MANIFEST_PATH}`;
   if (!(await fs.exists(path))) return null;
   const m = parseAnyManifest(reviveDataJson(unwrapDataFile(await fs.readText(path), MANIFEST_KEY)));
-  if (!isPartitioned(m))
-    throw new OtelHtmlError('invalid-report', { path, expected: 'a format 4 or 5 manifest' });
+  if (!isPartitioned(m)) throw new OtelHtmlError('invalid-report', { path, expected: 'a format 5 manifest' });
   return m;
 }

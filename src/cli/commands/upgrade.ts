@@ -11,14 +11,11 @@ export function addUpgradeCommand(program: Command, io: CliIo, deps: Partial<Wri
     .description("rewrite a report's viewer with this version's, leaving its data alone")
     .argument('<report>', 'report folder')
     .addOption(
-      new Option('--format <format>', 'format-4 report: switch it to local or site').choices([
-        'local',
-        'site',
-      ]),
+      new Option('--format <format>', 'a report: switch it to local or site').choices(['local', 'site']),
     )
     .option(
       '--assets-base <path>',
-      'format-4 report: load the viewer files from assets/ or a relative path like ../../assets/0.3.0/',
+      'a report: load the viewer files from assets/ or a relative path like ../../assets/0.3.0/',
     )
     .action(async (report: string, flags: { format?: 'local' | 'site'; assetsBase?: string }) => {
       const { formatVersion } = await upgradeReport(await resolveDeps(deps), report, {

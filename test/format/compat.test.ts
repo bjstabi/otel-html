@@ -32,7 +32,6 @@ describe.each([
   ['format-1', 1],
   ['format-2', 2],
   ['format-3', 3],
-  ['format-4', 4],
   ['format-5', 5],
 ])('%s', (name, version) => {
   test('merge reads it and the totals survive', async () => {

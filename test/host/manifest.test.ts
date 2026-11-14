@@ -2,6 +2,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { oldFormatMessage } from '../../src/format/version.js';
 import { readHostManifest } from '../../src/host/manifest.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
@@ -29,7 +30,7 @@ async function failure(p: Promise<unknown>): Promise<OtelHtmlError> {
 }
 
 describe('readHostManifest', () => {
-  it('reads a format-4 report: the manifest, its script text and the partition bytes', async () => {
+  it('reads a format-5 report: the manifest, its script text and the partition bytes', async () => {
     const fixture = await buildFormat4Report([spansOnlyRequest(3), spansOnlyRequest(2)], { close: false });
     const report = await writeReportDir(fixture);
     cleanups.push(report.close);
@@ -61,6 +62,18 @@ describe('readHostManifest', () => {
     expect(e.code).toBe('invalid-report');
     expect(e.path).toBe('manifest.formatVersion');
     expect(e.actual).toBe('6');
+  });
+
+  it('a format-4 report is invalid-report with the old-format message', async () => {
+    const fixture = await buildFormat4Report([spansOnlyRequest(2)], { close: false });
+    const report = await writeReportDir(fixture);
+    cleanups.push(report.close);
+    const path = join(report.dir, 'data/manifest.js');
+    const text = await readFile(path, 'utf8');
+    await writeFile(path, text.replace('"formatVersion":5', '"formatVersion":4'));
+    const e = await failure(readHostManifest(createNodeFileSystem(), report.dir));
+    expect(e.code).toBe('invalid-report');
+    expect(e.message).toBe(oldFormatMessage(4));
   });
 
   it('a format-3 report is invalid-report with the merge hint', async () => {

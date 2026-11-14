@@ -30,7 +30,7 @@ export async function writeManifest(fs: FileSystem, out: string, manifest: AnyMa
   await fs.writeTextAtomic(at(out, MANIFEST_PATH), wrapDataFile(MANIFEST_KEY, manifest));
 }
 
-/** The format-4 state is small (no rollups, no trace index): one atomic write. */
+/** The format-5 state is small (no rollups, no trace index): one atomic write. */
 export async function writeStateSlotV2(
   fs: FileSystem,
   out: string,
@@ -112,7 +112,7 @@ async function pickState<S extends { otelHtmlVersion: string }>(
 }
 
 /**
- * Loads the committed format-4 manifest and the state checkpoint that matches it. The matching state is the one whose `nextPartition` follows the
+ * Loads the committed format-5 manifest and the state checkpoint that matches it. The matching state is the one whose `nextPartition` follows the
  * manifest's last partition (0 with none) and whose epoch equals the manifest's: after a crash between the state
  * write and the manifest commit, the state that ran ahead lists a partition the manifest does not, and the other
  * slot is picked. When both slots match (an append after a close that wrote no data, then a crash), the one with the

@@ -22,6 +22,7 @@ import { describe, parseWith } from './validate.js';
 import {
   CHUNK_READABLE_FORMAT_VERSIONS,
   type FormatVersion,
+  oldFormatMessage,
   READABLE_FORMAT_VERSIONS,
   READABLE_PARTITION_FORMATS,
 } from './version.js';
@@ -86,22 +87,14 @@ const ConfigSchema = z.strictObject({
   views: ViewListShapeSchema.default([]),
 });
 
-/** The v4 config: no `eagerBudgetBytes` (the format-4 viewer has no eager mode). */
-const ConfigSchemaV4 = z.strictObject({
+/** The partition config (format 5): no `eagerBudgetBytes` (the partition viewer has no eager mode). */
+const ConfigSchemaV5 = z.strictObject({
   viewer: z.strictObject({
     ...viewerShape,
     // The writer's facet caps, which the viewer applies to its facet results; absent in a report that predates them.
     facetValueCap: z.exactOptional(z.number().int().positive()),
     facetKeyCap: z.exactOptional(z.number().int().positive()),
-  }),
-  dashboards: ConfigSchema.shape.dashboards,
-  views: ConfigSchema.shape.views,
-});
-
-/** The v5 config: the v4 one, and the viewer may state `defaultWindow`. */
-const ConfigSchemaV5 = z.strictObject({
-  viewer: z.strictObject({
-    ...ConfigSchemaV4.shape.viewer.shape,
+    // The default time window of the landing pages (a duration like 7d).
     defaultWindow: z.exactOptional(z.string().regex(/^[1-9][0-9]*(m|h|d)$/, 'a window like 7d, 90m or 1h')),
   }),
   dashboards: ConfigSchema.shape.dashboards,
@@ -193,7 +186,7 @@ export interface PartitionFile extends FileStatistics {
   rollup?: RollupDescription;
 }
 
-/** Format 4 lists the five base tables; format 5 may also list the two rollup tables. */
+/** The five base tables are always listed; the two rollup tables only when the report has rollups. */
 export type StatisticsKeys = Record<Exclude<Table, RollupTable>, string[]> &
   Partial<Record<RollupTable, string[]>>;
 
@@ -204,7 +197,7 @@ export interface PartitionEntry {
 }
 
 export interface ManifestV4 {
-  /** 4 or 5; the name stays, and the format-5 additions are optional and absent in format 4. */
+  /** 5; the type keeps its name from format 4. */
   formatVersion: (typeof READABLE_PARTITION_FORMATS)[number];
   otelHtmlVersion: string;
   title: string;
@@ -259,7 +252,7 @@ const PartitionFileShape = {
   values: z.record(z.string(), z.array(z.string()).nullable()),
 };
 
-/** A format-4 file entry; also the format-5 entry of every table that has no format-5 field. */
+/** A partition file entry without a format-5 field; the entry of every table that has none. */
 export const PartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject(PartitionFileShape);
 
 const RollupDescriptionSchema: z.ZodType<RollupDescription> = z.strictObject({
@@ -346,25 +339,7 @@ const partitionEntry = <F extends z.ZodType>(files: F) =>
     }),
   );
 
-const ManifestV4Schema: z.ZodType<ManifestV4> = z
-  .strictObject({
-    formatVersion: z.literal(4),
-    ...ManifestShape,
-    partitions: partitionEntry(
-      z.strictObject({
-        spans: z.exactOptional(PartitionFileSchema),
-        logs: z.exactOptional(PartitionFileSchema),
-        points: z.exactOptional(PartitionFileSchema),
-        traces: z.exactOptional(PartitionFileSchema),
-        patterns: z.exactOptional(PartitionFileSchema),
-      }),
-    ),
-    statisticsKeys: tableKeyed(z.array(z.string())),
-    config: ConfigSchemaV4,
-  })
-  .superRefine(refineManifest);
-
-/** Format 5: the format-4 body, plus `timeEndMax`, rollup files and statistics keys, and `viewer.defaultWindow`. */
+/** Format 5: Parquet partitions; `timeEndMax`, rollup files and their statistics keys and `viewer.defaultWindow` are optional. */
 export const ManifestV5Schema: z.ZodType<ManifestV4> = z
   .strictObject({
     formatVersion: z.literal(5),
@@ -389,24 +364,20 @@ export const ManifestV5Schema: z.ZodType<ManifestV4> = z
   })
   .superRefine(refineManifest);
 
-function parseManifestV4(input: unknown): ManifestV4 {
-  return parseWith(ManifestV4Schema, input, 'manifest');
-}
-
 function parseManifestV5(input: unknown): ManifestV4 {
   return parseWith(ManifestV5Schema, input, 'manifest');
 }
 
-/** A partition manifest (format 4 or 5), as against a chunk manifest (formats 1 to 3). */
+/** A partition manifest (format 5), as against a chunk manifest (formats 1 to 3). */
 export function isPartitioned(m: AnyManifest): m is ManifestV4 {
   return READABLE_PARTITION_FORMATS.some((f) => f === m.formatVersion);
 }
 
-/** Dispatch on `formatVersion`: 4 and 5 are partition manifests, 1-3 a chunk manifest, anything else is invalid-report. */
+/** Dispatch on `formatVersion`: 5 is a partition manifest, 1-3 a chunk manifest; format 4 gets the D12 message, anything else is invalid-report. */
 export function parseAnyManifest(input: unknown): AnyManifest {
   const v =
     typeof input === 'object' && input !== null && 'formatVersion' in input ? input.formatVersion : undefined;
-  if (v === 4) return parseManifestV4(input);
+  if (v === 4) throw new OtelHtmlError('invalid-report', { message: oldFormatMessage(v) });
   if (v === 5) return parseManifestV5(input);
   if (CHUNK_READABLE_FORMAT_VERSIONS.some((c) => c === v)) return parseManifest(input);
   throw new OtelHtmlError('invalid-report', {

@@ -258,7 +258,7 @@ function checkLimit(limit: number): void {
 /** The newest data source made over each engine: the one whose manifest the rollup views follow. */
 const generations = new WeakMap<QueryEngine, number>();
 
-/** The format-4 data source over a query engine (D19): no Mosaic type appears here. `close()` is `engine.close()`. */
+/** The data source over a query engine (D19): no Mosaic type appears here. `close()` is `engine.close()`. */
 export function createDuckDbDataSource(opts: {
   engine: QueryEngine;
   manifest: ManifestV4;

@@ -507,22 +507,4 @@ describe('format 5 and format 4 run reports', () => {
     // The push's ci partition starts at 5 and ends at 9; the rollup's 1 and 300 are not data times.
     expect(plan.manifest.range).toEqual({ start: '5', end: '200' });
   });
-
-  test('a format-4 run report that receives a format-5 update still parses with ManifestV4Schema and has no rollup file', async () => {
-    const { span_rollups: _s, log_rollups: _l, ...keys } = (await newManifest()).statisticsKeys;
-    const v5 = await newManifest();
-    // a format-4 manifest's viewer block has no defaultWindow (the CI config states one)
-    const { defaultWindow: _w, ...viewer } = v5.config.viewer;
-    const m: ManifestV4 = { ...v5, formatVersion: 4, statisticsKeys: keys, config: { ...v5.config, viewer } };
-    const plan = sync(m, emptyRunState(1), [ju(push(1, [v5Partition()]))]);
-    expect(plan.manifest.formatVersion).toBe(4);
-    const entry = plan.manifest.partitions[0];
-    expect(entry?.files.span_rollups).toBeUndefined();
-    expect(entry?.files.spans && 'timeEndMax' in entry.files.spans).toBe(false);
-    expect(parseAnyManifest(JSON.parse(JSON.stringify(plan.manifest)))).toEqual(plan.manifest);
-    expect(plan.copies.map((c) => c.to).filter((t) => t.includes('rollup'))).toEqual([]);
-    expect(plan.manifest.partitions.flatMap((e) => TABLE_PATHS(e)).some((p) => p.includes('rollup'))).toBe(
-      false,
-    );
-  });
 });

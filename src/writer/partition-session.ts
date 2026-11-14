@@ -108,7 +108,7 @@ interface Restored {
   replacing: boolean;
 }
 
-/** The format-4 half of `openSession`: the folder checks and the drop conditions have passed already. */
+/** The format-5 half of `openSession`: the folder checks and the drop conditions have passed already. */
 export async function openPartitionSession(
   deps: WriterDeps,
   options: SessionOptions,

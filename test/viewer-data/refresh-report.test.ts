@@ -28,7 +28,7 @@ const config = {
 /** A manifest listing the given partitions, each with a spans and a logs file. */
 const manifestOf = (ns: number[], format: 'local' | 'site' = 'site'): ManifestV4 =>
   ({
-    formatVersion: 4,
+    formatVersion: 5,
     otelHtmlVersion: '0.3.0',
     title: 't',
     epochUnixNano: '1700000000000000000',
