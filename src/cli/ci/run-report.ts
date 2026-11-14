@@ -4,6 +4,7 @@ import { ENGINE_VERSION } from '../../format/engine.js';
 import {
   isPartitioned,
   type ManifestV4,
+  manifestForWrite,
   type PartitionEntry,
   type PartitionFile,
   parseAnyManifest,
@@ -290,7 +291,10 @@ export async function writeRunReport(
   manifest: ManifestV4,
 ): Promise<void> {
   await deps.fs.mkdirp(`${dir}/data`);
-  await deps.fs.writeTextAtomic(`${dir}/${MANIFEST_PATH}`, wrapDataFile(MANIFEST_KEY, manifest));
+  await deps.fs.writeTextAtomic(
+    `${dir}/${MANIFEST_PATH}`,
+    wrapDataFile(MANIFEST_KEY, manifestForWrite(manifest)),
+  );
   await deps.fs.writeTextAtomic(
     `${dir}/index.html`,
     renderIndexHtml(deps.viewerAssets.entry(), manifest.title, { assetsBase: manifest.engine.assetsBase }),

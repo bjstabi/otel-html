@@ -57,6 +57,7 @@ const PARTITION_FILE_FIELDS = {
     'format 5, `spans` and `traces` files only, optional: the largest end time, as int64 text, or null when there are no rows',
   rollup:
     'format 5, rollup tables only, required: `{ grainNs, dimensions, durationBuckets? }`, what the file groups by',
+  serviceShare: 'format 6, `traces` files only, optional: `true` when every row carries `service_share`',
 } satisfies Record<keyof PartitionFile, string>;
 
 const fieldRows = (fields: Readonly<Record<string, string>>): string =>

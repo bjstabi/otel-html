@@ -302,6 +302,7 @@ Each `partitions` entry is `{ n, source, files }`. `files` has an entry per tabl
 | `values` | maps each statistics key to its distinct values in the file, or to null when the file has more than the cap (or the table cannot answer the key) |
 | `timeEndMax` | format 5, `spans` and `traces` files only, optional: the largest end time, as int64 text, or null when there are no rows |
 | `rollup` | format 5, rollup tables only, required: `{ grainNs, dimensions, durationBuckets? }`, what the file groups by |
+| `serviceShare` | format 6, `traces` files only, optional: `true` when every row carries `service_share` |
 
 ### `source`
 

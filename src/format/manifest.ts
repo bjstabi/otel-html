@@ -184,6 +184,8 @@ export interface PartitionFile extends FileStatistics {
   timeEndMax?: string | null;
   /** Format 5, the two rollup tables only, where it is required. */
   rollup?: RollupDescription;
+  /** Format 6, the `traces` file only: its rows carry `service_share`. */
+  serviceShare?: true;
 }
 
 /** The five base tables are always listed; the two rollup tables only when the report has rollups. */
@@ -197,10 +199,11 @@ export interface PartitionEntry {
 }
 
 export interface ManifestV4 {
-  /** 5; the type keeps its name from format 4. */
+  /** 5 or 6; the type keeps its name from format 4. */
   formatVersion: (typeof READABLE_PARTITION_FORMATS)[number];
   otelHtmlVersion: string;
   title: string;
+  /** Format 5: stored. Format 6 stores none; the parse fills the anchor (`range.start`, else `createdAt` in ns). */
   epochUnixNano: string;
   createdAt: string;
   updatedAt: string;
@@ -266,12 +269,22 @@ export const TimeEndPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObje
   timeEndMax: z.exactOptional(int64Text.nullable()),
 });
 
+/** A format-6 `traces` file: `timeEndMax` and, when its rows carry `service_share`, `serviceShare: true`. */
+const ShareTracesPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
+  ...PartitionFileShape,
+  timeEndMax: z.exactOptional(int64Text.nullable()),
+  serviceShare: z.exactOptional(z.literal(true)),
+});
+
 export const RollupPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
   ...PartitionFileShape,
   rollup: RollupDescriptionSchema,
 });
 
-const refineManifest = (m: ManifestV4, ctx: z.RefinementCtx): void => {
+const refineManifest = (
+  m: Pick<ManifestV4, 'config' | 'range' | 'partitions'>,
+  ctx: z.RefinementCtx,
+): void => {
   refineConfig(m.config, ctx, []);
   if (m.range !== null && after(m.range.start, m.range.end)) {
     ctx.addIssue({
@@ -317,7 +330,6 @@ const refineManifest = (m: ManifestV4, ctx: z.RefinementCtx): void => {
 const ManifestShape = {
   otelHtmlVersion: z.string(),
   title: z.string(),
-  epochUnixNano: z.string().regex(/^[0-9]+$/, 'decimal nanoseconds'),
   createdAt: z.string(),
   updatedAt: z.string(),
   complete: z.boolean(),
@@ -339,46 +351,84 @@ const partitionEntry = <F extends z.ZodType>(files: F) =>
     }),
   );
 
+const partitionsV5 = (traces: z.ZodType<PartitionFile>) =>
+  partitionEntry(
+    z.strictObject({
+      spans: z.exactOptional(TimeEndPartitionFileSchema),
+      logs: z.exactOptional(PartitionFileSchema),
+      points: z.exactOptional(PartitionFileSchema),
+      traces: z.exactOptional(traces),
+      patterns: z.exactOptional(PartitionFileSchema),
+      span_rollups: z.exactOptional(RollupPartitionFileSchema),
+      log_rollups: z.exactOptional(RollupPartitionFileSchema),
+    }),
+  );
+
+const statisticsKeysV5 = z.strictObject({
+  ...tableKeyed(z.array(z.string())).shape,
+  span_rollups: z.exactOptional(z.array(z.string())),
+  log_rollups: z.exactOptional(z.array(z.string())),
+});
+
 /** Format 5: Parquet partitions; `timeEndMax`, rollup files and their statistics keys and `viewer.defaultWindow` are optional. */
 export const ManifestV5Schema: z.ZodType<ManifestV4> = z
   .strictObject({
     formatVersion: z.literal(5),
+    epochUnixNano: z.string().regex(/^[0-9]+$/, 'decimal nanoseconds'),
     ...ManifestShape,
-    partitions: partitionEntry(
-      z.strictObject({
-        spans: z.exactOptional(TimeEndPartitionFileSchema),
-        logs: z.exactOptional(PartitionFileSchema),
-        points: z.exactOptional(PartitionFileSchema),
-        traces: z.exactOptional(TimeEndPartitionFileSchema),
-        patterns: z.exactOptional(PartitionFileSchema),
-        span_rollups: z.exactOptional(RollupPartitionFileSchema),
-        log_rollups: z.exactOptional(RollupPartitionFileSchema),
-      }),
-    ),
-    statisticsKeys: z.strictObject({
-      ...tableKeyed(z.array(z.string())).shape,
-      span_rollups: z.exactOptional(z.array(z.string())),
-      log_rollups: z.exactOptional(z.array(z.string())),
-    }),
+    partitions: partitionsV5(TimeEndPartitionFileSchema),
+    statisticsKeys: statisticsKeysV5,
     config: ConfigSchemaV5,
   })
   .superRefine(refineManifest);
+
+/** Unix nanoseconds, as decimal text, of an ISO time. */
+const isoToUnixNano = (iso: string): string => (BigInt(Date.parse(iso)) * 1_000_000n).toString();
+
+/**
+ * Format 6: format 5 without `epochUnixNano`, and a `traces` file may state `serviceShare: true`. The parse fills
+ * `epochUnixNano` with the viewer's anchor: `range.start`, or `createdAt` in unix ns for an empty report.
+ */
+const ManifestV6Schema: z.ZodType<ManifestV4> = z
+  .strictObject({
+    formatVersion: z.literal(6),
+    ...ManifestShape,
+    createdAt: z.string().refine((t) => Number.isFinite(Date.parse(t)), 'an ISO time'),
+    partitions: partitionsV5(ShareTracesPartitionFileSchema),
+    statisticsKeys: statisticsKeysV5,
+    config: ConfigSchemaV5,
+  })
+  .superRefine(refineManifest)
+  .transform((m) => ({ ...m, epochUnixNano: m.range === null ? isoToUnixNano(m.createdAt) : m.range.start }));
+
+/** The viewer's time anchor: format 5 stores it; a parsed format 6 carries the derived value. */
+export function manifestAnchor(m: ManifestV4): bigint {
+  return BigInt(m.epochUnixNano);
+}
+
+/** What goes into `data/manifest.js`: a format-6 manifest stores no `epochUnixNano`. */
+export function manifestForWrite(m: AnyManifest): unknown {
+  if (m.formatVersion !== 6) return m;
+  const { epochUnixNano: _anchor, ...stored } = m;
+  return stored;
+}
 
 function parseManifestV5(input: unknown): ManifestV4 {
   return parseWith(ManifestV5Schema, input, 'manifest');
 }
 
-/** A partition manifest (format 5), as against a chunk manifest (formats 1 to 3). */
+/** A partition manifest (format 5 or 6), as against a chunk manifest (formats 1 to 3). */
 export function isPartitioned(m: AnyManifest): m is ManifestV4 {
   return READABLE_PARTITION_FORMATS.some((f) => f === m.formatVersion);
 }
 
-/** Dispatch on `formatVersion`: 5 is a partition manifest, 1-3 a chunk manifest; format 4 gets the D12 message, anything else is invalid-report. */
+/** Dispatch on `formatVersion`: 5 and 6 are partition manifests, 1-3 a chunk manifest; format 4 gets the D12 message, anything else is invalid-report. */
 export function parseAnyManifest(input: unknown): AnyManifest {
   const v =
     typeof input === 'object' && input !== null && 'formatVersion' in input ? input.formatVersion : undefined;
   if (v === 4) throw new OtelHtmlError('invalid-report', { message: oldFormatMessage(v) });
   if (v === 5) return parseManifestV5(input);
+  if (v === 6) return parseWith(ManifestV6Schema, input, 'manifest');
   if (CHUNK_READABLE_FORMAT_VERSIONS.some((c) => c === v)) return parseManifest(input);
   throw new OtelHtmlError('invalid-report', {
     path: 'manifest.formatVersion',

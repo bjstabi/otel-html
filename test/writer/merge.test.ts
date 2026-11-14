@@ -213,12 +213,12 @@ describe('mergeReports', () => {
     const manifest = unwrapDataFile(text, 'manifest') as Record<string, unknown>;
     await w.fs.writeTextAtomic(
       'b/data/manifest.js',
-      wrapDataFile('manifest', { ...manifest, formatVersion: 6 }),
+      wrapDataFile('manifest', { ...manifest, formatVersion: 7 }),
     );
     const e = await failure(merge(w, ['a', 'b']));
     expect(e.code).toBe('version-mismatch');
     expect(e.message).toContain('b');
-    expect(e.message).toContain('formatVersion 6');
+    expect(e.message).toContain('formatVersion 7');
   });
 
   test('merges a format-1 report: merge replays chunks, laid out alike in every readable version', async () => {

@@ -3,6 +3,8 @@ import {
   isPartitioned,
   type ManifestV4,
   ManifestV5Schema,
+  manifestAnchor,
+  manifestForWrite,
   parseAnyManifest,
   parseManifest,
   ROLLUP_GRAIN_NS,
@@ -121,7 +123,7 @@ describe('manifest format 5 (partitions)', () => {
   });
 
   test('an unknown formatVersion is invalid-report at formatVersion', () => {
-    const e = failure(() => parseAnyManifest({ ...v5(), formatVersion: 6 }));
+    const e = failure(() => parseAnyManifest({ ...v5(), formatVersion: 7 }));
     expect(e.code).toBe('invalid-report');
     expect(e.path).toBe('manifest.formatVersion');
   });
@@ -283,21 +285,83 @@ describe('manifest format 5 additions', () => {
     expect(() => parseAnyManifest(withFile(base, logsEnd))).toThrow(OtelHtmlError);
   });
 
-  test('parseAnyManifest: 5 parses, 4 fails with the old-format message, 6 with the newer-format error naming 6', () => {
+  test('parseAnyManifest: 5 parses, 4 fails with the old-format message, 6 with the newer-format error naming 7', () => {
     expect(parseAnyManifest(v5()).formatVersion).toBe(5);
     const old = failure(() => parseAnyManifest({ ...v5(), formatVersion: 4 }));
     expect(old.code).toBe('invalid-report');
     expect(old.message).toBe(oldFormatMessage(4));
     expect(old.message).toContain('format 4');
-    const e = failure(() => parseAnyManifest({ ...v5(), formatVersion: 6 }));
+    const e = failure(() => parseAnyManifest({ ...v5(), formatVersion: 7 }));
     expect(e.code).toBe('invalid-report');
     expect(e.path).toBe('manifest.formatVersion');
-    expect(e.message).toContain('6');
+    expect(e.message).toContain('7');
   });
 
   test('rollup paths are partition files', () => {
     expect(PARTITION_FILE_RE.test('data/partitions/000012/span_rollups.parquet')).toBe(true);
     expect(PARTITION_FILE_RE.test('data/partitions/000012/log_rollups.parquet')).toBe(true);
     expect(PARTITION_FILE_RE.test('data/partitions/000012/other_rollups.parquet')).toBe(false);
+  });
+});
+
+describe('manifest format 6', () => {
+  type Raw = Record<string, unknown> & {
+    partitions: { files: { spans?: Record<string, unknown>; traces?: Record<string, unknown> } }[];
+  };
+  const v6Raw = (): Raw => {
+    const { epochUnixNano: _e, ...rest } = v5();
+    const m = { ...rest, formatVersion: 6 } as unknown as Raw;
+    return m;
+  };
+  const withTraces = (extra: Record<string, unknown>): Raw => {
+    const m = v6Raw();
+    const traces = {
+      path: partitionFilePath(0, 'traces'),
+      bytes: 10,
+      rows: 1,
+      timeMin: '-5',
+      timeMax: '10',
+      values: {},
+      ...extra,
+    };
+    const parts = m.partitions;
+    return { ...m, partitions: parts.map((p, i) => (i === 0 ? { ...p, files: { ...p.files, traces } } : p)) };
+  };
+
+  test('accepts format 5 without epochUnixNano, and serviceShare on traces', () => {
+    expect(parseAnyManifest(v6Raw()).formatVersion).toBe(6);
+    const m = parseAnyManifest(withTraces({ serviceShare: true })) as ManifestV4;
+    expect(m.partitions[0]?.files.traces?.serviceShare).toBe(true);
+  });
+
+  test('rejects epochUnixNano, serviceShare on spans or false, and serviceShare under 5', () => {
+    expect(() => parseAnyManifest({ ...v6Raw(), epochUnixNano: '1' })).toThrow(OtelHtmlError);
+    expect(() => parseAnyManifest(withTraces({ serviceShare: false }))).toThrow(OtelHtmlError);
+    const m = v6Raw();
+    const parts = m.partitions;
+    const onSpans = {
+      ...m,
+      partitions: [{ ...parts[0], files: { spans: { ...parts[0]?.files.spans, serviceShare: true } } }],
+    };
+    expect(() => parseAnyManifest(onSpans)).toThrow(OtelHtmlError);
+    expect(() =>
+      parseAnyManifest({ ...withTraces({ serviceShare: true }), formatVersion: 5, epochUnixNano: '1' }),
+    ).toThrow(OtelHtmlError);
+  });
+
+  test('the parsed anchor is range.start, or createdAt in ns when range is null', () => {
+    const m = parseAnyManifest(v6Raw()) as ManifestV4;
+    expect(manifestAnchor(m)).toBe(-5n);
+    const empty = parseAnyManifest({ ...v6Raw(), range: null }) as ManifestV4;
+    expect(manifestAnchor(empty)).toBe(BigInt(Date.parse('2026-11-06T00:00:00.000Z')) * 1_000_000n);
+    expect(manifestAnchor(v5())).toBe(1_700_000_000_000_000_000n);
+  });
+
+  test('serializes without epochUnixNano and parses back equal', () => {
+    const m = parseAnyManifest(withTraces({ serviceShare: true }));
+    const stored = manifestForWrite(m) as Record<string, unknown>;
+    expect('epochUnixNano' in stored).toBe(false);
+    expect(parseAnyManifest(JSON.parse(JSON.stringify(stored)))).toEqual(m);
+    expect(manifestForWrite(v5())).toEqual(v5());
   });
 });
