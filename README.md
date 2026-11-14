@@ -738,7 +738,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | `writer.rowGroupRows` | 50000 | Rows per Parquet row group in format 5 (50000 to 100000). |
 | `writer.statisticsKeys` | `[]` | Extra columns whose statistics are kept per partition file in format 5, beyond those the dashboards and views use. Each entry is a column name, `attr:<key>` (a span, log or metric point attribute) or `resource:<key>` (a resource attribute); a bare attribute key is accepted but matches nothing, so it prunes nothing. |
 | `writer.localWarnBytes` | 256000000 | The size, in bytes of Parquet, past which a `local` report warns (once per session) that `--format site` serves large reports better. The base64 scripts a `local` report loads are about a third larger. |
-| `writer.compactOnMerge` | `false` | With `merge`: compact each format-4 or format-5 input's copied partitions into one partition (`merge --compact`). Without it they are copied as they are. |
+| `writer.compactOnMerge` | `false` | With `merge`: compact each format-4 or format-5 input's copied partitions into one partition per 24-hour time group (`merge --compact`). Without it they are copied as they are. |
 | `writer.assetsBase` | `assets/` | Where a report loads the viewer assets from: `assets/`, or a relative path such as `../../assets/0.3.0/`. |
 | `writer.chunkTargetBytes` | 4000000 | The size at which held rows are cut into a flush partition (spans, logs and metric points alike); a closed report compacts those flush partitions when there are two or more (see `writer.format`). |
 | `writer.flushIntervalMs` | 5000 | Checkpoint interval. Also checkpoints once after this long idle with new records. |
