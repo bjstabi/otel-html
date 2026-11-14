@@ -134,7 +134,7 @@ export function Shell(props: {
   const store = useMemo(
     () =>
       createSelectionStore(
-        parseUrlState(history.read(), absolute).state,
+        parseUrlState(history.read()).state,
         epoch,
         range,
         defaultWindowOf(defaultText, rangeRef.current),
@@ -150,9 +150,9 @@ export function Shell(props: {
       defaultWindowOf(defaultText, manifestRange(manifest)),
       epoch,
       range,
-      parseUrlState(history.read(), absolute).state.t !== undefined,
+      parseUrlState(history.read()).state.t !== undefined,
     );
-  }, [store, manifest, defaultText, epoch, range, history, absolute]);
+  }, [store, manifest, defaultText, epoch, range, history]);
   const [errors, setErrors] = useState<readonly string[]>([]);
   const [helpOpen, setHelpOpen] = useState(false);
   const [carried, setCarried] = useState<Carried | null>(null);

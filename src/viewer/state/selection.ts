@@ -371,7 +371,7 @@ export function bindUrl(
 
   const applyUrl = (): void => {
     const { anchor } = store.getState();
-    const { state, errors } = parseUrlState(history.read(), anchor !== null);
+    const { state, errors } = parseUrlState(history.read());
     applying = true;
     try {
       store.setState(dataFromUrl(state, epoch, range, store.getState().defaultWindow, anchor));

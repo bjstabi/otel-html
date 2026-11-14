@@ -4,7 +4,12 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { mergeWith } from '../../src/api/convert.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { isPartitioned, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
+import {
+  isPartitioned,
+  type ManifestV4,
+  manifestAnchor,
+  parseAnyManifest,
+} from '../../src/format/manifest.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { writeManifest } from '../../src/writer/checkpoint.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
@@ -59,6 +64,21 @@ async function asFormat6(name: string): Promise<void> {
 
 const merge = (inputs: string[]) =>
   mergeWith({ inputs: inputs.map((i) => join(dir, i)), out: join(dir, 'm'), config: cfg }, real().deps);
+
+describe('the format-6 test stand-in', () => {
+  test('its manifest and anchor are what a reader derives, even from an epoch before range.start', async () => {
+    await report('early', 0, false);
+    const { manifest } = manifestAt('early');
+    if (manifest.range === null) throw new Error('a range');
+    const start = BigInt(manifest.range.start);
+    const out = await withServiceShare(join(dir, 'early'), {
+      ...manifest,
+      epochUnixNano: String(start - 12345n),
+    });
+    expect(manifestAnchor(out)).toBe(start);
+    expect(manifestAnchor(manifestAt('early').manifest)).toBe(start);
+  });
+});
 
 describe('merge and format 6', () => {
   test('a format-6 and a format-5 input write format 6 without an epoch, the copy keeps serviceShare', async () => {

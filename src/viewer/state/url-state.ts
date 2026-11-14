@@ -8,21 +8,11 @@ import { type LogRef, parseLogRef } from '../data/log-query.js';
 import type { TimeWindow } from '../data/time-window.js';
 import { LOG_TAB_IDS } from '../logs/tabs.js';
 import { TRACE_TAB_IDS } from '../traces/tabs.js';
-import {
-  DashboardPageStateSchema,
-  dashboardPageStateSchema,
-  parseDashboardParam,
-} from './dashboard-state.js';
+import { DashboardPageStateSchema, parseDashboardParam } from './dashboard-state.js';
 import { parseMetricParam } from './metric-state.js';
-import {
-  T_ALL,
-  T_FORMAT,
-  TraceIdParamSchema,
-  tRange,
-  WindowParamSchema,
-  windowParamSchema,
-} from './param-schemas.js';
+import { T_ALL, T_FORMAT, TraceIdParamSchema, tRange, WindowParamSchema } from './param-schemas.js';
 
+const MAX_INT64 = 2n ** 63n - 1n;
 const LOG_FORMAT = /^\d+\.\d+$/;
 const LOG_CANONICAL = /^(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const nonEmpty = z.string().min(1, 'a non-empty value');
@@ -91,17 +81,11 @@ function isUrlKey(k: string): k is UrlKey {
   return (URL_KEYS as readonly string[]).includes(k);
 }
 
-const AbsoluteWindowParamSchema = windowParamSchema(true);
-const UrlStateAbsolutePartial = UrlStateSchema.extend({
-  t: AbsoluteWindowParamSchema,
-  d: dashboardPageStateSchema(true),
-}).partial();
-
 /**
  * Accepts `a=1&b=2`, `?a=1`, or a whole hash such as `#/traces?a=1` (a prefix is stripped only at the start).
- * `absolute` is a format-6 report: its times (`t`, `d.sel.t`) are unix nanoseconds.
+ * A window is checked only for form and an int64 range; the caller reads it against the epoch or, on format 6, the anchor.
  */
-export function parseUrlState(search: string, absolute = false): { state: UrlState; errors: string[] } {
+export function parseUrlState(search: string): { state: UrlState; errors: string[] } {
   let query = search;
   if (search.startsWith('#')) {
     const qi = search.indexOf('?');
@@ -130,18 +114,16 @@ export function parseUrlState(search: string, absolute = false): { state: UrlSta
       continue;
     }
     if (key === 'd') {
-      const d = parseDashboardParam(raw, absolute);
+      const d = parseDashboardParam(raw);
       if (d.ok) state[key] = d.state;
       else errors.push(d.error);
       continue;
     }
-    const r = (key === 't' && absolute ? AbsoluteWindowParamSchema : UrlStateSchema.shape[key]).safeParse(
-      raw,
-    );
+    const r = UrlStateSchema.shape[key].safeParse(raw);
     if (r.success) state[key] = r.data;
     else errors.push(`${key}: expected ${r.error.issues[0]?.message ?? 'a valid value'}, got ${raw}`);
   }
-  return { state: (absolute ? UrlStateAbsolutePartial : UrlStatePartial).parse(state), errors };
+  return { state: UrlStatePartial.parse(state), errors };
 }
 
 export function serializeUrlState(s: UrlState): string {
@@ -161,12 +143,12 @@ export function serializeUrlState(s: UrlState): string {
  */
 export function parseWindow(t: string, anchor?: bigint): TimeWindow {
   const m = T_FORMAT.exec(t);
-  if (m === null || !tRange(t, anchor !== undefined)) {
+  if (m === null || !tRange(t)) {
     throw new OtelHtmlError('usage', {
       path: 'window',
       expected:
         anchor === undefined
-          ? `<start>~<end> in nanoseconds, start <= end, values <= ${Number.MAX_SAFE_INTEGER}`
+          ? `<start>~<end> in nanoseconds, start <= end, values <= ${MAX_INT64}`
           : '<start>~<end> in unix nanoseconds, start <= end',
       actual: JSON.stringify(t),
     });
@@ -185,17 +167,32 @@ export function formatWindow(w: TimeWindow, anchor?: bigint): string {
         actual: `${w.start}~${w.end}`,
       });
     }
-    return `${anchor + BigInt(w.start)}~${anchor + BigInt(w.end)}`;
+    const start = anchor + BigInt(w.start);
+    const end = anchor + BigInt(w.end);
+    if (start < 0n || end > MAX_INT64) {
+      throw new OtelHtmlError('usage', {
+        path: 'window',
+        expected: `unix nanoseconds within 0..${MAX_INT64}`,
+        actual: `${start}~${end}`,
+      });
+    }
+    return `${start}~${end}`;
   }
-  const ok = Number.isSafeInteger(w.start) && Number.isSafeInteger(w.end) && w.start >= 0 && w.start <= w.end;
+  // Doubles past 2^53 are integers too: the text is exact for them and the parser reads back the nearest double.
+  const ok =
+    Number.isInteger(w.start) &&
+    Number.isInteger(w.end) &&
+    w.start >= 0 &&
+    w.start <= w.end &&
+    BigInt(w.end) <= MAX_INT64;
   if (!ok) {
     throw new OtelHtmlError('usage', {
       path: 'window',
-      expected: 'non-negative safe integers with start <= end',
+      expected: `non-negative integers with start <= end, values <= ${MAX_INT64}`,
       actual: `${w.start}~${w.end}`,
     });
   }
-  return `${w.start}~${w.end}`;
+  return `${BigInt(w.start)}~${BigInt(w.end)}`;
 }
 
 /**

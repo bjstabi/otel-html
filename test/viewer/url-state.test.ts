@@ -34,11 +34,12 @@ describe('parseUrlState', () => {
     expect(r.state).toEqual({ mode: 'traces' });
   });
 
-  test('t beyond 2^53 is rejected, not rounded', () => {
-    const r = parseUrlState('t=0~9007199254740993');
+  test('t beyond int64 is rejected; one beyond 2^53 is kept as text', () => {
+    expect(parseUrlState('t=0~9007199254740993').state).toEqual({ t: '0~9007199254740993' });
+    const r = parseUrlState('t=0~9223372036854775808');
     expect(r.state).toEqual({});
     expect(r.errors).toEqual([
-      't: expected <start>~<end> with start <= end and values <= 9007199254740991, got 0~9007199254740993',
+      't: expected <start>~<end> with start <= end and values <= 9223372036854775807, got 0~9223372036854775808',
     ]);
     expect(parseUrlState('t=5~4').errors).toHaveLength(1);
     expect(parseUrlState('t=9007199254740991~9007199254740991').state).toEqual({
@@ -103,7 +104,8 @@ describe('window helpers', () => {
 
   test('formatWindow refuses unsafe or inverted windows', () => {
     expect(() => formatWindow({ start: 5, end: 4 })).toThrow(/window/);
-    expect(() => formatWindow({ start: 0, end: 2 ** 53 })).toThrow(/window/);
+    expect(() => formatWindow({ start: 0, end: 2 ** 63 })).toThrow(/window/);
+    expect(() => formatWindow({ start: 0.5, end: 4 })).toThrow(/window/);
     expect(() => formatWindow({ start: -1, end: 4 })).toThrow(/window/);
     expect(() => parseWindow('x')).toThrow(/window/);
   });
@@ -126,12 +128,28 @@ describe('absolute windows (format 6)', () => {
     expect(parseWindow(text, ANCHOR)).toEqual({ start: 0, end: threeYears });
   });
 
+  test('a relative window beyond 2^53 formats exactly and reads back to the nearest double', () => {
+    const w = { start: 2 ** 53 + 2, end: 2 ** 54 };
+    expect(formatWindow(w)).toBe('9007199254740994~18014398509481984');
+    expect(parseWindow(formatWindow(w))).toEqual(w);
+    expect(formatWindow({ start: 10, end: 20 })).toBe('10~20');
+  });
+
+  test('an absolute window must stay within 0..int64 max, as the parser demands', () => {
+    expect(() => formatWindow({ start: -11, end: 0 }, 10n)).toThrow(/window/);
+    expect(formatWindow({ start: -10, end: 0 }, 10n)).toBe('0~10');
+    expect(() => formatWindow({ start: 0, end: 2 }, 2n ** 63n - 2n)).toThrow(/window/);
+    expect(formatWindow({ start: 0, end: 1 }, 2n ** 63n - 2n)).toBe(`${2n ** 63n - 2n}~${2n ** 63n - 1n}`);
+  });
+
   test('parseUrlState accepts absolute text only when told, and format 5 text stays as it was', () => {
     const abs = 't=1700000000000000010~1700000000000000020';
-    expect(parseUrlState(abs, true).state.t).toBe('1700000000000000010~1700000000000000020');
-    expect(parseUrlState(abs).errors).toEqual([
-      `t: expected <start>~<end> with start <= end and values <= ${Number.MAX_SAFE_INTEGER}, got ${abs.slice(2)}`,
+    expect(parseUrlState(abs).state.t).toBe('1700000000000000010~1700000000000000020');
+    const over = 't=1~9223372036854775808';
+    expect(parseUrlState(over).errors).toEqual([
+      `t: expected <start>~<end> with start <= end and values <= ${2n ** 63n - 1n}, got ${over.slice(2)}`,
     ]);
+    expect(parseUrlState(over).errors).toHaveLength(1);
     expect(parseUrlState('t=10~20').state.t).toBe('10~20');
     expect(() => formatWindow({ start: -1, end: 4 })).toThrow(/window/);
     expect(windowParam({ start: 1, end: 2 }, null)).toBe('1~2');
@@ -140,13 +158,12 @@ describe('absolute windows (format 6)', () => {
   test('an absolute dashboard selection parses through parseUrlState, also before the anchor', () => {
     const t = '1699999999999999995~1700000000000000100';
     const d = JSON.stringify({ sel: { t } });
-    const { state, errors } = parseUrlState(`d=${encodeURIComponent(d)}`, true);
+    const { state, errors } = parseUrlState(`d=${encodeURIComponent(d)}`);
     expect(errors).toEqual([]);
     expect(state.d?.sel.t).toBe(t);
     const win = parseWindow(t, ANCHOR);
     expect(win).toEqual({ start: -5, end: 100 });
     expect(formatWindow(win, ANCHOR)).toBe(t);
-    expect(parseUrlState(`d=${encodeURIComponent(d)}`).errors).toHaveLength(1);
   });
 
   test('windowParam and windowFromParam carry the anchor; the default window still needs no t', () => {

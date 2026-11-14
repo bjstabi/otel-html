@@ -24,27 +24,21 @@ export const EMPTY_DASHBOARD_STATE: DashboardPageState = {
   logView: {},
 };
 
-/** `absolute`: the window text is unix nanoseconds (a format-6 report), not relative to the epoch. */
-export function dashboardPageStateSchema(absolute: boolean): z.ZodType<DashboardPageState> {
-  return z.strictObject({
-    vars: z.record(z.string(), z.string().nullable()).default({}),
-    sel: z
-      .strictObject({
-        t: windowTextSchema(absolute).nullable().default(null),
-        trace: TraceIdParamSchema.nullable().default(null),
-      })
-      .default({ t: null, trace: null }),
-    follow: z.record(z.string(), z.boolean()).default({}),
-    logView: z.record(z.string(), z.enum(['matches', 'context'], 'one of matches, context')).default({}),
-  });
-}
-
-export const DashboardPageStateSchema: z.ZodType<DashboardPageState> = dashboardPageStateSchema(false);
+export const DashboardPageStateSchema: z.ZodType<DashboardPageState> = z.strictObject({
+  vars: z.record(z.string(), z.string().nullable()).default({}),
+  sel: z
+    .strictObject({
+      t: windowTextSchema().nullable().default(null),
+      trace: TraceIdParamSchema.nullable().default(null),
+    })
+    .default({ t: null, trace: null }),
+  follow: z.record(z.string(), z.boolean()).default({}),
+  logView: z.record(z.string(), z.enum(['matches', 'context'], 'one of matches, context')).default({}),
+});
 
 /** The URL key `d`: JSON text to a state, or one error line naming the offending path (`d.sel.t`). */
 export function parseDashboardParam(
   raw: string,
-  absolute = false,
 ): { ok: true; state: DashboardPageState } | { ok: false; error: string } {
   let json: unknown;
   try {
@@ -52,7 +46,7 @@ export function parseDashboardParam(
   } catch {
     return { ok: false, error: `d: expected a JSON object, got ${shown(raw)}` };
   }
-  const r = (absolute ? dashboardPageStateSchema(true) : DashboardPageStateSchema).safeParse(json);
+  const r = DashboardPageStateSchema.safeParse(json);
   if (r.success) return { ok: true, state: r.data };
   return { ok: false, error: paramError('d', json, r.error.issues[0]) };
 }

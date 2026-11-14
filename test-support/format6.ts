@@ -9,7 +9,13 @@ import {
 } from 'apache-arrow';
 import { readParquet, Table as WasmTable, writeParquet } from 'parquet-wasm/esm';
 import { wrapDataFile } from '../src/format/data-file.js';
-import { type ManifestV4, manifestForWrite } from '../src/format/manifest.js';
+import {
+  isPartitioned,
+  type ManifestV4,
+  manifestAnchor,
+  manifestForWrite,
+  parseAnyManifest,
+} from '../src/format/manifest.js';
 import { writerProperties } from '../src/format/parquet/codec.js';
 import { SERVICE_SHARE_COLUMN, TABLES } from '../src/format/parquet/columns.js';
 import { ensureParquetWasm } from '../src/format/parquet/wasm.js';
@@ -119,8 +125,11 @@ export async function withServiceShare(
       files: { ...entry.files, traces: { ...traces, bytes: bytes.length, serviceShare: true as const } },
     });
   }
-  const out: ManifestV4 = { ...manifest, formatVersion: 6, partitions };
-  await writeFile(`${dir}/data/manifest.js`, wrapDataFile(MANIFEST_KEY, manifestForWrite(out)));
+  const written = manifestForWrite({ ...manifest, formatVersion: 6, partitions });
+  await writeFile(`${dir}/data/manifest.js`, wrapDataFile(MANIFEST_KEY, written));
+  // What a reader gets: the format-6 parse fills the anchor (`range.start`, else `createdAt`), whatever epoch `manifest` had.
+  const out = parseAnyManifest(JSON.parse(JSON.stringify(written)));
+  if (!isPartitioned(out)) throw new Error('a format-6 manifest parses as a partition manifest');
   return out;
 }
 
@@ -141,5 +150,5 @@ export async function format6Fixture(
       if (file !== undefined) files.set(file.path, await readFile(`${report.dir}/${file.path}`));
     }
   }
-  return { manifest, files, epoch: f.epoch, dir: report.dir, close: report.close };
+  return { manifest, files, epoch: manifestAnchor(manifest), dir: report.dir, close: report.close };
 }
