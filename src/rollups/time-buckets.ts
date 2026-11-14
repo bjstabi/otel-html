@@ -9,6 +9,8 @@ export type SerializedTimeBuckets = {
   maxBuckets: number;
   widthNs: number;
   startNs: number;
+  /** The relative time of one absolute multiple of `widthNs`, in `[0, widthNs)`; absent is 0. */
+  originNs?: number | undefined;
   keys: string[];
   counts: number[][];
 };
@@ -20,6 +22,7 @@ const SerializedTimeBucketsSchema: z.ZodType<SerializedTimeBuckets> = z
     maxBuckets: z.number().int().min(2),
     widthNs: z.number().int().positive(),
     startNs: z.number().int(),
+    originNs: nonNegInt.optional(),
     keys: z.array(z.string()),
     counts: z.array(z.array(nonNegInt)),
   })
@@ -27,8 +30,9 @@ const SerializedTimeBucketsSchema: z.ZodType<SerializedTimeBuckets> = z
     message: 'widthNs equal to 1 ms * 2^k',
     path: ['widthNs'],
   })
-  .refine((s) => mod(s.startNs, s.widthNs) === 0, {
-    message: 'startNs aligned to widthNs',
+  .refine((s) => (s.originNs ?? 0) < s.widthNs, { message: 'originNs below widthNs', path: ['originNs'] })
+  .refine((s) => mod(s.startNs - (s.originNs ?? 0), s.widthNs) === 0, {
+    message: 'startNs aligned to widthNs (and originNs)',
     path: ['startNs'],
   })
   .refine((s) => s.counts.length === s.keys.length, { message: 'one counts row per key', path: ['counts'] })
@@ -61,6 +65,7 @@ export class TimeBuckets<K extends string> {
   readonly maxBuckets: number;
   #width = BASE_WIDTH_NS;
   #start = 0;
+  #origin = 0;
   #len = 0;
   readonly #rows: number[][];
   readonly #keyIndex = new Map<string, number>();
@@ -116,12 +121,13 @@ export class TimeBuckets<K extends string> {
     let w = this.#width;
     let lo = this.#len === 0 ? t : Math.min(this.#start, t);
     let hi = this.#len === 0 ? t : Math.max(this.#start + (this.#len - 1) * w, t);
-    lo = lo - mod(lo, w);
-    hi = hi - mod(hi, w);
+    const o = this.#origin;
+    lo = lo - mod(lo - o, w);
+    hi = hi - mod(hi - o, w);
     while ((hi - lo) / w + 1 > this.maxBuckets) {
       w *= 2;
-      lo = lo - mod(lo, w);
-      hi = hi - mod(hi, w);
+      lo = lo - mod(lo - o, w);
+      hi = hi - mod(hi - o, w);
     }
     const len = (hi - lo) / w + 1;
     if (this.#len === 0) {
@@ -143,7 +149,7 @@ export class TimeBuckets<K extends string> {
         const next = new Array<number>(len).fill(0);
         row.forEach((n, j) => {
           const abs = this.#start + j * this.#width;
-          const k = (abs - mod(abs, w) - lo) / w;
+          const k = (abs - mod(abs - o, w) - lo) / w;
           next[k] = (next[k] ?? 0) + n;
         });
         row.length = 0;
@@ -164,6 +170,7 @@ export class TimeBuckets<K extends string> {
       maxBuckets: this.maxBuckets,
       widthNs: this.#width,
       startNs: this.#start,
+      ...(this.#origin === 0 ? {} : { originNs: this.#origin }),
       keys: [...this.keys],
       counts: this.#rows.map((r) => [...r]),
     };
@@ -184,6 +191,7 @@ export class TimeBuckets<K extends string> {
     const b = new TimeBuckets<string>(s.keys, s.maxBuckets);
     b.#width = s.widthNs;
     b.#start = s.startNs;
+    b.#origin = s.originNs ?? 0;
     b.#len = s.counts[0]?.length ?? 0;
     s.counts.forEach((row, i) => {
       const dst = b.#rows[i];

@@ -250,7 +250,7 @@ describe('logRowsQuery', () => {
 });
 
 describe('logTimelineQuery', () => {
-  const spec: BucketSpec = { widthNs: 50_000_000, startNs: 0, endNs: 50_000_000 };
+  const spec: BucketSpec = { widthNs: 50_000_000, startNs: 0, endNs: 50_000_000, originNs: 0 };
   test('severity band counts per bucket of the effective time', () => {
     const rows = run(logTimelineQuery(filter().filter, spec));
     const got = new Map(rows.map((r) => [`${num(r.bucket)}:${String(r.band)}`, num(r.n)]));
@@ -461,7 +461,7 @@ describe('patternsQuery', () => {
 
 describe('pointsTimelineQuery', () => {
   test('counts points per bucket of time_unix_nano', () => {
-    const spec: BucketSpec = { widthNs: 50_000_000, startNs: 0, endNs: 100_000_000 };
+    const spec: BucketSpec = { widthNs: 50_000_000, startNs: 0, endNs: 100_000_000, originNs: 0 };
     const rows = run(pointsTimelineQuery(spec, f.epoch));
     const got = rows.map((r) => [num(r.bucket), num(r.n)]);
     const b = (ms: number): number => Math.floor(rel(ms) / 50_000_000) * 50_000_000;

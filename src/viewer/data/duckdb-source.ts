@@ -1,6 +1,7 @@
-import { and, type ExprNode, type Query, sql } from '@uwdata/mosaic-sql';
+import { and, column, type ExprNode, eq, literal, type Query, sql } from '@uwdata/mosaic-sql';
 import type { ManifestV4 } from '../../format/manifest.js';
 import type { Table as TableName } from '../../format/parquet/columns.js';
+import { durationBucket } from '../../format/parquet/duration-bucket.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId, UnixNanos } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../model/records.js';
@@ -27,9 +28,33 @@ import {
   surroundingQueries,
   traceLogsQuery,
 } from '../../query/sql/logs.js';
-import { absWindow, type Pruned } from '../../query/sql/prune.js';
+import type { PruneHints } from '../../query/sql/ottl.js';
+import { absWindow, type Pruned, prunePartitions } from '../../query/sql/prune.js';
 import { idTableRowsQuery } from '../../query/sql/residual.js';
 import {
+  BAND_KEY,
+  facetKeyOf,
+  groupKeyOf,
+  type MeasureKey,
+  measuresRelation,
+  readsOf,
+  resourceAttributesKey,
+  rollupDurationBinsQuery,
+  rollupDurationsQuery,
+  rollupFacetsQuery,
+  rollupGroupsQuery,
+  rollupPercentileQuery,
+  rollupResourceValuesQuery,
+  rollupTimelineQuery,
+  rollupTotalQuery,
+  SERVICE_KEY,
+  type Split,
+  STATUS_KEY,
+  splitFiles,
+  timeKey,
+} from '../../query/sql/rollup.js';
+import {
+  allTraceCountQuery,
   allTraceRowsQuery,
   durationBinsQuery,
   durationSummaryQuery,
@@ -48,9 +73,11 @@ import {
   traceRowsQuery,
   traceSpansQuery,
   traceSummaryQuery,
+  windowTracePartitionsQuery,
+  windowTraceRowsQuery,
 } from '../../query/sql/spans.js';
 import { bucketSpec } from '../../query/sql/time.js';
-import { partitionOfFilename } from '../../query/sql/views.js';
+import { partitionOfFilename, rollupViewStatements } from '../../query/sql/views.js';
 import { FacetCounts } from '../../rollups/facets.js';
 import { TimeBuckets } from '../../rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS } from '../../semconv/severity.js';
@@ -86,6 +113,7 @@ import type {
   SpanRow,
   SurroundingLogs,
 } from './results.js';
+import { type RequestShape, type RouteNeed, rawOnly, routeOf } from './route.js';
 import {
   cell,
   durationBins,
@@ -103,7 +131,7 @@ import {
   toNumber,
   traceRows,
 } from './span-results.js';
-import type { TimeWindow } from './time-window.js';
+import { alignLongWindow, isLongWindow, type TimeWindow } from './time-window.js';
 import { traceNotFound } from './trace-detail.js';
 import { buildTraceTree, dedupeSpanIds, exclusiveTimeByService } from './trace-tree.js';
 
@@ -227,6 +255,9 @@ function checkLimit(limit: number): void {
   }
 }
 
+/** The newest data source made over each engine: the one whose manifest the rollup views follow. */
+const generations = new WeakMap<QueryEngine, number>();
+
 /** The format-4 data source over a query engine (D19): no Mosaic type appears here. `close()` is `engine.close()`. */
 export function createDuckDbDataSource(opts: {
   engine: QueryEngine;
@@ -235,8 +266,13 @@ export function createDuckDbDataSource(opts: {
   logger?: Pick<Console, 'warn'>;
   /** The facet and resource-value caps; the manifest's (the writer's), or the defaults for a report without them. */
   caps?: FacetCaps;
+  /** The source of a Refresh: its first rollup statement binds the rollup views to its manifest even if some exist. */
+  replaceRollupViews?: boolean;
 }): DataSource {
   const { engine, manifest } = opts;
+  // A newer source over the same engine owns the rollup views: this one may not bind them any more (a Refresh happened).
+  const generation = (generations.get(engine) ?? 0) + 1;
+  generations.set(engine, generation);
   const epoch = BigInt(manifest.epochUnixNano);
   const { facetValueCap, facetKeyCap } = manifest.config.viewer;
   const caps: FacetCaps = opts.caps ?? {
@@ -245,6 +281,18 @@ export function createDuckDbDataSource(opts: {
   };
   const range = manifestRange(manifest);
 
+  /** The long-window rules (spec §6.3) for `window`: the window aligned outward to grains, and the options that carry the rule. */
+  const rules = (
+    window: TimeWindow | null,
+  ): { window: TimeWindow | null; long: boolean; bucketLong: { epoch: bigint } | undefined } => {
+    const long = isLongWindow(window, range);
+    return {
+      window: long && window !== null ? alignLongWindow(window, epoch) : window,
+      long,
+      bucketLong: long ? { epoch } : undefined,
+    };
+  };
+
   /** Runs `q` after the engine prepared the files it reads: `tables` whole, the first one narrowed to `pruned`. */
   const read = (
     tables: readonly TableName[],
@@ -252,6 +300,104 @@ export function createDuckDbDataSource(opts: {
     q: Query,
     signal?: AbortSignal,
   ): ReturnType<QueryEngine['query']> => runPrepared(engine, q, filesFor(manifest, tables, pruned), signal);
+
+  /**
+   * The views of the rollup tables are bound by the first statement that reads a rollup file: binding reads every
+   * file's footer, which a page that never asks for a rollup should not pay, and a Refresh forgets them (`createViews`)
+   * so the next one binds the new list. A host has made every view already and runs no DDL.
+   */
+  let rollupViews: Promise<void> | null = null;
+  const ensureRollupViews = (): Promise<void> => {
+    if (!engine.tempTables) return Promise.resolve();
+    rollupViews ??= (async () => {
+      for (const statement of rollupViewStatements(manifest, (p) => p, opts.replaceRollupViews === true)) {
+        if (generations.get(engine) !== generation)
+          throw new DOMException('A newer data source owns the rollup views', 'AbortError');
+        await engine.exec(statement);
+      }
+    })().catch((error: unknown) => {
+      rollupViews = null;
+      throw error;
+    });
+    return rollupViews;
+  };
+
+  /** Runs a statement over a measures relation: the rollup files are loaded, the views bound, then the statement runs. */
+  const readMeasures = async (
+    split: Split,
+    q: Query,
+    signal?: AbortSignal,
+  ): ReturnType<QueryEngine['query']> => {
+    if (split.rollup.length > 0) {
+      await engine.prepare(split.rollup, signal);
+      await ensureRollupViews();
+    }
+    return runPrepared(engine, q, [...split.rollup, ...split.raw], signal);
+  };
+
+  /**
+   * The core facets the router sends to `measures`, one statement per distinct file split: the keys whose rollups all
+   * carry the dimension share one relation (the raw partitions are scanned once, not once per key).
+   */
+  const measuredFacets = (
+    table: 'spans' | 'logs',
+    f: SqlFilter,
+    measured: readonly { k: CoreFacet; split: Split }[],
+    signal?: AbortSignal,
+  ): Promise<Awaited<ReturnType<QueryEngine['query']>>[]> => {
+    const groups = new Map<string, { split: Split; keys: MeasureKey[] }>();
+    for (const { k, split } of measured) {
+      const id = `${split.rollup.join('\n')}\u0000${split.raw.join('\n')}`;
+      const group = groups.get(id) ?? { split, keys: [] };
+      group.keys.push(facetKeyOf(k));
+      groups.set(id, group);
+    }
+    return Promise.all(
+      [...groups.values()].map(({ split, keys }) =>
+        readMeasures(
+          split,
+          rollupFacetsQuery(measuresRelation(f, table, split, keys, false), keys, caps.facetValueCap),
+          signal,
+        ),
+      ),
+    );
+  };
+
+  /**
+   * The files of a need the router sends to `measures` (rollup files, and the base files of the partitions without a
+   * usable rollup), or null when it runs today's statement. `extra` is what the need itself reads beside the condition.
+   */
+  const planOf = (
+    p: {
+      table: 'spans' | 'logs';
+      mode: RequestShape['mode'];
+      long: boolean;
+      conditionReads: ReadonlySet<string>;
+      hints: PruneHints;
+      residual: boolean;
+      text: boolean;
+    },
+    f: SqlFilter,
+    need: RouteNeed,
+    extra: readonly string[],
+    durations: boolean,
+  ): Split | null => {
+    const shape: RequestShape = {
+      table: p.table,
+      need,
+      mode: p.mode,
+      long: p.long,
+      reads: new Set([...p.conditionReads, ...extra]),
+      residual: p.residual,
+      text: p.text,
+    };
+    if (routeOf(shape) === 'direct') return null;
+    return splitFiles(manifest, p.table, f.files, shape.reads, {
+      durations,
+      rawOnly: rawOnly(shape),
+      prune: { hints: p.hints, window: f.window, long: p.long },
+    });
+  };
 
   /**
    * Narrows `filter` to the rows the residual terms accept, through a temp table of their ids (D5). `candidates` reads
@@ -296,20 +442,23 @@ export function createDuckDbDataSource(opts: {
     test: (e: SpanEntry) => boolean,
     signal: AbortSignal | undefined,
     run: (f: SqlFilter) => Promise<T>,
+    candidates: () => Promise<SqlFilter> = () => Promise.resolve(filter),
   ): Promise<T> =>
     withIds(
       filter,
       residual,
-      async (limit) =>
-        spanEntries(
+      async (limit) => {
+        const from = await candidates();
+        return spanEntries(
           await read(
             ['spans'],
-            filter.files,
-            spanRowsQuery(filter, { column: 'start', dir: 'asc' }, limit),
+            from.files,
+            spanRowsQuery(from, { column: 'start', dir: 'asc' }, limit),
             signal,
           ),
           epoch,
-        ).entries,
+        ).entries;
+      },
       test,
       run,
     );
@@ -317,15 +466,39 @@ export function createDuckDbDataSource(opts: {
   async function querySpans(q: SpanQuery, signal?: AbortSignal): Promise<SpanQueryResult> {
     throwIfAborted(signal);
     checkLimit(q.limit);
-    const { filter, residual } = buildFilter({
+    const rule = rules(q.window);
+    const { filter, residual, reads, hints } = buildFilter({
       manifest,
       table: 'spans',
       condition: q.condition,
       text: q.text,
-      window: q.window,
+      window: rule.window,
+      long: rule.long,
     });
     const browser = residual !== null;
-    if (filter.files.files.length === 0) return emptyResult(caps, residual);
+    // a trace list under a long window reads spans files the window itself prunes (a trace belongs to the window by its first span)
+    const windowedTraces =
+      rule.long &&
+      filter.window !== null &&
+      q.mode === 'traces' &&
+      (q.needs.includes('rows') || q.needs.includes('total'));
+    if (filter.files.files.length === 0 && !windowedTraces) return emptyResult(caps, residual);
+    const plan = (f: SqlFilter, need: RouteNeed, extra: readonly string[], durations: boolean) =>
+      planOf(
+        {
+          table: 'spans',
+          mode: q.mode,
+          long: rule.long,
+          conditionReads: reads,
+          hints,
+          residual: browser,
+          text: q.text !== '',
+        },
+        f,
+        need,
+        extra,
+        durations,
+      );
     const needs = new Set(q.needs);
     const aggregates = AGGREGATE_NEEDS.some((n) => needs.has(n));
     const spanSort = q.mode === 'spans' ? sortOf(SPAN_SORTS, q.sort, 'spans') : null;
@@ -333,20 +506,57 @@ export function createDuckDbDataSource(opts: {
     const useIds = browser && (aggregates || (q.mode === 'traces' && needs.has('rows')));
     const test = residual === null ? null : residualTest(compileCondition(residual, 'span'), epoch);
 
+    /**
+     * The trace list. Under a long window a trace belongs to the window its earliest span start (over all its
+     * partitions) falls in: `traces` alone answers a list with no condition or text, and with one the partitions of the
+     * traces that start in the window are named first, then the condition is read from their spans files only. Every
+     * `traces` file is read either way (a row before the window decides that a trace started before it).
+     */
+    const namedSpans = async (
+      f: SqlFilter,
+      window: NonNullable<SqlFilter['window']>,
+      traces: Pruned,
+    ): Promise<Pruned> => {
+      const named = new Set(
+        rowsOf(await read(['traces'], undefined, windowTracePartitionsQuery(traces, window), signal)).map(
+          (r) => partitionOfFilename(String(cell(r, 'filename'))),
+        ),
+      );
+      // the spans files of those partitions, whatever the window says of each (the hints only prune the others)
+      const spans = prunePartitions(manifest, 'spans', hints, null).files.filter((p) =>
+        named.has(partitionOfFilename(p)),
+      );
+      return { files: spans, all: false, total: f.files.total };
+    };
+    const traceList = async (
+      f: SqlFilter,
+      sort: TraceSort,
+      limit = q.limit,
+    ): ReturnType<QueryEngine['query']> => {
+      const { window } = f;
+      if (!rule.long || window === null) {
+        return unconditioned(f)
+          ? read(['traces'], undefined, allTraceRowsQuery(f, sort, limit), signal)
+          : read(['spans', 'traces'], f.files, traceRowsQuery(f, sort, limit), signal);
+      }
+      if (f.predicate === null && f.text === null) {
+        return read(['traces'], undefined, allTraceRowsQuery(f, sort, limit, window), signal);
+      }
+      const traces = prunePartitions(manifest, 'traces', new Map(), null);
+      const own: SqlFilter = { ...f, files: await namedSpans(f, window, traces) };
+      return read(['spans', 'traces'], own.files, windowTraceRowsQuery(own, traces, sort, limit), signal);
+    };
+
     const run = async (f: SqlFilter): Promise<SpanQueryResult> => {
       const result = emptyResult(caps, residual);
-      const spec = bucketSpec(q.window, range);
+      const spec = bucketSpec(rule.window, range, undefined, rule.bucketLong);
       const parts: Promise<void>[] = [];
 
       if (needs.has('rows')) {
         parts.push(
           (async () => {
             if (traceSort !== null) {
-              const r = traceRows(
-                unconditioned(f)
-                  ? await read(['traces'], undefined, allTraceRowsQuery(f, traceSort, q.limit), signal)
-                  : await read(['spans', 'traces'], f.files, traceRowsQuery(f, traceSort, q.limit), signal),
-              );
+              const r = traceRows(await traceList(f, traceSort));
               Object.assign(result, r);
             } else if (spanSort !== null && !useIds && test !== null) {
               let candidates = 0;
@@ -386,10 +596,17 @@ export function createDuckDbDataSource(opts: {
                 ? CORE_SPAN_FACETS
                 : CORE_SPAN_FACETS.filter((c) => q.facetKeys?.includes(c.key));
             const wantAttrs = q.facetKeys === null || q.facetKeys.some((k) => !CORE_KEYS.has(k));
+            // the router decides by the need alone: every key is measured, or none is
+            const measured = keys.flatMap((k) => {
+              const split = plan(f, 'facets', [k.reads], false);
+              return split === null ? [] : [{ k, split }];
+            });
             const [core, attrs] = await Promise.all([
               keys.length === 0
                 ? null
-                : read(['spans'], f.files, coreFacetsQuery(f, 'spans', keys, caps), signal),
+                : measured.length === 0
+                  ? read(['spans'], f.files, coreFacetsQuery(f, 'spans', keys, caps), signal)
+                  : measuredFacets('spans', f, measured, signal),
               wantAttrs
                 ? read(['spans'], f.files, attributeFacetsQuery(f, 'spans', caps, [...CORE_KEYS]), signal)
                 : null,
@@ -408,7 +625,21 @@ export function createDuckDbDataSource(opts: {
       if (needs.has('timeline')) {
         parts.push(
           (async () => {
-            const t = timeline(await read(['spans'], f.files, timelineQuery(f, spec), signal), spec);
+            const split = plan(f, 'timeline', readsOf([STATUS_KEY]), true);
+            const table =
+              split === null
+                ? await read(['spans'], f.files, timelineQuery(f, spec), signal)
+                : await readMeasures(
+                    split,
+                    rollupTimelineQuery(
+                      measuresRelation(f, 'spans', split, [timeKey('spans', epoch), STATUS_KEY], true),
+                      spec,
+                      epoch,
+                      null,
+                    ),
+                    signal,
+                  );
+            const t = timeline(table, spec);
             result.buckets = t.buckets;
             result.red = t.red;
           })(),
@@ -417,8 +648,21 @@ export function createDuckDbDataSource(opts: {
         // The counts alone: the statement leaves out the latency columns, and `red` keeps its empty value.
         parts.push(
           (async () => {
+            const split = plan(f, 'buckets', readsOf([STATUS_KEY]), false);
             result.buckets = timelineBuckets(
-              await read(['spans'], f.files, timelineQuery(f, spec, false), signal),
+              split === null
+                ? await read(['spans'], f.files, timelineQuery(f, spec, false), signal)
+                : await readMeasures(
+                    split,
+                    rollupTimelineQuery(
+                      measuresRelation(f, 'spans', split, [timeKey('spans', epoch), STATUS_KEY], false),
+                      spec,
+                      epoch,
+                      null,
+                      { latency: false },
+                    ),
+                    signal,
+                  ),
               spec,
             );
           })(),
@@ -429,7 +673,20 @@ export function createDuckDbDataSource(opts: {
         // The match count alone, as `rows` would report it; with `rows` asked its statement sets the total.
         parts.push(
           (async () => {
-            const t = await read(['spans'], f.files, spanCountQuery(f, q.mode), signal);
+            const split = plan(f, 'total', [], false);
+            const t =
+              split === null
+                ? q.mode === 'traces' && rule.long && f.window !== null
+                  ? f.predicate === null && f.text === null
+                    ? await read(['traces'], undefined, allTraceCountQuery(f.window), signal)
+                    : // by the trace's start, as the list's total is
+                      await traceList(f, traceSort ?? { column: 'start', dir: 'asc' }, 1)
+                  : await read(['spans'], f.files, spanCountQuery(f, q.mode), signal)
+                : await readMeasures(
+                    split,
+                    rollupTotalQuery(measuresRelation(f, 'spans', split, [], false)),
+                    signal,
+                  );
             result.total = toNumber(cell(rowsOf(t)[0] ?? {}, 'total') ?? 0n, 'total');
           })(),
         );
@@ -438,7 +695,14 @@ export function createDuckDbDataSource(opts: {
       if (needs.has('durations')) {
         parts.push(
           (async () => {
-            const summary = durationSummary(await read(['spans'], f.files, durationSummaryQuery(f), signal));
+            const split = plan(f, 'durations', [], true);
+            const measured =
+              split === null ? null : { split, rel: () => measuresRelation(f, 'spans', split, [], true) };
+            const summary = durationSummary(
+              measured === null
+                ? await read(['spans'], f.files, durationSummaryQuery(f), signal)
+                : await readMeasures(measured.split, rollupDurationsQuery(measured.rel()), signal),
+            );
             if (summary === null) return;
             // A caller's axis (the explorer keeps one while a duration filter is set) wins over the derived one.
             const edges = durationAxis(
@@ -449,7 +713,9 @@ export function createDuckDbDataSource(opts: {
               q.durationAxis ??
               edges.slice(0, -1).map((from, i) => ({ fromNs: from, toNs: edges[i + 1] ?? from }));
             const bins = durationBins(
-              await read(['spans'], f.files, durationBinsQuery(f, axis), signal),
+              measured === null
+                ? await read(['spans'], f.files, durationBinsQuery(f, axis), signal)
+                : await readMeasures(measured.split, rollupDurationBinsQuery(measured.rel(), axis), signal),
               axis,
             );
             result.durations = { summary, bins };
@@ -461,8 +727,19 @@ export function createDuckDbDataSource(opts: {
         const key = q.measureBy;
         parts.push(
           (async () => {
+            const by = groupKeyOf(key);
+            const split = plan(f, 'groups', readsOf([by, STATUS_KEY]), true);
             result.groups = groupStats(
-              await read(['spans'], f.files, groupStatsQuery(f, 'spans', key, caps.facetValueCap), signal),
+              split === null
+                ? await read(['spans'], f.files, groupStatsQuery(f, 'spans', key, caps.facetValueCap), signal)
+                : await readMeasures(
+                    split,
+                    rollupGroupsQuery(measuresRelation(f, 'spans', split, [by, STATUS_KEY], true), [by], {
+                      limit: caps.facetValueCap + 1,
+                      nonNull: true,
+                    }),
+                    signal,
+                  ),
               caps.facetValueCap,
             );
           })(),
@@ -473,8 +750,18 @@ export function createDuckDbDataSource(opts: {
       return result;
     };
 
+    // under a long window a trace is listed or counted by its own start: the candidates are the spans of those traces
+    // Known limit: the candidates are every span of the named partitions, not only those of the traces that start in the
+    // window, so they count toward RESIDUAL_CANDIDATE_CAP whole (narrowing them to the window's traces needs a trace-id
+    // join over `traces`). "Entire run" has no window and reads the filter as it is, so it is unaffected.
+    const traceScope = async (): Promise<SqlFilter> => {
+      const { window } = filter;
+      if (!windowedTraces || window === null) return filter;
+      const files = await namedSpans(filter, window, prunePartitions(manifest, 'traces', new Map(), null));
+      return { ...filter, window: null, files };
+    };
     return test !== null && residual !== null && useIds
-      ? withResidualIds(filter, residual, test, signal, run)
+      ? withResidualIds(filter, residual, test, signal, run, traceScope)
       : run(filter);
   }
 
@@ -483,24 +770,69 @@ export function createDuckDbDataSource(opts: {
     signal?: AbortSignal,
   ): Promise<ServicesResult> {
     throwIfAborted(signal);
-    const { filter, residual } = buildFilter({
+    const rule = rules(o.window);
+    const { filter, residual, reads, hints } = buildFilter({
       manifest,
       table: 'spans',
       condition: o.condition,
       text: '',
-      window: o.window,
+      window: rule.window,
+      long: rule.long,
     });
     if (filter.files.files.length === 0) return { services: [], total: 0 };
-    const spec = bucketSpec(o.window, range);
+    const spec = bucketSpec(rule.window, range, undefined, rule.bucketLong);
+    const plan = (f: SqlFilter, durations: boolean) =>
+      planOf(
+        {
+          table: 'spans',
+          mode: 'spans',
+          long: rule.long,
+          conditionReads: reads,
+          hints,
+          residual: residual !== null,
+          text: false,
+        },
+        f,
+        'services',
+        readsOf(durations ? [SERVICE_KEY, STATUS_KEY] : [SERVICE_KEY]),
+        durations,
+      );
     const run = async (f: SqlFilter): Promise<ServicesResult> => {
-      const found = await read(['spans'], f.files, servicesQuery(f, o.limit + 1), signal);
+      const split = plan(f, true);
+      const found =
+        split === null
+          ? await read(['spans'], f.files, servicesQuery(f, o.limit + 1), signal)
+          : await readMeasures(
+              split,
+              rollupGroupsQuery(
+                measuresRelation(f, 'spans', split, [SERVICE_KEY, STATUS_KEY], true),
+                [SERVICE_KEY],
+                {
+                  limit: o.limit + 1,
+                },
+              ),
+              signal,
+            );
       const names = rowsOf(found)
         .slice(0, o.limit)
         .map((r) => String(cell(r, 'service_name')));
+      const bucketSplit = plan(f, false);
       const buckets =
         names.length === 0
           ? null
-          : await read(['spans'], f.files, serviceBucketsQuery(f, names, spec), signal);
+          : bucketSplit === null
+            ? await read(['spans'], f.files, serviceBucketsQuery(f, names, spec), signal)
+            : await readMeasures(
+                bucketSplit,
+                rollupTimelineQuery(
+                  measuresRelation(f, 'spans', bucketSplit, [SERVICE_KEY, timeKey('spans', epoch)], false),
+                  spec,
+                  epoch,
+                  SERVICE_KEY,
+                  { only: names },
+                ),
+                signal,
+              );
       return serviceStats(found, buckets, spec, o.limit);
     };
     return residual === null
@@ -529,18 +861,36 @@ export function createDuckDbDataSource(opts: {
         actual: JSON.stringify(q.mode),
       });
     }
-    const { filter, residual } = buildFilter({
+    const rule = rules(q.window);
+    const { filter, residual, reads, hints } = buildFilter({
       manifest,
       table: 'logs',
       condition: q.condition,
       text: q.text,
-      window: q.window,
+      window: rule.window,
+      long: rule.long,
       ...(q.traceId == null
         ? {}
         : { traceId: q.traceId, traceFiles: (await logTraceFiles(q.traceId, signal)) ?? allLogsFiles }),
     });
     const browser = residual !== null;
     if (filter.files.files.length === 0) return emptyLogResult(caps, residual, q.mode);
+    const plan = (f: SqlFilter, need: RouteNeed, extra: readonly string[]) =>
+      planOf(
+        {
+          table: 'logs',
+          mode: q.mode === 'traces' ? 'traces' : 'logs',
+          long: rule.long,
+          conditionReads: reads,
+          hints,
+          residual: browser,
+          text: q.text !== '',
+        },
+        f,
+        need,
+        extra,
+        false,
+      );
     const needs = new Set(q.needs);
     const aggregates = LOG_AGGREGATE_NEEDS.some((n) => needs.has(n));
     const logSort = q.mode === 'logs' ? sortOf(LOG_SORTS, q.sort, 'logs') : null;
@@ -550,7 +900,7 @@ export function createDuckDbDataSource(opts: {
 
     const run = async (f: SqlFilter): Promise<LogQueryResult> => {
       const result = emptyLogResult(caps, residual, q.mode);
-      const spec = bucketSpec(q.window, range);
+      const spec = bucketSpec(rule.window, range, undefined, rule.bucketLong);
       const parts: Promise<void>[] = [];
 
       if (needs.has('rows')) {
@@ -590,6 +940,19 @@ export function createDuckDbDataSource(opts: {
       if (needs.has('total') && (!needs.has('rows') || q.mode === 'traces')) {
         parts.push(
           (async () => {
+            const split = plan(f, 'total', []);
+            if (split !== null) {
+              // logs mode only (the router keeps the distinct traces direct): n and matched are the one count
+              const t = await readMeasures(
+                split,
+                rollupTotalQuery(measuresRelation(f, 'logs', split, [], false)),
+                signal,
+              );
+              const count = toNumber(cell(rowsOf(t)[0] ?? {}, 'total') ?? 0n, 'total');
+              result.matched = count;
+              result.total = count;
+              return;
+            }
             const row =
               rowsOf(
                 await read(
@@ -614,10 +977,16 @@ export function createDuckDbDataSource(opts: {
                 ? CORE_LOG_FACETS
                 : CORE_LOG_FACETS.filter((c) => q.facetKeys?.includes(c.key));
             const wantAttrs = q.facetKeys === null || q.facetKeys.some((k) => !CORE_LOG_KEYS.has(k));
+            const measured = keys.flatMap((k) => {
+              const split = plan(f, 'facets', [k.reads]);
+              return split === null ? [] : [{ k, split }];
+            });
             const [core, attrs] = await Promise.all([
               keys.length === 0
                 ? null
-                : read(['logs'], f.files, coreFacetsQuery(f, 'logs', keys, caps), signal),
+                : measured.length === 0
+                  ? read(['logs'], f.files, coreFacetsQuery(f, 'logs', keys, caps), signal)
+                  : measuredFacets('logs', f, measured, signal),
               wantAttrs
                 ? read(['logs'], f.files, attributeFacetsQuery(f, 'logs', caps, [...CORE_LOG_KEYS]), signal)
                 : null,
@@ -636,8 +1005,20 @@ export function createDuckDbDataSource(opts: {
       if (needs.has('timeline')) {
         parts.push(
           (async () => {
+            const split = plan(f, 'timeline', readsOf([BAND_KEY]));
             result.buckets = logTimeline(
-              await read(['logs'], f.files, logTimelineQuery(f, spec), signal),
+              split === null
+                ? await read(['logs'], f.files, logTimelineQuery(f, spec), signal)
+                : await readMeasures(
+                    split,
+                    rollupTimelineQuery(
+                      measuresRelation(f, 'logs', split, [timeKey('logs', epoch), BAND_KEY], false),
+                      spec,
+                      epoch,
+                      BAND_KEY,
+                    ),
+                    signal,
+                  ),
               spec,
             );
           })(),
@@ -845,7 +1226,38 @@ export function createDuckDbDataSource(opts: {
     hasTrace: async (traceId) =>
       (await read(['traces'], undefined, tracePartitionsQuery(traceId))).numRows > 0,
     async percentileOf(service, resource, durationNs) {
-      const r = rowsOf(await read(['spans'], undefined, percentileQuery(service, resource, durationNs)))[0];
+      const long = isLongWindow(null, range);
+      let result: Awaited<ReturnType<QueryEngine['query']>>;
+      if (long) {
+        // the report's range is long: the share is counted over the rollups (a duration bucket is counted whole)
+        const { filter } = buildFilter({
+          manifest,
+          table: 'spans',
+          condition: null,
+          text: '',
+          window: null,
+          long,
+        });
+        const f: SqlFilter = {
+          ...filter,
+          predicate: and(
+            eq(column('service_name'), literal(service)),
+            eq(column('resource_name'), literal(resource)),
+          ),
+        };
+        const split = splitFiles(manifest, 'spans', f.files, new Set(['service_name', 'resource_name']), {
+          durations: true,
+          rawOnly: false,
+        });
+        const bucket = durationBucket(BigInt(Math.max(0, Math.floor(durationNs))));
+        result = await readMeasures(
+          split,
+          rollupPercentileQuery(measuresRelation(f, 'spans', split, [], true), bucket),
+        );
+      } else {
+        result = await read(['spans'], undefined, percentileQuery(service, resource, durationNs));
+      }
+      const r = rowsOf(result)[0];
       if (r === undefined || toNumber(cell(r, 'n'), 'n') === 0) return null;
       return Number(cell(r, 'percentile'));
     },
@@ -865,12 +1277,59 @@ export function createDuckDbDataSource(opts: {
     },
     async resourceValues(key, opts, signal) {
       throwIfAborted(signal);
-      const filterOf = (table: 'spans' | 'logs' | 'points') =>
-        buildFilter({ manifest, table, condition: null, text: '', window: opts.window }).filter;
+      const rule = rules(opts.window);
+      const built = (table: 'spans' | 'logs' | 'points') =>
+        buildFilter({
+          manifest,
+          table,
+          condition: null,
+          text: '',
+          window: rule.window,
+          // points keep inclusive ends under a long window (spans and logs are selected by their own time)
+          long: table !== 'points' && rule.long,
+        });
+      const filterOf = (table: 'spans' | 'logs' | 'points') => built(table).filter;
       const windowed =
-        opts.window === null
+        rule.window === null
           ? undefined
           : { spans: filterOf('spans'), logs: filterOf('logs'), points: filterOf('points') };
+      if (rule.long) {
+        // a long window, or none on a report whose range is long (spec §6.3: a shorter one never uses the rollups): the
+        // spans and logs parts come from the rollups that keep the key
+        const reads = new Set([`resource:${key}`]);
+        const attributes = [resourceAttributesKey(key)];
+        const part = (table: 'spans' | 'logs'): { split: Split; rel: Query } => {
+          const { filter, hints } = built(table);
+          const split = splitFiles(manifest, table, filter.files, reads, {
+            durations: false,
+            rawOnly: false,
+            prune: { hints, window: filter.window, long: true },
+          });
+          return { split, rel: measuresRelation(filter, table, split, attributes, false) };
+        };
+        const spans = part('spans');
+        const logs = part('logs');
+        const points = built('points').filter;
+        const rollups = [...spans.split.rollup, ...logs.split.rollup];
+        if (rollups.length > 0) {
+          await engine.prepare(rollups, signal);
+          await ensureRollupViews();
+        }
+        return resourceValueResult(
+          await runPrepared(
+            engine,
+            rollupResourceValuesQuery([spans.rel, logs.rel], key, caps.facetValueCap, points),
+            [
+              ...rollups,
+              ...spans.split.raw,
+              ...logs.split.raw,
+              ...filesFor(manifest, ['points'], points.files),
+            ],
+            signal,
+          ),
+          caps.facetValueCap,
+        );
+      }
       // each table's kept files are prepared; the rest of the table's files stay unopened
       const files =
         windowed === undefined

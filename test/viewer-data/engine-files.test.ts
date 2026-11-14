@@ -76,7 +76,12 @@ test('site registers each file by URL with range reads and creates the views', a
     entry('000001', 'logs'),
   ]);
   expect(loader.calls).toEqual([]);
-  expect(engine.calls.exec.filter((s) => s.startsWith('CREATE OR REPLACE VIEW'))).toHaveLength(7);
+  // the five base views are bound at open; the rollup views are forgotten and bound by the first statement that needs them
+  expect(engine.calls.exec.filter((s) => s.startsWith('CREATE OR REPLACE VIEW'))).toHaveLength(5);
+  expect(engine.calls.exec.filter((s) => s.includes('_rollups'))).toEqual([
+    'DROP VIEW IF EXISTS "span_rollups"',
+    'DROP VIEW IF EXISTS "log_rollups"',
+  ]);
 });
 
 test('local loads each wrapper under its partition key and registers the bytes, reporting progress', async () => {

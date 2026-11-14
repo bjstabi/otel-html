@@ -39,6 +39,9 @@ vi.mock('../../src/query/sql/points.js', () =>
 vi.mock('../../src/query/sql/facets.js', () =>
   recording(() => vi.importActual('../../src/query/sql/facets.js')),
 );
+vi.mock('../../src/query/sql/rollup.js', () =>
+  recording(() => vi.importActual('../../src/query/sql/rollup.js')),
+);
 vi.mock('../../src/query/sql/residual.js', () =>
   recording(() => vi.importActual('../../src/query/sql/residual.js')),
 );
@@ -94,6 +97,7 @@ const PLAN_IDS = [
   'logs.total.long',
   'logs.total.traces.long',
   'resourceValues.all',
+  'resourceValues.all.short',
   'resourceValues.short',
   'resourceValues.long',
   'patterns',
@@ -163,19 +167,34 @@ describe('the catalogue', () => {
 });
 
 describe('each entry runs exactly the builders it names', () => {
-  let report: ScalingReport;
+  // a long window needs the sparse spacing (a window of two partitions six hours apart); the others use the dense one
+  const reports = new Map<'dense' | 'sparse', ScalingReport>();
   let close: () => Promise<void>;
-  let make: () => ReturnType<typeof createDuckDbDataSource>;
+  let make: (spacing: 'dense' | 'sparse') => ReturnType<typeof createDuckDbDataSource>;
 
   beforeAll(async () => {
-    report = await buildScalingReport(BASE);
-    const counting = await openCountingEngine(report.dir, report.manifest);
+    const closers: (() => Promise<void>)[] = [];
+    const engines = new Map<'dense' | 'sparse', Awaited<ReturnType<typeof openCountingEngine>>>();
+    for (const spacing of ['dense', 'sparse'] as const) {
+      const report = await buildScalingReport({ ...BASE, spacing });
+      reports.set(spacing, report);
+      const counting = await openCountingEngine(report.dir, report.manifest);
+      engines.set(spacing, counting);
+      closers.push(async () => {
+        await counting.close();
+        await report.close();
+      });
+    }
     close = async () => {
-      await counting.close();
-      await report.close();
+      for (const c of closers) await c();
     };
-    make = () => createDuckDbDataSource({ engine: counting.engine, manifest: report.manifest });
-  }, 120_000);
+    make = (spacing) => {
+      const report = reports.get(spacing);
+      const counting = engines.get(spacing);
+      if (report === undefined || counting === undefined) throw new Error(`no ${spacing} report`);
+      return createDuckDbDataSource({ engine: counting.engine, manifest: report.manifest });
+    };
+  }, 180_000);
   afterAll(async () => {
     await close();
   });
@@ -185,7 +204,9 @@ describe('each entry runs exactly the builders it names', () => {
     async (_id, entry) => {
       recorded.clear();
       // a fresh data source per entry: the metric catalog and the trace are memoised per source
-      const ds = make();
+      const ds = make(entry.spacing);
+      const report = reports.get(entry.spacing);
+      if (report === undefined) throw new Error(`no ${entry.spacing} report`);
       const ctx: CatalogueContext = { window: entry.window ? report.window : null, ids: report.ids };
       await entry.run(ds, ctx);
       expect([...recorded].sort()).toEqual([...entry.builders].sort());

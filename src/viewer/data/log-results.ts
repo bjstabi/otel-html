@@ -102,7 +102,14 @@ export function logTimeline(t: Table, spec: BucketSpec): TimeBuckets<LogSeverity
     series[slot(at[k] as number, grid, width)] = toNumber(cell(r, 'n'), 'n');
   });
   return TimeBuckets.from(
-    { maxBuckets: MAX_BUCKETS, widthNs: width, startNs: grid.start, keys: [...LOG_SEVERITY_KEYS], counts },
+    {
+      maxBuckets: MAX_BUCKETS,
+      widthNs: width,
+      startNs: grid.start,
+      originNs: spec.originNs,
+      keys: [...LOG_SEVERITY_KEYS],
+      counts,
+    },
     LOG_SEVERITY_KEYS,
     'logTimeline',
   );
@@ -143,7 +150,14 @@ export function pointBuckets(t: Table, spec: BucketSpec): TimeBuckets<'points'> 
     counts[slot(at[k] as number, grid, width)] = toNumber(cell(r, 'n'), 'n');
   });
   return TimeBuckets.from(
-    { maxBuckets: MAX_BUCKETS, widthNs: width, startNs: grid.start, keys: ['points'], counts: [counts] },
+    {
+      maxBuckets: MAX_BUCKETS,
+      widthNs: width,
+      startNs: grid.start,
+      originNs: spec.originNs,
+      keys: ['points'],
+      counts: [counts],
+    },
     ['points'],
     'points',
   );

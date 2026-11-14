@@ -48,6 +48,12 @@ export interface Translation {
    * so an empty set means no row can match.
    */
   hints: PruneHints;
+  /**
+   * What the translated terms read, in the statistics-key grammar: a column name, `resource:<key>` / `attr:<key>`, and
+   * `resource:*` / `attr:*` when a term reads a whole map (or a key that is not a string). Untranslated (residual)
+   * terms are not listed; the browser reads whole rows for them.
+   */
+  reads: ReadonlySet<string>;
 }
 
 /** A term (or part of one) SQL cannot express with the semantics of `compileCondition`; it goes to the residual. */
@@ -115,6 +121,19 @@ function durationOf(v: Value, context: SqlContext): Operand | undefined {
   return { canon: DIFF, pc: { column: DIFF, kind: 'int' }, keys: [] };
 }
 
+/** Where `pathOf` notes what it reads while one term is translated (see `Translation.reads`). */
+let readSink: Set<string> | null = null;
+
+function readKey(column: string, keys: readonly (string | number)[]): string {
+  const first = keys[0];
+  const key = typeof first === 'string' ? first : '*';
+  if (column === 'resource_attributes') {
+    return `resource:${key}`;
+  }
+  if (column === 'attributes') return `attr:${key}`;
+  return column;
+}
+
 function pathOf(v: Value, context: SqlContext): Operand | undefined {
   if (v.type !== 'path') return undefined;
   const spec = CONTEXTS[context];
@@ -122,6 +141,7 @@ function pathOf(v: Value, context: SqlContext): Operand | undefined {
   const canon = segs.join('.');
   const pc = PATH_COLUMNS[context].get(canon);
   if (pc === undefined) return untranslatable(`path ${canon} has no column`);
+  readSink?.add(readKey(pc.column, v.keys));
   return { canon, pc, keys: v.keys };
 }
 
@@ -271,6 +291,7 @@ function re2Compatible(pattern: string): boolean {
 function translateCall(v: Extract<Value, { type: 'call' }>, context: SqlContext): ExprNode {
   if (v.name === 'IsRootSpan') {
     if (context !== 'span') return untranslatable('IsRootSpan outside spans');
+    readSink?.add('parent_span_id');
     return isNull(column('parent_span_id'));
   }
   const arg = v.args[0];
@@ -435,15 +456,21 @@ export function translateCondition(src: string, context: SqlContext): Translatio
   const predicates: ExprNode[] = [];
   const residual: Expr[] = [];
   const hints = new Map<string, Set<string>>();
+  const reads = new Set<string>();
   for (const term of terms) {
     let p: ExprNode;
+    const own = new Set<string>();
+    readSink = own;
     try {
       p = translateExpr(term, context);
     } catch (e) {
       if (!(e instanceof Untranslatable)) throw e;
       residual.push(term);
       continue;
+    } finally {
+      readSink = null;
     }
+    for (const k of own) reads.add(k);
     predicates.push(p);
     const h = termHint(term, context);
     if (h === undefined) continue;
@@ -462,6 +489,7 @@ export function translateCondition(src: string, context: SqlContext): Translatio
       predicates.length === 0 ? null : predicates.length === 1 ? (predicates[0] ?? null) : and(...predicates),
     residual: rest === null ? null : printCondition(rest),
     hints,
+    reads,
   };
 }
 

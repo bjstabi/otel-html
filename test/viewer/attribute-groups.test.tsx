@@ -118,6 +118,7 @@ describe('AttributeGroups', () => {
 const manifest = {
   formatVersion: 1,
   epochUnixNano: '1700000000000000000',
+  range: null,
 } as unknown as Manifest;
 
 function source(over: Partial<DataSource> = {}): DataSource {

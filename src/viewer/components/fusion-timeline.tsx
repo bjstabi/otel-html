@@ -34,18 +34,32 @@ const LANE_GAP_PX = 6;
 
 /**
  * Every lane on one column grid. The lanes' bucket widths are `1 ms * 2^k` and their starts are multiples of their
- * width, so the widest lane's width divides evenly into the others and re-binning is exact. Columns cover `window`;
- * data outside it is dropped.
+ * width (plus, under a long window, the origin of the absolute grain grid), so the widest lane's width divides evenly
+ * into the others. The columns sit on the grid of the lane that has an origin (else the widest lane), its start modulo the shared width, and a lane on
+ * another origin (the metric points) is re-binned by each bucket's start. Columns cover `window`; a bucket that ends
+ * at or before the first column is dropped, one that straddles its start counts in it.
  */
 export function alignLanes(
   lanes: readonly { buckets: BucketView<string> }[],
   window: TimeWindow,
 ): { startNs: number; widthNs: number; length: number; lanes: BucketView<string>[] } {
+  // The grid follows a lane on an absolute grain grid (a non-zero origin: the long-window spans and logs), the widest of
+  // them; with none, the widest lane. A wider metric lane (origin 0) is re-binned onto it.
+  const widest = lanes.reduce<BucketView<string> | null>((best, { buckets: b }) => {
+    if (best === null) return b;
+    const onGrid = (v: BucketView<string>): boolean => v.startNs % v.widthNs !== 0;
+    if (onGrid(b) !== onGrid(best)) return onGrid(b) ? b : best;
+    return b.widthNs > best.widthNs ? b : best;
+  }, null);
   let widthNs = Math.max(1_000_000, ...lanes.map((l) => l.buckets.widthNs));
-  const columns = (w: number): number =>
-    Math.max(1, Math.floor((window.end - Math.floor(window.start / w) * w) / w) + 1);
+  const originOf = (w: number): number => (widest === null ? 0 : ((widest.startNs % w) + w) % w);
+  const gridStart = (w: number): number => {
+    const origin = originOf(w);
+    return origin + Math.floor((window.start - origin) / w) * w;
+  };
+  const columns = (w: number): number => Math.max(1, Math.floor((window.end - gridStart(w)) / w) + 1);
   while (columns(widthNs) > MAX_AXIS_COLUMNS) widthNs *= 2;
-  const startNs = Math.floor(window.start / widthNs) * widthNs;
+  const startNs = gridStart(widthNs);
   const length = columns(widthNs);
   const aligned = lanes.map(({ buckets: b }) => {
     const sums = new Map<string, number[]>();
@@ -55,8 +69,11 @@ export function alignLanes(
       for (let i = 0; i < b.length; i++) {
         const n = src[i] ?? 0;
         if (n === 0) continue;
-        const j = Math.floor((b.startNs + i * b.widthNs - startNs) / widthNs);
-        if (j >= 0 && j < length) out[j] = (out[j] ?? 0) + n;
+        const bucketStart = b.startNs + i * b.widthNs;
+        // a bucket that straddles the grid start counts in the first column; one that ends at or before it is dropped
+        if (bucketStart + b.widthNs <= startNs) continue;
+        const j = Math.max(0, Math.floor((bucketStart - startNs) / widthNs));
+        if (j < length) out[j] = (out[j] ?? 0) + n;
       }
       sums.set(k, out);
     }

@@ -3,7 +3,7 @@ import { MANIFEST_KEY, MANIFEST_PATH } from '../../format/paths.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { DataSource } from './data-source.js';
 import { createDuckDbDataSource } from './duckdb-source.js';
-import { createViews, dropFiles, manifestFiles, registerFiles } from './engine/files.js';
+import { createViews, dropFiles, manifestFiles, registerFiles, restoreViews } from './engine/files.js';
 import type { SmallFiles } from './engine/small-files.js';
 import type { Engine } from './engine/start.js';
 import type { Logger } from './mosaic.js';
@@ -24,7 +24,7 @@ export interface RefreshDeps {
 
 /**
  * D55: loads `data/manifest.js?r=<now>` through the loader (which resolves with the registered `manifest`), validates it
- * (format 4), registers the files the new manifest lists and the old did not, drops the ones gone, recreates the views,
+ * (format 4), registers the files the new manifest lists and the old did not, drops the ones gone, recreates the base views and forgets the rollup views (the data source binds them again on the first statement that needs them),
  * clears the engine cache and returns a DataSource over the new manifest and the same engine. A manifest that does
  * not validate rejects before anything is registered or dropped; one with the same `updatedAt` and files as `previous`
  * changes nothing and returns a null `dataSource`. A failure while registering or creating views restores the previous
@@ -90,7 +90,7 @@ export async function refreshReport(
   }
   queryEngine.clearCache();
   const dataSource = tracedDataSource(
-    createDuckDbDataSource({ engine: queryEngine, manifest, logger: deps.logger }),
+    createDuckDbDataSource({ engine: queryEngine, manifest, logger: deps.logger, replaceRollupViews: true }),
   );
   return { dataSource, manifest };
 }
@@ -101,7 +101,7 @@ const held = <T>(engine: Engine, change: () => Promise<T>): Promise<T> =>
 /**
  * Best effort after a refresh failed part-way: a rewritten path registered by URL again (the buffer it held is gone and
  * the server no longer serves its old bytes, so it is fetched whole again), the views of the manifest the page still
- * shows, and the files this refresh added dropped. A rollback that fails too is logged; the caller rethrows the
+ * shows (the rollup views bound again: the source over it will not), and the files this refresh added dropped. A rollback that fails too is logged; the caller rethrows the
  * original error.
  */
 async function rollBack(
@@ -122,7 +122,7 @@ async function rollBack(
     });
   }
   try {
-    await createViews(engine, previous);
+    await restoreViews(engine, previous);
   } catch (error) {
     logger.error('could not restore the previous views after a failed refresh', error);
   }

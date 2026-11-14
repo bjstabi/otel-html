@@ -10,6 +10,7 @@ const file = (i: number, table = 'spans'): string =>
 interface Stat {
   timeMin?: string | null;
   timeMax?: string | null;
+  timeEndMax?: string | null;
   [key: string]: string[] | string | null | undefined;
 }
 
@@ -23,7 +24,7 @@ function manifestWith(
     ...base,
     statisticsKeys: { ...base.statisticsKeys, ...opts.statisticsKeys },
     partitions: stats.map((s, i) => {
-      const { timeMin = null, timeMax = null, ...rest } = s;
+      const { timeMin = null, timeMax = null, timeEndMax, ...rest } = s;
       const values: Record<string, string[] | null> = {};
       for (const [k, v] of Object.entries(rest)) values[k] = v as string[] | null;
       const f: PartitionFile = {
@@ -32,6 +33,7 @@ function manifestWith(
         rows: 1,
         timeMin: timeMin as string | null,
         timeMax: timeMax as string | null,
+        ...(timeEndMax === undefined ? {} : { timeEndMax }),
         values,
       };
       return { n: i, source: 's', files: { [table]: f } };
@@ -142,5 +144,67 @@ describe('absWindow', () => {
   test('fractional bounds widen to whole nanoseconds', () => {
     expect(absWindow({ start: 10.5, end: 20.2 }, 5n)).toEqual({ start: 15n, end: 26n });
     expect(absWindow({ start: -0.5, end: 1e3 + 0.5 }, 0n)).toEqual({ start: -1n, end: 1001n });
+  });
+
+  describe('end time', () => {
+    const w = { start: 1000n, end: 2000n };
+    test('a spans file that ends before the window starts is not read', () => {
+      const m = manifestWith([
+        { timeMin: '10', timeMax: '20', timeEndMax: '999' },
+        { timeMin: '10', timeMax: '20', timeEndMax: '1500' },
+      ]);
+      expect(prunePartitions(m, 'spans', hints({}), w).files).toEqual([file(1)]);
+      const t = manifestWith([{ timeMin: '10', timeMax: '20', timeEndMax: '999' }], { table: 'traces' });
+      expect(prunePartitions(t, 'traces', hints({}), w).files).toEqual([]);
+    });
+    test('a file whose timeEndMax equals the window’s start is read', () => {
+      const m = manifestWith([{ timeMin: '10', timeMax: '20', timeEndMax: '1000' }]);
+      expect(prunePartitions(m, 'spans', hints({}), w).files).toEqual([file(0)]);
+    });
+    test('a format-4 file (no timeEndMax) is read whenever it is today', () => {
+      const m = manifestWith([
+        { timeMin: '10', timeMax: '20' },
+        { timeMin: '10', timeMax: '20', timeEndMax: null },
+      ]);
+      expect(prunePartitions(m, 'spans', hints({}), w).files).toEqual([file(0), file(1)]);
+    });
+    test('a logs file is unaffected', () => {
+      const m = manifestWith([{ timeMin: '10', timeMax: '1500', timeEndMax: '5' }], { table: 'logs' });
+      expect(prunePartitions(m, 'logs', hints({}), w).files).toEqual([file(0, 'logs')]);
+    });
+  });
+
+  describe('long windows', () => {
+    const w = { start: 1000n, end: 2000n };
+    test('a spans file whose latest start is before the window is not read; under a short window it is', () => {
+      const m = manifestWith([
+        { timeMin: '10', timeMax: '999' },
+        { timeMin: '10', timeMax: '1000' },
+      ]);
+      expect(prunePartitions(m, 'spans', hints({}), w, undefined, { long: true }).files).toEqual([file(1)]);
+      expect(prunePartitions(m, 'spans', hints({}), w).files).toEqual([file(0), file(1)]);
+      const t = manifestWith([{ timeMin: '10', timeMax: '999' }], { table: 'traces' });
+      expect(prunePartitions(t, 'traces', hints({}), w, undefined, { long: true }).files).toEqual([]);
+    });
+    test('a span rollup is pruned like spans under a long window, a log rollup like logs', () => {
+      const m = manifestWith(
+        [
+          { timeMin: '10', timeMax: '999' },
+          { timeMin: '10', timeMax: '1000' },
+        ],
+        { table: 'span_rollups' },
+      );
+      expect(prunePartitions(m, 'span_rollups', hints({}), w, undefined, { long: true }).files).toEqual([
+        file(1, 'span_rollups'),
+      ]);
+      const l = manifestWith(
+        [
+          { timeMin: '10', timeMax: '999' },
+          { timeMin: '10', timeMax: '1000' },
+        ],
+        { table: 'log_rollups' },
+      );
+      expect(prunePartitions(l, 'log_rollups', hints({}), w).files).toEqual([file(1, 'log_rollups')]);
+    });
   });
 });

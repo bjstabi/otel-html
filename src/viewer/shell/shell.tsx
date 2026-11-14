@@ -1,6 +1,6 @@
 import { Tooltip } from '@base-ui/react/tooltip';
 import { X } from 'lucide-react';
-import { type JSX, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { type JSX, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Redirect, Route, Router, Switch } from 'wouter';
 import type { AnyManifest } from '../../format/manifest.js';
 import { SELECTION_MODES } from '../../query/pages.js';
@@ -9,6 +9,8 @@ import { DashboardsListPage } from '../dashboards/list-page.js';
 import { defaultDashboardRoute } from '../dashboards/registry.js';
 import { RunSessionProvider } from '../dashboards/run-session.js';
 import type { DataSource } from '../data/data-source.js';
+import { manifestRange } from '../data/manifest-range.js';
+import type { TimeWindow } from '../data/time-window.js';
 import { LogsExplorer } from '../logs/explorer.js';
 import { MetricsCatalog } from '../metrics/catalog.js';
 import { MetricsExplorer } from '../metrics/explorer.js';
@@ -119,7 +121,17 @@ export function Shell(props: {
 }): JSX.Element {
   const { dataSource, history } = props;
   const manifest = dataSource.manifest;
-  const store = useMemo(() => createSelectionStore(parseUrlState(history.read()).state), [history]);
+  const epoch = BigInt(manifest.epochUnixNano);
+  // the report's range as of the committed render (a Refresh grows it): the selection aligns a long window against it
+  const rangeRef = useRef<TimeWindow | null>(manifestRange(manifest));
+  useLayoutEffect(() => {
+    rangeRef.current = manifestRange(manifest);
+  }, [manifest]);
+  const range = useCallback((): TimeWindow | null => rangeRef.current, []);
+  const store = useMemo(
+    () => createSelectionStore(parseUrlState(history.read()).state, epoch, range),
+    [history, epoch, range],
+  );
   const [errors, setErrors] = useState<readonly string[]>([]);
   const [helpOpen, setHelpOpen] = useState(false);
   const [carried, setCarried] = useState<Carried | null>(null);
@@ -127,7 +139,7 @@ export function Shell(props: {
   // Layout effects, here and for the shortcuts below, run before the page first paints. A passive effect can run after
   // it on a slow machine: bindUrl's first read of the URL then undid a choice made in between (a View picked), and keys
   // pressed in between were lost.
-  useLayoutEffect(() => bindUrl(store, history, setErrors), [store, history]);
+  useLayoutEffect(() => bindUrl(store, history, setErrors, epoch, range), [store, history, epoch, range]);
 
   const goTo = useCallback<GoTo>(
     (page, route, extra = {}, alsoDropped = []) => {

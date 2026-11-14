@@ -315,7 +315,7 @@ describe('catalog robustness', () => {
       scope_dropped_attributes_count: [0n, 0n],
     });
     const spark = tableFromArrays({ ...def, bucket: [0n], sum: [1], n: [1n] });
-    const cat = catalogFrom(defs, ids, spark, { widthNs: 1e6, startNs: 0, endNs: 0 });
+    const cat = catalogFrom(defs, ids, spark, { widthNs: 1e6, startNs: 0, endNs: 0, originNs: 0 });
     expect(cat.resources).toHaveLength(1);
     expect([...(cat.resourceTexts[0] ?? [])].sort()).toEqual([...texts].sort());
     expect(cat.entries[0]?.resources).toEqual([0]);
@@ -1396,7 +1396,7 @@ describe('branch-review fixes', () => {
       scope_dropped_attributes_count: [0n, 0n],
     });
     const spark = tableFromArrays({ ...def, bucket: [0n], sum: [1], n: [1n] });
-    const cat = catalogFrom(defs, ids, spark, { widthNs: 1e6, startNs: 0, endNs: 0 });
+    const cat = catalogFrom(defs, ids, spark, { widthNs: 1e6, startNs: 0, endNs: 0, originNs: 0 });
     expect(cat.entries[0]?.attributeKeys).toEqual(['$k', 'a', 'b', 'z']);
   });
 

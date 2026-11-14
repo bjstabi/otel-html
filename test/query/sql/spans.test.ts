@@ -11,6 +11,7 @@ import {
 import { buildFilter, whereOf } from '../../../src/query/sql/filter.js';
 import { absWindow } from '../../../src/query/sql/prune.js';
 import {
+  allTraceCountQuery,
   allTraceRowsQuery,
   durationBinsQuery,
   durationSummaryQuery,
@@ -27,6 +28,7 @@ import {
   traceRowsQuery,
   traceSpansQuery,
   traceSummaryQuery,
+  windowTracePartitionsQuery,
 } from '../../../src/query/sql/spans.js';
 import { bucketSpec } from '../../../src/query/sql/time.js';
 import type { TestDb } from '../../../test-support/duckdb-node.js';
@@ -220,9 +222,21 @@ describe('time buckets', () => {
       widthNs: 1e6,
       startNs: -2e6,
       endNs: 7e6,
+      originNs: 0,
     });
     expect(bucketSpec(null, { start: 3e6, end: 9e6 })).toMatchObject({ startNs: 3e6, endNs: 9e6 });
     expect(bucketSpec(null, null).widthNs).toBe(1e6);
+  });
+  test('long: a 6 h window draws buckets of 65.536 s on absolute grain edges', () => {
+    const epoch = 1_700_000_000_000_000_000n;
+    const spec = bucketSpec({ start: 12_345e6, end: 12_345e6 + 6 * 3600e9 }, null, undefined, { epoch });
+    expect(spec.widthNs).toBe(65_536_000_000);
+    expect((epoch + BigInt(spec.startNs)) % 65_536_000_000n).toBe(0n);
+    expect((epoch + BigInt(spec.endNs)) % 65_536_000_000n).toBe(0n);
+    expect(BigInt(spec.originNs)).toBe((65_536_000_000n - (epoch % 65_536_000_000n)) % 65_536_000_000n);
+    expect(spec.startNs).toBeLessThanOrEqual(12_345e6);
+    expect(spec.endNs + spec.widthNs).toBeGreaterThan(12_345e6 + 6 * 3600e9);
+    expect(bucketSpec({ start: 0, end: 6 * 3600e9 }, null).originNs).toBe(0);
   });
 });
 
@@ -588,6 +602,24 @@ describe('the unconditioned trace list', () => {
 
   test('the statement reads no spans', () => {
     expect(allTraceRowsQuery(hfilter(), TRACE_SORTS[0], 5).toString()).not.toMatch(/\bspans\b/);
+  });
+
+  test('a window keeps the traces that start in it, by their earliest start; the count and the partitions agree', () => {
+    const everything = { start: 0n, end: 2n ** 62n };
+    const nothing = { start: 2n ** 62n, end: 2n ** 62n + 1n };
+    const sort = TRACE_SORTS[0];
+    const total = hdb.rows(allTraceRowsQuery(hfilter(), sort, 50).toString());
+    expect(hdb.rows(allTraceRowsQuery(hfilter(), sort, 50, everything).toString())).toEqual(total);
+    expect(hdb.rows(allTraceRowsQuery(hfilter(), sort, 50, nothing).toString())).toEqual([]);
+    expect(col(hdb.rows(allTraceCountQuery(everything).toString()), 'total')).toEqual([3n]);
+    expect(col(hdb.rows(allTraceCountQuery(nothing).toString()), 'total')).toEqual([0n]);
+    const paths = h.manifest.partitions.flatMap((p) =>
+      p.files.traces === undefined ? [] : [p.files.traces.path],
+    );
+    const files = { files: paths, all: true, total: paths.length };
+    expect(hdb.rows(windowTracePartitionsQuery(files, everything).toString()).length).toBeGreaterThan(0);
+    expect(hdb.rows(windowTracePartitionsQuery(files, nothing).toString())).toEqual([]);
+    expect(allTraceCountQuery(everything).toString()).not.toMatch(/\bspans\b/);
   });
 });
 

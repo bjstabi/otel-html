@@ -14,6 +14,7 @@ import {
   type HistoryPort,
   selectionToUrlState,
 } from '../../src/viewer/state/selection.js';
+import { formatWindow } from '../../src/viewer/state/url-state.js';
 
 const TRACE = 'a'.repeat(32) as TraceId;
 const SPAN = 'b'.repeat(16) as SpanId;
@@ -118,6 +119,32 @@ describe('store state', () => {
     store.getState().selectSpan(SPAN);
     store.getState().clear('traceId');
     expect([store.getState().traceId, store.getState().spanId]).toEqual([null, null]);
+  });
+});
+
+describe('long windows', () => {
+  const EPOCH = 1_700_000_000_000_000_000n;
+  const long = { start: 100_000_000_001, end: 100_000_000_001 + 16_777_216_000_000 };
+  const onGrain = (n: number): boolean => (EPOCH + BigInt(n)) % 65_536_000_000n === 0n;
+
+  test('the selection aligns a long window from setWindow and from the URL, and leaves a short one alone', () => {
+    const store = createSelectionStore({}, EPOCH);
+    store.getState().setWindow(long);
+    const w = store.getState().window;
+    expect(w !== null && onGrain(w.start) && onGrain(w.end)).toBe(true);
+    expect(w?.start).toBeLessThanOrEqual(long.start);
+    expect(w?.end).toBeGreaterThanOrEqual(long.end);
+    // a start that alignment would move before the epoch stays at 0 (the URL cannot carry a negative one)
+    store.getState().setWindow({ start: 1, end: 1 + 16_777_216_000_000 });
+    expect(store.getState().window?.start).toBe(0);
+    const short = { start: 1, end: 1000 };
+    store.getState().setWindow(short);
+    expect(store.getState().window).toEqual(short);
+
+    const fromUrl = createSelectionStore({ t: formatWindow(long) }, EPOCH);
+    expect(fromUrl.getState().window).toEqual(w);
+    const unaware = createSelectionStore({ t: formatWindow(long) });
+    expect(unaware.getState().window).toEqual(long);
   });
 });
 

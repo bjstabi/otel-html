@@ -5,11 +5,12 @@ import {
   ROLLUP_GRAIN_NS,
   type RollupDescription,
 } from '../format/manifest.js';
-import type { ColumnBatch } from '../format/parquet/batch.js';
-import { checkRow } from '../format/parquet/codec.js';
-import { type RollupTable, TABLES, type Table } from '../format/parquet/columns.js';
+import { batchFromRows, type ColumnBatch } from '../format/parquet/batch.js';
+import { checkRow, encodeColumns } from '../format/parquet/codec.js';
+import { ROLLUP_OF, type RollupTable, TABLE_COLUMNS, TABLES, type Table } from '../format/parquet/columns.js';
 import { applyNormalization, logRow, pointRow, type Row, spanRow } from '../format/parquet/rows.js';
-import { completeStatistics, statisticsKeysFor } from '../format/parquet/stats.js';
+import { completeStatistics, fileStatistics, statisticsKeysFor } from '../format/parquet/stats.js';
+import { type PanicGuard, readColumns } from '../format/parquet/stream.js';
 import {
   DEFAULT_ASSETS_BASE,
   LOCK_PATH,
@@ -299,6 +300,46 @@ class PartitionSession implements WriterSession {
     this.#lastFlushMs = deps.clock.monotonicMs();
   }
 
+  /**
+   * The rollup rows of `batch` (rows of `base`) with this report's dimensions and their description; null, with a
+   * warning, when the guard refuses them (a duration sum beyond int64, or a rollup that does not shrink the table).
+   */
+  #rollupOf(
+    base: 'spans' | 'logs',
+    batch: ColumnBatch,
+  ): { rows: Row[]; description: RollupDescription } | null {
+    const dimensions = rollupDimensions(base, this.#statisticsKeys[base]);
+    const made = (base === 'spans' ? spanRollupRows : logRollupRows)(batch, dimensions);
+    if (!rollupSumsFit(made)) {
+      this.#deps.logger.warn(
+        `the ${base} rollup has a duration sum beyond the int64 range, so it is not written`,
+        {
+          rollupRows: made.length,
+          baseRows: batch.length,
+        },
+      );
+      return null;
+    }
+    if (!rollupAllowed(made.length, batch.length)) {
+      const widest = widestDimension(made, dimensions);
+      this.#deps.logger.warn(`the ${base} rollup does not shrink this partition, so it is not written`, {
+        rollupRows: made.length,
+        baseRows: batch.length,
+        widestDimension: widest?.dimension,
+        distinctValues: widest?.distinct,
+      });
+      return null;
+    }
+    return {
+      rows: made,
+      description: {
+        grainNs: ROLLUP_GRAIN_NS,
+        dimensions,
+        ...(base === 'spans' ? { durationBuckets: 'log2x8' as const } : {}),
+      },
+    };
+  }
+
   /** The rollup rows of a cut and their descriptions; a table whose rollup the guard refuses gets neither, and a warning. */
   #rollups(taken: Readonly<Record<Table, ColumnBatch>>): {
     rows: Partial<Record<RollupTable, Row[]>>;
@@ -307,37 +348,16 @@ class PartitionSession implements WriterSession {
     const rows: Partial<Record<RollupTable, Row[]>> = {};
     const descriptions: Partial<Record<RollupTable, RollupDescription>> = {};
     const plans = [
-      { table: 'span_rollups', base: 'spans', make: spanRollupRows, buckets: true },
-      { table: 'log_rollups', base: 'logs', make: logRollupRows, buckets: false },
+      { table: 'span_rollups', base: 'spans' },
+      { table: 'log_rollups', base: 'logs' },
     ] as const;
-    for (const { table, base, make, buckets } of plans) {
+    for (const { table, base } of plans) {
       const batch = taken[base];
       if (batch.length === 0) continue;
-      const dimensions = rollupDimensions(base, this.#statisticsKeys[base]);
-      const made = make(batch, dimensions);
-      if (!rollupSumsFit(made)) {
-        this.#deps.logger.warn(
-          `the ${base} rollup has a duration sum beyond the int64 range, so it is not written`,
-          { rollupRows: made.length, baseRows: batch.length },
-        );
-        continue;
-      }
-      if (!rollupAllowed(made.length, batch.length)) {
-        const widest = widestDimension(made, dimensions);
-        this.#deps.logger.warn(`the ${base} rollup does not shrink this partition, so it is not written`, {
-          rollupRows: made.length,
-          baseRows: batch.length,
-          widestDimension: widest?.dimension,
-          distinctValues: widest?.distinct,
-        });
-        continue;
-      }
-      rows[table] = made;
-      descriptions[table] = {
-        grainNs: ROLLUP_GRAIN_NS,
-        dimensions,
-        ...(buckets ? { durationBuckets: 'log2x8' as const } : {}),
-      };
+      const made = this.#rollupOf(base, batch);
+      if (made === null) continue;
+      rows[table] = made.rows;
+      descriptions[table] = made.description;
     }
     return { rows, descriptions };
   }
@@ -869,7 +889,61 @@ class PartitionSession implements WriterSession {
   }
 
   /**
-   * One partition of a merge input, copied under partition number `n`: each file's bytes as they are (never decoded),
+   * The rollup file of a copied partition computed again from its base rows, when the copy's rollup description lacks
+   * the dimensions this report's statistics keys give; null when it is to be copied as it is; 'refused' when the guard
+   * refuses the new rollup (the partition then has none).
+   */
+  async #recomputedRollup(
+    table: Table,
+    f: PartitionFile,
+    baseBytes: ReadonlyMap<Table, Uint8Array>,
+    path: string,
+    guard: PanicGuard,
+  ): Promise<{ bytes: Uint8Array; file: PartitionFile } | 'refused' | null> {
+    if ((table !== 'span_rollups' && table !== 'log_rollups') || f.rollup === undefined) return null;
+    const base = ROLLUP_OF[table];
+    const bytes = baseBytes.get(base);
+    const wanted = rollupDimensions(base, this.#statisticsKeys[base]);
+    const have = f.rollup.dimensions;
+    if (bytes === undefined || (have.length === wanted.length && have.every((d, i) => d === wanted[i]))) {
+      return null;
+    }
+    const names = TABLE_COLUMNS[base].map((c) => c.name);
+    const cells = new Map<string, unknown[]>(names.map((name) => [name, []]));
+    let length = 0;
+    for await (const cols of readColumns(
+      base,
+      new Blob([bytes as Uint8Array<ArrayBuffer>]),
+      f.path,
+      undefined,
+      guard,
+    )) {
+      length += cols[0]?.length ?? 0;
+      for (const [i, name] of names.entries()) {
+        const into = cells.get(name);
+        if (into !== undefined) for (const v of cols[i] ?? []) into.push(v);
+      }
+    }
+    const made = this.#rollupOf(base, { length, cells: Object.fromEntries(cells) });
+    if (made === null) return 'refused';
+    for (const [i, row] of made.rows.entries()) checkRow(table, row, i);
+    const batch = batchFromRows(table, made.rows);
+    const out = encodeColumns(table, batch, {
+      rowGroupRows: this.#deps.rowGroupRows ?? this.#config.writer.rowGroupRows,
+    });
+    return {
+      bytes: out,
+      file: {
+        path,
+        bytes: out.length,
+        ...fileStatistics(table, batch, this.#statisticsKeys[table], this.#config.writer.facetValueCap),
+        rollup: made.description,
+      },
+    };
+  }
+
+  /**
+   * One partition of a merge input, copied under partition number `n`: each file's bytes as they are (never decoded; a rollup lacking a dimension this report lists is computed again, `#recomputedRollup`),
    * its wrapper written afterwards in a `local` report (the key names the new number, so a copied wrapper would be
    * wrong), and its statistics cut to this report's keys (a key the input did not keep is unknown). The entry is the
    * caller's to list; the folder is removed again if a file fails.
@@ -878,6 +952,7 @@ class PartitionSession implements WriterSession {
     const { fs } = this.#deps;
     const files: Partial<Record<Table, PartitionFile>> = {};
     let made = false;
+    const baseBytes = new Map<Table, Uint8Array>();
     const watch = watchWasmPanics();
     try {
       for (const table of TABLES) {
@@ -897,14 +972,24 @@ class PartitionSession implements WriterSession {
           made = true;
         }
         const path = partitionFilePath(n, table);
-        await fs.writeBytes(at(this.#out, path), bytes);
+        if (table === 'spans' || table === 'logs') baseBytes.set(table, bytes);
+        // A rollup that lacks a dimension this report lists is computed again from the partition's rows (a rollup with this
+        // report's description is copied as it is, like a partition without one).
+        const own = await this.#recomputedRollup(table, f, baseBytes, path, watch.guard);
+        if (own === 'refused') continue;
+        const out = own === null ? { bytes, file: f } : own;
+        await fs.writeBytes(at(this.#out, path), out.bytes);
         if (this.#config.writer.format === 'local') {
           await writeWrapper(
             fs,
             at(this.#out, partitionWrapperPath(n, table)),
             partitionKey(n, table),
-            bytes,
+            out.bytes,
           );
+        }
+        if (own !== null) {
+          files[table] = { ...own.file, path };
+          continue;
         }
         // The input may not have recorded a key this report lists (another config wrote it): compute it from the bytes.
         const done = await completeStatistics(

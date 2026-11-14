@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'vitest';
 import type { ManifestV4 } from '../../src/format/manifest.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
-import { recordingDataSource } from '../../test-support/scaling/recording-source.js';
+import {
+  entryIdsOf,
+  type RecordedCall,
+  recordingDataSource,
+} from '../../test-support/scaling/recording-source.js';
 
 const manifest = { statisticsKeys: { spans: [], logs: [] } } as unknown as ManifestV4;
 const inner = {
@@ -32,4 +36,23 @@ describe('settled', () => {
     const { settled } = openPage(10_000);
     await expect(settled(['serviceShare'], 300)).rejects.toThrow(/serviceShare/);
   });
+});
+
+const resourceValuesCall = (window: RecordedCall['window']): RecordedCall => ({
+  method: 'resourceValues',
+  needs: [],
+  window,
+  condition: 'none',
+  mode: null,
+  attrFacets: false,
+  residual: false,
+  failedWhen: false,
+  idKey: null,
+  summary: false,
+});
+
+test('a resourceValues call with no window maps to the entry of the report range', () => {
+  expect(entryIdsOf(resourceValuesCall('none'), true)).toEqual(['resourceValues.all']);
+  expect(entryIdsOf(resourceValuesCall('none'), false)).toEqual(['resourceValues.all.short']);
+  expect(entryIdsOf(resourceValuesCall('window'), false)).toEqual(['resourceValues.short']);
 });

@@ -1,4 +1,4 @@
-import { type JSX, type ReactNode, useState } from 'react';
+import { type JSX, type ReactNode, useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { FacetCounts } from '../../rollups/facets.js';
 import { DEFAULT_LOG_FACETS } from '../../semconv/default-facets.js';
@@ -533,4 +533,74 @@ export function FacetPanel(props: FacetPanelProps): JSX.Element {
       </div>
     </aside>
   );
+}
+
+const ATTRIBUTE_FACETS_NOTE = 'Attribute facets are not loaded for windows of 4 h 40 min or longer.';
+const ATTRIBUTE_FACETS_BUTTON = 'Load attribute facets';
+
+type Requested =
+  | { key: string; source: object; status: 'loading' }
+  | { key: string; source: object; status: 'ready'; facets: FacetCounts }
+  | { key: string; source: object; status: 'error'; message: string };
+
+/**
+ * Under a long window the page asks for core facets only; this holds the one extra request the reader can make for the
+ * attributes. It belongs to `requestKey` (the filter and the window) and to `source` (the data source: a Refresh makes
+ * a new one, and what was loaded from the old one is out of date): when either changes the button is back. A response
+ * is dropped only when a newer request replaced its request.
+ */
+export function useAttributeFacets(
+  long: boolean,
+  requestKey: string,
+  source: object,
+  load: () => Promise<FacetCounts>,
+  base: FacetCounts | null,
+): { facets: FacetCounts | null; notice: JSX.Element | null } {
+  const [requested, setRequested] = useState<Requested | null>(null);
+  const loadRef = useRef(load);
+  // the committed loader: a render that never commits must not change what a click runs
+  useLayoutEffect(() => {
+    loadRef.current = load;
+  }, [load]);
+  // the latest request: a response applies only while no newer request replaced it (moving away and back does not)
+  const latest = useRef<object | null>(null);
+  const request = useCallback((): void => {
+    const own = { key: requestKey, source };
+    const token = {};
+    latest.current = token;
+    const fresh = (): boolean => latest.current === token;
+    setRequested({ ...own, status: 'loading' });
+    loadRef.current().then(
+      (facets) => {
+        if (fresh()) setRequested({ ...own, status: 'ready', facets });
+      },
+      (e: unknown) => {
+        if (fresh())
+          setRequested({ ...own, status: 'error', message: e instanceof Error ? e.message : String(e) });
+      },
+    );
+  }, [requestKey, source]);
+  const mine =
+    requested !== null && requested.key === requestKey && requested.source === source ? requested : null;
+  if (!long) return { facets: base, notice: null };
+  if (mine?.status === 'ready') return { facets: mine.facets, notice: null };
+  const notice = (
+    <section aria-label="Attribute facets" className="flex flex-col gap-2 text-xs text-ink-2">
+      <p>{ATTRIBUTE_FACETS_NOTE}</p>
+      {mine?.status === 'error' && (
+        <p role="alert" className="text-critical">
+          {mine.message}
+        </p>
+      )}
+      <button
+        type="button"
+        disabled={mine?.status === 'loading'}
+        onClick={request}
+        className="self-start rounded-full border border-hairline px-3 py-1 text-sm text-ink hover:bg-hairline disabled:opacity-40"
+      >
+        {ATTRIBUTE_FACETS_BUTTON}
+      </button>
+    </section>
+  );
+  return { facets: base, notice };
 }

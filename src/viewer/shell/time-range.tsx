@@ -4,7 +4,7 @@ import type { AnyManifest, Manifest } from '../../format/manifest.js';
 import { parseUnixNanos, type RelNanos, type UnixNanos } from '../../model/ids.js';
 import { formatTime } from '../../semconv/formatters.js';
 import { manifestRange } from '../data/manifest-range.js';
-import type { TimeWindow } from '../data/time-window.js';
+import { isLongWindow, type TimeWindow } from '../data/time-window.js';
 import { useSelection } from '../state/selection-context.js';
 import { Tip } from './tip.js';
 
@@ -55,6 +55,9 @@ function activePreset(w: TimeWindow | null, range: Range): string | null {
   const hit = PRESETS.find((p) => p.widthNs !== null && w.end === range.end && w.end - w.start === p.widthNs);
   return hit?.label ?? null;
 }
+
+/** Said wherever a percentile is read from the duration buckets (spec 6.3, decision 15). */
+export const APPROXIMATE_TITLE = 'Percentiles over windows of 4 h 40 min or longer are within about 5 %.';
 
 const BUTTON =
   'rounded-full p-1.5 text-ink-2 hover:bg-hairline disabled:opacity-40 disabled:hover:bg-transparent';
@@ -128,6 +131,11 @@ export function TimeRange({ manifest }: { manifest: AnyManifest }): JSX.Element 
       <output aria-label="Absolute range" className="font-mono text-xs tabular-nums text-ink-2">
         {absoluteTime(shown.start, epoch)} → {absoluteTime(shown.end, epoch)}
       </output>
+      {isLongWindow(win, range) && (
+        <span title={APPROXIMATE_TITLE} className="text-xs text-muted">
+          percentiles approximate
+        </span>
+      )}
     </fieldset>
   );
 }

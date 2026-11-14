@@ -10,6 +10,8 @@ export type KeyedState<V> =
       gone: boolean;
     };
 
+const isAbort = (e: unknown): boolean => e instanceof DOMException && e.name === 'AbortError';
+
 /**
  * Loads one value per key. A change of key aborts the previous load and resets to `loading`, so a result for a key
  * the user has moved on from is never shown. A `null` key loads nothing. `load` must be stable (module-level, or
@@ -23,12 +25,24 @@ export function useKeyedAsync<K, V>(
   useEffect(() => {
     if (key === null) return;
     const ctl = new AbortController();
+    // a synchronous throw is the load's own failure, an AbortError included; a rejection with one is a source that was
+    // superseded (below)
+    let sync = false;
     Promise.resolve()
-      .then(() => load(key, ctl.signal))
+      .then(() => {
+        try {
+          return load(key, ctl.signal);
+        } catch (e) {
+          sync = true;
+          throw e;
+        }
+      })
       .then(
         (value) => ctl.signal.aborted || setState({ key, result: { status: 'ready', value } }),
         (e: unknown) =>
+          // an abort is not a failure, whoever aborted: the key or the data source is about to change
           ctl.signal.aborted ||
+          (!sync && isAbort(e)) ||
           setState({
             key,
             result: {

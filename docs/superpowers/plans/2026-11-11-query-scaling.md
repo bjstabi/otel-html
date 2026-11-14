@@ -29,7 +29,7 @@ in order; a PR starts from `main` after the previous one merged.
 | 2   | `fix/test-span-times`        | `fix(test): test spans keep real times under a faked clock`            |        | merged #288 |
 | 3   | `perf/small-site-files`      | `perf(viewer): small site files load whole and in parallel`            |        | merged #289 |
 | 4   | `perf/pruning-statistics`    | `perf(query): statistics survive merges and reads follow the window`   | #272   | merged #292 |
-| 5   | `feat/format-5`              | `feat(format): format 5 with rollup tables and the end-time statistic` |        |        |
+| 5   | `feat/format-5`              | `feat(format): format 5 with rollup tables and the end-time statistic` |        | merged #293 |
 | 6   | `perf/rollup-router`         | `perf(viewer): long windows are answered from rollups`                 | #271   |        |
 | 7   | `perf/compaction-time-bound` | `perf(writer): compaction keeps files bounded in time`                 |        |        |
 | 8   | `feat/default-window`        | `feat(viewer): viewer.defaultWindow and longer presets`                |        |        |
@@ -159,7 +159,14 @@ change in any PR (a need for one is a stop).
   `src/viewer/shell/shell.tsx`, `src/viewer/shell/time-range.tsx`, `src/viewer/traces/explorer.tsx`,
   `src/viewer/logs/explorer.tsx`, `src/viewer/components/facet-panel.tsx`,
   `src/viewer/components/histogram-card.tsx`, `src/viewer/traces/span-section.tsx`,
-  `src/viewer/traces/trace-panel.tsx`. No build file.
+  `src/viewer/traces/trace-panel.tsx`; and, for lazy rollup views (maintainer, 2026-11-13), `src/query/sql/views.ts`,
+  `src/viewer/data/engine/files.ts`, `src/viewer/data/refresh-report.ts`; and `src/writer/partition-session.ts` (maintainer,
+  2026-11-13: a merge that copies a partition whose rollup description lacks the report's keys recomputes it, in
+  `copyPartitions`; it replaced `src/writer/merge.ts`, which needed no change); and `src/writer/rollup-rows.ts` (maintainer, 2026-11-13:
+  `resource:service.name` is a core rollup dimension, so a condition on it answers from rollups exactly); and
+  `src/viewer/components/fusion-timeline.tsx` (maintainer, 2026-11-13: the dashboard Timeline puts its columns on the
+  buckets' origin under a long window); and `src/viewer/state/use-keyed-async.ts` (maintainer, 2026-11-14: an
+  aborted keyed load is not an error). No build file.
 - **PR 7** — `src/writer/compaction.ts`, `src/writer/partition-session.ts`, `src/viewer/data/catalogue.ts`. No build
   file.
 - **PR 8** — `src/config/schema.ts`, `src/viewer/shell/shell.tsx`, `src/viewer/shell/time-range.tsx`,
@@ -2004,8 +2011,8 @@ be checked against its output. The other three columns are harness absolutes (**
 | 1 (baseline, small files off) | 891 / 1,064 | 611 / 814         | 1,834 / 2,441     | 2,217 / 4,873     |
 | 3 (small files on, 524,288)   | 560 / 937   | 379 / 821         | 1,138 / 2,464     | 2,297 / 3,542     |
 | 4             | 562 / 692               | 381 / 594         | 1,142 / 1,774     | 2,333 / 3,020     |
-| 6             | 388 / 298               | 264 / 240         | 793 / 712         | 1,331 / 1,404     |
-| 8 (window 7d) | 388 / 298               | 141 / 104         | 350 / 222         | 954 / 784         |
+| 6             | 271 / 227               | 159 / 252         | 478 / 732         | 1,888 / 528       |
+| 8 (window 7d) | 271 / 227               | 40 / 87           | 47 / 134          | 480 / 315         |
 
 The harness columns were re-derived in PR 3 from one generator, when the generator's logs changed to live size (an
 eighth as many as spans, so most logs files sit under the small-file limit as on the live report): row 1 is the pages
@@ -2020,6 +2027,15 @@ PR 9), and `resourceValues.all`, moved to PR 6. Batching the trace list's 26 ser
 but no serial reads, because one engine already shared the spans pages they read; a credited per-entry debt is not a
 whole-page saving. Rows 6 and 8 are the measured row 4 with `--after 6` and `--after 8 --window 7d`.
 
+Rows 6 and 8 were re-derived in PR 6 (maintainer, 2026-11-13) from the pages measured with PR 6 in place (`--after 6`,
+and `--after 8 --window 7d`), the rolling cells anchored on row 1's harness (433.9 / 553.6) as in PR 4: the script's own
+"after 1" row is no longer the baseline once paid debt lines are deleted. Row 6 as written in PR 4 (388 / 298; 264 / 240,
+793 / 712, 1,331 / 1,404) missed on 30x1.5M (dashboard 1,888, +42 %): PR 6 cut the dashboard's cost per partition
+(dense 12.4 to 4.9 serial requests, sparse 5.5 to 1.1) but not its cost per row group (about 2.0 to 2.5 a group before
+and after), which is `spans.total.attr.long` and `spans.facets.attr.long`, raw by design under a long window. Crediting
+each entry's share separately counted that slope as saved, because the attribute reads share pages with the entries that
+moved to rollups: the PR 4 lesson again. A partition of many groups keeps that slope.
+
 How the rolling cells come about (serial requests, dashboard / trace list; ratio = after / after PR 1; anchored = live x
 ratio; from the run of 2026-11-12 on the commit that added the section):
 
@@ -2028,8 +2044,8 @@ ratio; from the run of 2026-11-12 on the commit that added the section):
 | 1 (small files off) | 433.9 / 553.6        | 1.000 / 1.000   | 891 / 1,064 |
 | 3             | 272.6 / 487.7                | 0.628 / 0.881   | 560 / 937   |
 | 4             | 273.6 / 359.8                | 0.631 / 0.650   | 562 / 692   |
-| 6             | 188.9 / 155.2                | 0.435 / 0.280   | 388 / 298   |
-| 8 (window 7d) | 188.9 / 155.2                | 0.435 / 0.280   | 388 / 298   |
+| 6             | 131.8 / 118.0                | 0.304 / 0.213   | 271 / 227   |
+| 8 (window 7d) | 131.8 / 118.0                | 0.304 / 0.213   | 271 / 227   |
 
 Row 8 equals row 6 for `rolling` on purpose: all 21 snapshot partitions overlap the last 7 days (partition 165 spans 9
 days, from 1793449360 to 1794226244 s, and the 7-day window starts at 1793815081), so `inWindow` is true for every

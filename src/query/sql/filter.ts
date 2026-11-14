@@ -1,5 +1,17 @@
-import { and, column, type ExprNode, eq, gte, isIn, literal, lte, sql, verbatim } from '@uwdata/mosaic-sql';
-import type { ManifestV4 } from '../../format/manifest.js';
+import {
+  and,
+  column,
+  type ExprNode,
+  eq,
+  gte,
+  isIn,
+  literal,
+  lt,
+  lte,
+  sql,
+  verbatim,
+} from '@uwdata/mosaic-sql';
+import { type ManifestV4, ROLLUP_GRAIN_NS } from '../../format/manifest.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId } from '../../model/ids.js';
 import { type PruneHints, textPredicate, translateCondition } from './ottl.js';
@@ -15,6 +27,8 @@ export interface SqlFilter {
   files: Pruned;
   window: AbsWindow | null;
   epoch: bigint;
+  /** Long-window rules apply (spec §6.3): selection by start time, `lo <= start < hi`. */
+  long: boolean;
 }
 
 export interface FilterOptions {
@@ -28,6 +42,40 @@ export interface FilterOptions {
   traceFiles?: readonly string[];
   /** Statistics hints beside the condition's (a key both name keeps the values both allow), e.g. `metric_name` for a points query. */
   hints?: PruneHints;
+  /** The window (or, with none, the report's range) is long (`isLongWindow`). */
+  long?: boolean;
+}
+
+/** `buildFilter`'s result: the filter, the residual terms, what the translated terms read and the statistics hints that pruned `filter.files`. */
+export interface BuiltFilter {
+  filter: SqlFilter;
+  residual: string | null;
+  /** Statistics-key grammar (`service_name`, `resource:run.id`, `attr:*`); the `trace_id` of a trace-scoped read is in it. */
+  reads: ReadonlySet<string>;
+  hints: PruneHints;
+}
+
+const GRAIN = BigInt(ROLLUP_GRAIN_NS);
+/** Rounding of a relative time held as a `number` (an epoch more than 104 days away): a window end this close to a grain is that grain. */
+const SNAP_NS = 1_024n;
+
+/**
+ * A long window on whole grains of absolute time (spec 6.3), in bigint. The viewer aligns its windows, but hands them
+ * over as numbers relative to the epoch, which round above 2^53 ns (about 104 days), so an end lands a few ns off its
+ * grain: within `SNAP_NS` of a grain it is that grain; otherwise the window grows outward to the next one.
+ */
+function onGrains(w: AbsWindow | null): AbsWindow | null {
+  if (w === null) return null;
+  const mod = (t: bigint): bigint => ((t % GRAIN) + GRAIN) % GRAIN;
+  const down = (t: bigint): bigint => {
+    const r = mod(t);
+    return GRAIN - r <= SNAP_NS ? t + (GRAIN - r) : t - r;
+  };
+  const up = (t: bigint): bigint => {
+    const r = mod(t);
+    return r <= SNAP_NS ? t - r : t + (GRAIN - r);
+  };
+  return { start: down(w.start), end: up(w.end) };
 }
 
 function mergeHints(own: PruneHints, extra: PruneHints | undefined): PruneHints {
@@ -44,19 +92,20 @@ function mergeHints(own: PruneHints, extra: PruneHints | undefined): PruneHints 
  * The condition (translated, with its residual terms returned for the browser), the text search and the file pruning
  * for one table. Every user value goes through `literal`.
  */
-export function buildFilter(opts: FilterOptions): { filter: SqlFilter; residual: string | null } {
+export function buildFilter(opts: FilterOptions): BuiltFilter {
   const context = opts.table === 'spans' ? 'span' : opts.table === 'points' ? 'datapoint' : 'log_record';
   const condition = opts.condition === null || opts.condition.trim() === '' ? null : opts.condition;
   const t = condition === null ? null : translateCondition(condition, context);
   const epoch = BigInt(opts.manifest.epochUnixNano);
-  const window = absWindow(opts.window, epoch);
+  const long = opts.long === true;
+  const window = long ? onGrains(absWindow(opts.window, epoch)) : absWindow(opts.window, epoch);
   const hints = mergeHints(t?.hints ?? new Map(), opts.hints);
   if (opts.traceId != null && opts.traceFiles === undefined) {
     throw new OtelHtmlError('usage', {
       message: 'buildFilter: traceId needs traceFiles (the traces files tracePartitionsQuery names)',
     });
   }
-  let files = prunePartitions(opts.manifest, opts.table, hints, window);
+  let files = prunePartitions(opts.manifest, opts.table, hints, window, undefined, { long });
   if (opts.traceId != null && opts.traceFiles !== undefined) {
     const wanted = new Set(opts.traceFiles.map(partitionOfFilename));
     const kept = files.files.filter((p) => wanted.has(partitionOfFilename(p)));
@@ -66,13 +115,18 @@ export function buildFilter(opts: FilterOptions): { filter: SqlFilter; residual:
     opts.traceId == null
       ? (t?.predicate ?? null)
       : and(...(t?.predicate == null ? [] : [t.predicate]), eq(column('trace_id'), literal(opts.traceId)));
+  const reads = new Set(t?.reads ?? []);
+  if (opts.traceId != null) reads.add('trace_id');
   return {
+    reads,
+    hints,
     filter: {
       predicate,
       text: textPredicate(opts.text, context),
       files,
       window,
       epoch,
+      long,
     },
     residual: t?.residual ?? null,
   };
@@ -91,6 +145,7 @@ export function filenameTerm(files: Pruned): ExprNode | null {
 /**
  * The WHERE terms: predicate, text, `filename IN (...)` unless all files are read, and the window: spans (and
  * traces) overlapping it, `end >= start_abs AND start <= end_abs`, logs `coalesce(time, observed) BETWEEN`, points `time_unix_nano BETWEEN`.
+ * Under `long` every table is selected by its own time, `>= lo AND < hi`; no window adds no term.
  */
 export function whereOf(f: SqlFilter, table: 'spans' | 'logs' | 'points'): ExprNode[] {
   const terms: ExprNode[] = [];
@@ -101,12 +156,16 @@ export function whereOf(f: SqlFilter, table: 'spans' | 'logs' | 'points'): ExprN
   if (f.window !== null) {
     const lo = verbatim(`${f.window.start}::BIGINT`);
     const hi = verbatim(`${f.window.end}::BIGINT`);
+    const upper = f.long ? lt : lte;
     if (table === 'logs') {
       const t = sql`coalesce(${column('time_unix_nano')}, ${column('observed_time_unix_nano')})`;
-      terms.push(and(gte(t, lo), lte(t, hi)));
+      terms.push(and(gte(t, lo), upper(t, hi)));
     } else if (table === 'points') {
       const t = column('time_unix_nano');
-      terms.push(and(gte(t, lo), lte(t, hi)));
+      terms.push(and(gte(t, lo), upper(t, hi)));
+    } else if (f.long) {
+      const t = column('start_time_unix_nano');
+      terms.push(and(gte(t, lo), lt(t, hi)));
     } else {
       terms.push(gte(column('end_time_unix_nano'), lo), lte(column('start_time_unix_nano'), hi));
     }

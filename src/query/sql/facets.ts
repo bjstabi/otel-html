@@ -28,6 +28,10 @@ export interface CoreFacet {
   readonly scope: 'core' | 'resource';
   /** The VARCHAR expression of the facet's value, null when the row has none. */
   readonly expr: ExprNode;
+  /** The facet's statistics-key name (`service_name`, `resource:host.name`): what a rollup must hold to answer it. */
+  readonly reads: string;
+  /** The same value read from a rollup row, where the rollup stores it otherwise than the raw columns (`trace.present`). */
+  readonly rollupExpr?: ExprNode;
   readonly kind: 'string' | 'int' | 'double' | 'bool';
 }
 
@@ -63,21 +67,57 @@ const LOG_EXPRS: Readonly<Record<LogFacetKey, ExprNode>> = {
   'trace.present': sql`CASE WHEN ${col('trace_id')} IS NULL THEN 'no' ELSE 'yes' END`,
 };
 
+/** What each core facet reads, in the statistics-key grammar of a rollup's dimensions. */
+const SPAN_READS: Readonly<Record<SpanFacetKey, string>> = {
+  [ATTR_SERVICE_NAME]: 'service_name',
+  'span.name': 'name',
+  'span.kind': 'kind',
+  'status.code': 'status_code',
+  resource: 'resource_name',
+  'instrumentation_scope.name': 'scope_name',
+  [ATTR_HOST_NAME]: `resource:${ATTR_HOST_NAME}`,
+  [ATTR_DEPLOYMENT_ENVIRONMENT_NAME]: `resource:${ATTR_DEPLOYMENT_ENVIRONMENT_NAME}`,
+};
+const LOG_READS: Readonly<Record<LogFacetKey, string>> = {
+  severity: 'severity_number',
+  [ATTR_SERVICE_NAME]: 'service_name',
+  [ATTR_HOST_NAME]: 'host_name',
+  'instrumentation_scope.name': 'scope_name',
+  'event.name': 'event_name',
+  'trace.present': 'has_trace',
+};
+/** A log rollup keeps whether the record has a trace, not the trace id. */
+const LOG_ROLLUP_EXPRS: Partial<Readonly<Record<LogFacetKey, ExprNode>>> = {
+  'trace.present': sql`CASE WHEN ${col('has_trace')} THEN 'yes' ELSE 'no' END`,
+};
+
 function coreOf<K extends string>(
   defaults: readonly { key: K; label: string; scope: 'core' | 'resource' }[],
   exprs: Readonly<Record<K, ExprNode>>,
+  reads: Readonly<Record<K, string>>,
+  rollupExprs: Partial<Readonly<Record<K, ExprNode>>> = {},
 ): CoreFacet[] {
-  return defaults.map((d) => ({
-    key: d.key,
-    label: d.label,
-    scope: d.scope,
-    expr: exprs[d.key],
-    kind: 'string',
-  }));
+  return defaults.map((d) => {
+    const rollupExpr = rollupExprs[d.key];
+    return {
+      key: d.key,
+      label: d.label,
+      scope: d.scope,
+      expr: exprs[d.key],
+      reads: reads[d.key],
+      ...(rollupExpr === undefined ? {} : { rollupExpr }),
+      kind: 'string',
+    };
+  });
 }
 
-export const CORE_SPAN_FACETS: readonly CoreFacet[] = coreOf(DEFAULT_SPAN_FACETS, SPAN_EXPRS);
-export const CORE_LOG_FACETS: readonly CoreFacet[] = coreOf(DEFAULT_LOG_FACETS, LOG_EXPRS);
+export const CORE_SPAN_FACETS: readonly CoreFacet[] = coreOf(DEFAULT_SPAN_FACETS, SPAN_EXPRS, SPAN_READS);
+export const CORE_LOG_FACETS: readonly CoreFacet[] = coreOf(
+  DEFAULT_LOG_FACETS,
+  LOG_EXPRS,
+  LOG_READS,
+  LOG_ROLLUP_EXPRS,
+);
 
 export const truncated = (e: ExprNode): ExprNode =>
   sql`left(${e}, ${verbatim(String(MAX_FACET_VALUE_LENGTH))})`;

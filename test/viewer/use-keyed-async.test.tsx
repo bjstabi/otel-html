@@ -50,6 +50,27 @@ afterEach(async () => {
 });
 
 describe('useKeyedAsync', () => {
+  test('a load that rejects with an AbortError is not an error: the state stays loading', async () => {
+    const h = setup();
+    await h.render('a');
+    // a source superseded by a Refresh aborts its own statements, though this load's signal was not aborted
+    await act(async () =>
+      h.calls[0]?.reject(new DOMException('A newer data source owns the views', 'AbortError')),
+    );
+    expect(h.state()).toEqual({ status: 'loading' });
+  });
+
+  test("a load that throws an AbortError synchronously is that load's error, while it is current", async () => {
+    const root: Root = createRoot(document.createElement('div'));
+    roots.push(root);
+    let latest: KeyedState<string> = { status: 'loading' };
+    const load = (): Promise<string> => {
+      throw new DOMException('refused', 'AbortError');
+    };
+    await act(async () => root.render(<Probe k="a" load={load} onState={(v) => (latest = v)} />));
+    expect(latest).toMatchObject({ status: 'error', message: 'AbortError: refused' });
+  });
+
   test('is loading, then ready with the value', async () => {
     const h = setup();
     await h.render('a');

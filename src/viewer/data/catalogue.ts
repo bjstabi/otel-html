@@ -1,10 +1,16 @@
 import { OtelHtmlError } from '../../model/errors.js';
 import { parseTraceId } from '../../model/ids.js';
 import type { MetricQuery } from '../../query/metric-query.js';
-import { DEFAULT_LOG_FACETS, DEFAULT_SPAN_FACETS } from '../../semconv/default-facets.js';
 import type { DataSource } from './data-source.js';
 import { parseLogRef } from './log-query.js';
-import type { LogNeed, LogQuery, SpanNeed, SpanQuery } from './results.js';
+import {
+  CORE_LOG_FACET_KEYS,
+  CORE_SPAN_FACET_KEYS,
+  type LogNeed,
+  type LogQuery,
+  type SpanNeed,
+  type SpanQuery,
+} from './results.js';
 import type { TimeWindow } from './time-window.js';
 
 /**
@@ -85,8 +91,8 @@ const ATTR = (ids: ScalingIds): Condition => ({
 const RESIDUAL = (): Condition => ({ condition: 'Len(name) > 1', text: '' });
 const TEXT = (ids: ScalingIds): Condition => ({ condition: null, text: ids.text });
 
-const CORE_SPAN_KEYS = DEFAULT_SPAN_FACETS.map((f) => f.key);
-const CORE_LOG_KEYS = DEFAULT_LOG_FACETS.map((f) => f.key);
+const CORE_SPAN_KEYS = CORE_SPAN_FACET_KEYS;
+const CORE_LOG_KEYS = CORE_LOG_FACET_KEYS;
 const SURROUNDING = 5;
 const DURATION_NS = 1_000_000;
 
@@ -132,6 +138,8 @@ interface SpanSpec {
   family: Family;
   needs: readonly SpanNeed[];
   builders: readonly string[];
+  /** The builders under a long window (the router sends the need to the measures relation), where they differ. */
+  long?: readonly string[];
   over?: Partial<SpanQuery>;
   when?: (ids: ScalingIds) => Condition;
   variants?: readonly Variant[];
@@ -145,7 +153,7 @@ function spanEntries(specs: readonly SpanSpec[]): Entry<'querySpans'>[] {
         family: s.family,
         method: 'querySpans',
         needs: s.needs,
-        builders: s.builders,
+        builders: v === LONG || v === ALL_LONG ? (s.long ?? s.builders) : s.builders,
         spacing: v.spacing,
         window: v.window,
         run: (ds, ctx) =>
@@ -167,6 +175,8 @@ interface LogSpec {
   family: Family;
   needs: readonly LogNeed[];
   builders: readonly string[];
+  /** The builders under a long window (the router sends the need to the measures relation), where they differ. */
+  long?: readonly string[];
   over?: Partial<LogQuery>;
   when?: (ids: ScalingIds) => Condition;
   variants?: readonly Variant[];
@@ -180,7 +190,7 @@ function logEntries(specs: readonly LogSpec[]): Entry<'queryLogs'>[] {
         family: s.family,
         method: 'queryLogs',
         needs: s.needs,
-        builders: s.builders,
+        builders: v === LONG || v === ALL_LONG ? (s.long ?? s.builders) : s.builders,
         spacing: v.spacing,
         window: v.window,
         run: (ds, ctx) =>
@@ -211,23 +221,39 @@ const span = (
 });
 
 const SPAN_AGGREGATES: SpanSpec[] = [
-  span('spans.total', ['total'], ['spanCountQuery']),
-  { ...span('spans.buckets', ['buckets'], ['timelineQuery']), family: 'time buckets' },
-  { ...span('spans.timeline', ['timeline'], ['timelineQuery']), family: 'time buckets' },
+  span('spans.total', ['total'], ['spanCountQuery'], { long: ['rollupTotalQuery'] }),
   {
-    ...span('spans.facets.core', ['facets'], ['coreFacetsQuery'], { over: { facetKeys: CORE_SPAN_KEYS } }),
+    ...span('spans.buckets', ['buckets'], ['timelineQuery'], { long: ['rollupTimelineQuery'] }),
+    family: 'time buckets',
+  },
+  {
+    ...span('spans.timeline', ['timeline'], ['timelineQuery'], { long: ['rollupTimelineQuery'] }),
+    family: 'time buckets',
+  },
+  {
+    ...span('spans.facets.core', ['facets'], ['coreFacetsQuery'], {
+      over: { facetKeys: CORE_SPAN_KEYS },
+      long: ['rollupFacetsQuery'],
+    }),
     family: 'top values',
   },
   {
-    ...span('spans.facets.attr', ['facets'], ['coreFacetsQuery', 'attributeFacetsQuery']),
+    ...span('spans.facets.attr', ['facets'], ['coreFacetsQuery', 'attributeFacetsQuery'], {
+      long: ['rollupFacetsQuery', 'attributeFacetsQuery'],
+    }),
     family: 'top values',
   },
   {
-    ...span('spans.groups', ['groups'], ['groupStatsQuery'], { over: { measureBy: 'service.name' } }),
+    ...span('spans.groups', ['groups'], ['groupStatsQuery'], {
+      over: { measureBy: 'service.name' },
+      long: ['rollupGroupsQuery'],
+    }),
     family: 'group statistics',
   },
   {
-    ...span('spans.durations', ['durations'], ['durationSummaryQuery', 'durationBinsQuery']),
+    ...span('spans.durations', ['durations'], ['durationSummaryQuery', 'durationBinsQuery'], {
+      long: ['rollupDurationsQuery', 'rollupDurationBinsQuery'],
+    }),
     family: 'duration distribution',
   },
 ];
@@ -238,18 +264,27 @@ const CONDITIONS: readonly [string, (ids: ScalingIds) => Condition][] = [
   ['attr', ATTR],
   ['text', TEXT],
 ];
+/** Under a long window a condition on a dimension is answered from the rollups; any other (and a text) reads the raw files in their shape. */
+const RAW_BRANCH = ['durationBucketsQuery', 'rollupTotalQuery'] as const;
 const SPAN_CONDITIONS: SpanSpec[] = [
-  ...CONDITIONS.map(([c, when]) => span(`spans.total.${c}`, ['total'], ['spanCountQuery'], { when })),
+  ...CONDITIONS.map(([c, when]) =>
+    span(`spans.total.${c}`, ['total'], ['spanCountQuery'], {
+      when,
+      long: c === 'attr' || c === 'text' ? [...RAW_BRANCH] : ['rollupTotalQuery'],
+    }),
+  ),
   span(
     'spans.total.residual',
     ['total'],
     ['spanCountQuery', 'spanRowsQuery', 'idTableStatement', 'idTableRowsQuery'],
     {
       when: RESIDUAL,
+      long: ['spanRowsQuery', 'idTableStatement', 'idTableRowsQuery', ...RAW_BRANCH],
     },
   ),
   span('spans.total.traces', ['total'], ['spanCountQuery'], {
     over: { mode: 'traces' },
+    long: ['allTraceCountQuery'],
     variants: [LONG],
   }),
 ];
@@ -262,6 +297,9 @@ const SPAN_ROWS: SpanSpec[] = [
   },
 ];
 
+/** The trace list of a condition under a long window: the partitions of the traces that start in it, then their spans. */
+const WINDOW_TRACES = ['windowTracePartitionsQuery', 'windowTraceRowsQuery'] as const;
+
 const TRACE_LIST: SpanSpec[] = [
   {
     ...span('traces.list', ['rows'], ['allTraceRowsQuery'], { over: { mode: 'traces' } }),
@@ -269,20 +307,28 @@ const TRACE_LIST: SpanSpec[] = [
     variants: [ALL, ALL_LONG],
   },
   {
-    ...span('traces.list', ['rows'], ['traceRowsQuery'], { over: { mode: 'traces' } }),
+    ...span('traces.list', ['rows'], ['traceRowsQuery'], {
+      over: { mode: 'traces' },
+      long: ['allTraceRowsQuery'],
+    }),
     family: 'trace list',
     variants: [SHORT, LONG],
   },
   {
     ...span('traces.list.statkey', ['rows'], ['traceRowsQuery'], {
       over: { mode: 'traces' },
+      long: WINDOW_TRACES,
       when: STAT_KEY,
     }),
     family: 'trace list',
     variants: [LONG],
   },
   {
-    ...span('traces.list.attr', ['rows'], ['traceRowsQuery'], { over: { mode: 'traces' }, when: ATTR }),
+    ...span('traces.list.attr', ['rows'], ['traceRowsQuery'], {
+      over: { mode: 'traces' },
+      when: ATTR,
+      long: WINDOW_TRACES,
+    }),
     family: 'trace list',
     variants: [LONG],
   },
@@ -297,24 +343,31 @@ const log = (
 ): LogSpec => ({ id, family, needs, builders, ...rest });
 
 const LOG_QUERIES: LogSpec[] = [
-  log('logs.timeline', 'time buckets', ['timeline'], ['logTimelineQuery']),
+  log('logs.timeline', 'time buckets', ['timeline'], ['logTimelineQuery'], { long: ['rollupTimelineQuery'] }),
   log('logs.facets.core', 'top values', ['facets'], ['coreFacetsQuery'], {
     over: { facetKeys: CORE_LOG_KEYS },
+    long: ['rollupFacetsQuery'],
   }),
-  log('logs.facets.attr', 'top values', ['facets'], ['coreFacetsQuery', 'attributeFacetsQuery']),
+  log('logs.facets.attr', 'top values', ['facets'], ['coreFacetsQuery', 'attributeFacetsQuery'], {
+    long: ['rollupFacetsQuery', 'attributeFacetsQuery'],
+  }),
   log('logs.rows', 'rows page', ['rows'], ['logRowsQuery']),
   log('logs.traces', 'trace list', ['rows', 'total'], ['logTracesQuery', 'logCountQuery'], {
     over: { mode: 'traces', sort: { column: 'first', dir: 'asc' } },
   }),
-  log('logs.total', 'count', ['total'], ['logCountQuery']),
+  log('logs.total', 'count', ['total'], ['logCountQuery'], { long: ['rollupTotalQuery'] }),
   log('logs.total.traces', 'count', ['total'], ['logCountQuery'], {
     over: { mode: 'traces', sort: { column: 'first', dir: 'asc' } },
     variants: [LONG],
   }),
-  log('logs.timeline.statkey', 'time buckets', ['timeline'], ['logTimelineQuery'], { when: STAT_KEY }),
+  log('logs.timeline.statkey', 'time buckets', ['timeline'], ['logTimelineQuery'], {
+    when: STAT_KEY,
+    long: ['rollupTimelineQuery'],
+  }),
   log('logs.timeline.text', 'time buckets', ['timeline'], ['logTimelineQuery'], {
     when: TEXT,
     variants: [LONG],
+    long: ['rollupTimelineQuery'],
   }),
 ];
 
@@ -326,9 +379,9 @@ function windowOf(ctx: CatalogueContext): TimeWindow {
 
 const entry = <M extends keyof DataSource>(e: Entry<M>): Entry<M> => e;
 
-/** An entry for a request with no window and no growth in spacing: dense, `window: false`. */
+/** An entry for a request with no window: `window: false`, on the dense report unless it says otherwise. */
 function point<M extends keyof DataSource>(
-  e: Omit<CatalogueEntry, 'spacing' | 'window' | 'method'> & { method: M },
+  e: Omit<CatalogueEntry, 'spacing' | 'window' | 'method'> & { method: M; spacing?: 'dense' | 'sparse' },
 ): Entry<M> {
   return { spacing: 'dense', window: false, ...e };
 }
@@ -359,7 +412,8 @@ const SERVICES: readonly Entry<'services'>[] = WINDOWED.map(
     id: `spans.services.${v.suffix}`,
     family: 'group statistics',
     method: 'services',
-    builders: ['servicesQuery', 'serviceBucketsQuery'],
+    builders:
+      v === LONG ? ['rollupGroupsQuery', 'rollupTimelineQuery'] : ['servicesQuery', 'serviceBucketsQuery'],
     spacing: v.spacing,
     window: true,
     run: (ds, ctx) => ds.services({ window: ctx.window, condition: null, limit: 10 }),
@@ -371,7 +425,7 @@ const PERCENTILE: readonly Entry<'percentileOf'>[] = WINDOWED.map(
     id: `percentile.${v.suffix}`,
     family: 'duration distribution',
     method: 'percentileOf',
-    builders: ['percentileQuery'],
+    builders: v === LONG ? ['rollupPercentileQuery'] : ['percentileQuery'],
     spacing: v.spacing,
     // the percentile reads the service and resource's spans whatever the page's window
     window: false,
@@ -458,8 +512,18 @@ export const CATALOGUE = [
     run: (ds, ctx) => ds.surroundingLogs(parseLogRef(ctx.ids.logRef, 'catalogue.logRef'), SURROUNDING),
   }),
   ...logEntries(LOG_QUERIES),
+  // no window on a report whose range is long (the sparse one): the rollups answer; a short range reads the files (spec §6.3)
   point({
     id: 'resourceValues.all',
+    family: 'distinct values',
+    method: 'resourceValues',
+    builders: ['rollupResourceValuesQuery'],
+    spacing: 'sparse',
+    run: (ds) => ds.resourceValues('service.name', { window: null }),
+  }),
+  // the same call on a report whose whole range is short (the dense one): never the rollups (spec §6.3), so the files
+  point({
+    id: 'resourceValues.all.short',
     family: 'distinct values',
     method: 'resourceValues',
     builders: ['resourceValuesQuery'],
@@ -470,7 +534,7 @@ export const CATALOGUE = [
       id: `resourceValues.${v.suffix}`,
       family: 'distinct values',
       method: 'resourceValues',
-      builders: ['resourceValuesQuery'],
+      builders: v === LONG ? ['rollupResourceValuesQuery'] : ['resourceValuesQuery'],
       spacing: v.spacing,
       window: true,
       run: (ds, ctx) => ds.resourceValues('service.name', { window: ctx.window }),
@@ -602,7 +666,10 @@ export interface Declared {
   allowed?: Partial<Record<Axis, string>>;
   /** Row groups that hold rows the request must read; default: every row group of the selected partitions. */
   needed?: (shape: ShapeSize) => number;
-  /** The id of the same request without its condition; what `matched` is measured against. */
+  /**
+   * The raw-path reference `matched` is measured against: normally the same request without its condition. When that
+   * request is itself `fixed` or `files` (so its growth is no bound), the conditioned entry that still scans.
+   */
   scanOf?: string;
   /**
    * For an entry that reads traces or patterns files (and, from format 5, rollup files). Measured at the densest step
@@ -623,6 +690,8 @@ const ONE_GROUP = (): number => 1;
 /** The sentences of `Declared.allowed`: why a `scan` is right (§3.4), or left to the baseline of the first PR. */
 const SHORT_WINDOW =
   'a short window is bounded, so an aggregate reads its rows in full; §3.4 allows scan on density and window';
+const SHORT_RANGE =
+  'a report whose whole range is shorter never uses the rollup (spec §6.3); the range is short by definition, so the scan is bounded';
 const ATTRIBUTE_AGGREGATE =
   'an aggregate over an attribute, a text or distinct traces reads the rows it filters; §3.4 allows scan and the README documents it';
 const ROWS_PAGE =
@@ -642,103 +711,95 @@ const decl = ([retention, density, window]: Row, rest: Omit<Declared, 'class'> =
 
 /** One line per `CATALOGUE` id: the class measured on each axis today (the baseline), and why a `scan` is right. */
 const BASELINE: Record<string, Declared> = {
-  'spans.total.short': decl(['scan', 'scan', 'scan'], {
+  'spans.total.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'spans.total.long': decl(['scan', 'scan', 'scan']),
-  'spans.buckets.short': decl(['scan', 'scan', 'scan'], {
+  'spans.total.long': decl(['fixed', 'fixed', 'files']),
+  'spans.buckets.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'spans.buckets.long': decl(['scan', 'scan', 'scan']),
-  'spans.timeline.short': decl(['scan', 'scan', 'scan'], {
+  'spans.buckets.long': decl(['fixed', 'fixed', 'files']),
+  'spans.timeline.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'spans.timeline.long': decl(['scan', 'scan', 'scan']),
-  'spans.facets.core.short': decl(['scan', 'scan', 'scan'], {
+  'spans.timeline.long': decl(['fixed', 'fixed', 'files']),
+  'spans.facets.core.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'spans.facets.core.long': decl(['scan', 'scan', 'scan']),
-  'spans.facets.attr.short': decl(['scan', 'scan', 'scan'], {
+  'spans.facets.core.long': decl(['fixed', 'fixed', 'files']),
+  'spans.facets.attr.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
   }),
-  'spans.facets.attr.long': decl(['scan', 'scan', 'scan'], {
+  'spans.facets.attr.long': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
   }),
-  'spans.groups.short': decl(['scan', 'scan', 'scan'], {
+  'spans.groups.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'spans.groups.long': decl(['scan', 'scan', 'scan']),
-  'spans.durations.short': decl(['scan', 'scan', 'scan'], {
+  'spans.groups.long': decl(['fixed', 'fixed', 'files']),
+  'spans.durations.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'spans.durations.long': decl(['scan', 'scan', 'scan']),
-  'spans.services.short': decl(['scan', 'scan', 'scan'], {
+  'spans.durations.long': decl(['fixed', 'fixed', 'files']),
+  'spans.services.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'spans.services.long': decl(['scan', 'scan', 'scan']),
-  'spans.total.sortkey.short': decl(['scan', 'scan', 'scan'], {
+  'spans.services.long': decl(['fixed', 'fixed', 'files']),
+  'spans.total.sortkey.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
     needed: ONE_SERVICE,
     scanOf: 'spans.total.short',
   }),
-  'spans.total.sortkey.long': decl(['scan', 'scan', 'scan'], {
-    needed: ONE_SERVICE,
-    scanOf: 'spans.total.long',
-  }),
+  'spans.total.sortkey.long': decl(['fixed', 'fixed', 'files']),
   'spans.total.statkey.short': decl(['fixed', 'matched', 'fixed'], {
     needed: ONE_PARTITION,
     scanOf: 'spans.total.short',
   }),
-  'spans.total.statkey.long': decl(['fixed', 'matched', 'fixed'], {
-    needed: ONE_PARTITION,
-    scanOf: 'spans.total.long',
-  }),
-  'spans.total.attr.short': decl(['scan', 'scan', 'scan'], {
+  // window `fixed`, not the row's `files`: the statistics keep one rollup file whatever the window holds
+  'spans.total.statkey.long': decl(['fixed', 'fixed', 'fixed']),
+  'spans.total.attr.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'spans.total.short',
   }),
-  'spans.total.attr.long': decl(['scan', 'scan', 'scan'], {
+  'spans.total.attr.long': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'spans.total.long',
   }),
-  'spans.total.text.short': decl(['scan', 'scan', 'scan'], {
+  'spans.total.text.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'spans.total.short',
   }),
-  'spans.total.text.long': decl(['scan', 'scan', 'scan'], {
+  'spans.total.text.long': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'spans.total.long',
   }),
-  'spans.total.residual.short': decl(['scan', 'scan', 'scan'], {
+  'spans.total.residual.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'spans.total.short',
   }),
-  'spans.total.residual.long': decl(['scan', 'scan', 'scan'], {
+  'spans.total.residual.long': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'spans.total.long',
   }),
-  'spans.total.traces.long': decl(['scan', 'scan', 'scan'], {
-    allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
-    scanOf: 'spans.total.long',
-  }),
-  'spans.rows.short': decl(['scan', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
-  'spans.rows.long': decl(['scan', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
+  'spans.total.traces.long': decl(['files', 'files', 'files']),
+  'spans.rows.short': decl(['fixed', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
+  'spans.rows.long': decl(['fixed', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
   'spans.rows.all': decl(['scan', 'scan', null], { allowed: { retention: ROWS_PAGE, density: ROWS_PAGE } }),
   'percentile.short': decl(['scan', 'scan', null], {
     allowed: { retention: PERCENTILE_SHORT, density: PERCENTILE_SHORT },
   }),
-  'percentile.long': decl(['scan', 'scan', null]),
+  'percentile.long': decl(['files', 'fixed', null]),
   'traces.list.all': decl(['files', 'files', null]),
   'traces.list.all.long': decl(['files', 'files', null]),
-  'traces.list.short': decl(['scan', 'scan', 'scan'], {
+  'traces.list.short': decl(['files', 'scan', 'scan'], {
     allowed: { density: TRACE_LIST_SCAN, window: TRACE_LIST_SCAN },
   }),
-  'traces.list.long': decl(['scan', 'scan', 'scan']),
+  'traces.list.long': decl(['files', 'files', 'files']),
   'traces.list.statkey.long': decl(['files', 'matched', 'files'], {
     needed: ONE_PARTITION,
-    scanOf: 'traces.list.long',
+    scanOf: 'traces.list.attr.long',
   }),
-  'traces.list.attr.long': decl(['scan', 'scan', 'scan'], {
+  'traces.list.attr.long': decl(['files', 'scan', 'scan'], {
     allowed: { density: TRACE_LIST_SCAN, window: TRACE_LIST_SCAN },
     scanOf: 'traces.list.long',
   }),
@@ -754,11 +815,11 @@ const BASELINE: Record<string, Declared> = {
   'logs.timeline.short': decl(['fixed', 'files', 'files'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'logs.timeline.long': decl(['fixed', 'files', 'files']),
+  'logs.timeline.long': decl(['fixed', 'fixed', 'files']),
   'logs.facets.core.short': decl(['fixed', 'files', 'files'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'logs.facets.core.long': decl(['fixed', 'files', 'files']),
+  'logs.facets.core.long': decl(['fixed', 'fixed', 'files']),
   'logs.facets.attr.short': decl(['fixed', 'files', 'files'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
   }),
@@ -776,25 +837,25 @@ const BASELINE: Record<string, Declared> = {
     allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
   }),
   'logs.total.short': decl(['fixed', 'files', 'files']),
-  'logs.total.long': decl(['fixed', 'files', 'files']),
+  'logs.total.long': decl(['fixed', 'fixed', 'files']),
   'logs.total.traces.long': decl(['fixed', 'files', 'files']),
   'logs.timeline.statkey.short': decl(['fixed', 'files', 'fixed'], {
     needed: ONE_PARTITION,
     scanOf: 'logs.timeline.short',
   }),
-  'logs.timeline.statkey.long': decl(['fixed', 'files', 'fixed'], {
-    needed: ONE_PARTITION,
-    scanOf: 'logs.timeline.long',
-  }),
+  'logs.timeline.statkey.long': decl(['fixed', 'fixed', 'fixed']),
   'logs.timeline.text.long': decl(['fixed', 'files', 'files'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'logs.timeline.long',
   }),
-  'resourceValues.all': decl(['scan', 'scan', null]),
-  'resourceValues.short': decl(['scan', 'scan', 'scan'], {
+  'resourceValues.all': decl(['files', 'fixed', null]),
+  'resourceValues.all.short': decl(['scan', 'scan', null], {
+    allowed: { retention: SHORT_RANGE, density: SHORT_RANGE },
+  }),
+  'resourceValues.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'resourceValues.long': decl(['scan', 'scan', 'scan']),
+  'resourceValues.long': decl(['fixed', 'fixed', 'files']),
   patterns: decl(['files', 'fixed', null]),
   'metrics.catalog': decl(['files', 'fixed', null]),
   'metrics.showOptions': decl(['fixed', 'fixed', null]),
@@ -812,6 +873,9 @@ const BASELINE: Record<string, Declared> = {
 const SMALL_TABLE_BUILDERS: ReadonlySet<string> = new Set([
   'traceRowsQuery',
   'allTraceRowsQuery',
+  'allTraceCountQuery',
+  'windowTracePartitionsQuery',
+  'windowTraceRowsQuery',
   'tracePartitionsQuery',
   'traceSummaryQuery',
   'patternsQuery',
@@ -856,85 +920,19 @@ const owed = (
 
 /**
  * `scan`s that §3.4 does not allow, each owed to an issue and a PR of the plan; the list only shrinks. Grouped by
- * cause: #271 (a spans file wholly before the window is opened, long-window aggregates scan raw files; PR 6), #281
- * (small files read serially; PR 3, done), #282 (resourceValues without a window reads every file; the unconditioned
- * trace list was paid by PR 4; the rest goes with the rollup router in PR 6), #283 (compaction), not yet measured, and
- * #291 (opening a trace reads the spans files of its partitions whole; no PR of the plan fixes it, so PR 9 carries it).
+ * cause: #271 (paid by PR 6: the aggregates, the percentile, the trace list and `resourceValues` under a long window),
+ * #281 (small files read serially; PR 3, done), #282 (paid by PR 6 for long-range reports: the rollup route answers
+ * `resourceValues` without a window; on a short range it scans by design, §6.3, see `resourceValues.all.short`),
+ * #283 (compaction), not yet measured, #291 (opening a trace reads the spans files of its partitions whole; no PR of
+ * the plan fixes it, so PR 9 carries it) and #295 (the metrics entries with a window measure `files`, not `fixed`, on
+ * retention: the points file of every partition outside the window is still loaded; PR 9).
  */
 export const KNOWN_DEBT: readonly DebtLine[] = [
   ...owed(291, 9, 'density', 'matched', true, ['trace.get', 'trace.share']),
-  ...owed(271, 6, 'density', 'fixed', true, [
-    'spans.total.long',
-    'spans.buckets.long',
-    'spans.timeline.long',
-    'spans.facets.core.long',
-    'spans.groups.long',
-    'spans.durations.long',
-    'spans.services.long',
-    'spans.total.sortkey.long',
-    'percentile.long',
-    'resourceValues.long',
-  ]),
-  ...owed(271, 6, 'density', 'fixed', false, ['logs.timeline.long', 'logs.facets.core.long']),
-  ...owed(271, 6, 'density', 'files', true, ['traces.list.long']),
-  ...owed(271, 6, 'retention', 'fixed', true, [
-    'spans.total.short',
-    'spans.total.long',
-    'spans.buckets.short',
-    'spans.buckets.long',
-    'spans.timeline.short',
-    'spans.timeline.long',
-    'spans.facets.core.short',
-    'spans.facets.core.long',
-    'spans.facets.attr.short',
-    'spans.facets.attr.long',
-    'spans.groups.short',
-    'spans.groups.long',
-    'spans.durations.short',
-    'spans.durations.long',
-    'spans.services.short',
-    'spans.services.long',
-    'spans.total.sortkey.short',
-    'spans.total.sortkey.long',
-    'spans.total.attr.short',
-    'spans.total.attr.long',
-    'spans.total.text.short',
-    'spans.total.text.long',
-    'spans.total.residual.short',
-    'spans.total.residual.long',
-    'spans.total.traces.long',
-    'spans.rows.short',
-    'spans.rows.long',
-    'resourceValues.short',
-    'resourceValues.long',
-  ]),
-  ...owed(271, 6, 'retention', 'files', true, [
-    'percentile.long',
-    'traces.list.short',
-    'traces.list.long',
-    'traces.list.attr.long',
-  ]),
-  ...owed(271, 6, 'window', 'files', true, [
-    'spans.total.long',
-    'spans.buckets.long',
-    'spans.timeline.long',
-    'spans.facets.core.long',
-    'spans.groups.long',
-    'spans.durations.long',
-    'spans.services.long',
-    'spans.total.sortkey.long',
-    'traces.list.long',
-    'resourceValues.long',
-  ]),
-  ...owed(271, 6, 'window', 'files', false, ['logs.timeline.long', 'logs.facets.core.long']),
-  // Metrics with a window are `fixed` on retention in the end (§3.4): the small-file part went with #281 (PR 3: their points files load
-  // whole, so they are `files` now); the partitions the window cannot hold are pruned by the end-time and manifest-range pruning of #271 (PR 6).
-  ...owed(271, 6, 'retention', 'fixed', false, [
+  ...owed(295, 9, 'retention', 'fixed', false, [
     'metrics.query.summary',
     'metrics.runQuery',
     'metrics.runQuery.failed',
   ]),
-  ...owed(282, 6, 'density', 'fixed', true, ['resourceValues.all']),
-  ...owed(282, 6, 'retention', 'files', true, ['resourceValues.all']),
   ...owed(283, 7, 'retention', 'fixed', false, ['spans.total.short', 'spans.total.long']),
 ];

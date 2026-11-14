@@ -18,11 +18,14 @@ import { FlameGraph } from '../components/flame-graph.js';
 import { Waterfall } from '../components/waterfall.js';
 import type { DataSource, TraceDetail } from '../data/data-source.js';
 import type { LogRow } from '../data/log-query.js';
+import { manifestRange } from '../data/manifest-range.js';
+import { isLongWindow } from '../data/time-window.js';
 import { useHasMetrics } from '../metrics/metric-grid.js';
 import { CONTROL } from '../shell/controls.js';
 import { GoneNotice } from '../shell/in-progress.js';
 import { MOVE_EVENT } from '../shell/move-event.js';
 import { CopyLink } from '../shell/page-chrome.js';
+import { APPROXIMATE_TITLE } from '../shell/time-range.js';
 import { selectionToUrlState } from '../state/selection.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
 import { serializeUrlState } from '../state/url-state.js';
@@ -145,6 +148,7 @@ function Header(props: { detail: TraceDetail; dataSource: DataSource; epoch: Uni
   );
   const percentileState = useKeyedAsync(detail.traceId, loadPercentile);
   const percentile = percentileState.status === 'ready' ? percentileState.value : null;
+  const approximate = isLongWindow(null, manifestRange(dataSource.manifest));
   return (
     <div className="flex flex-col gap-2" data-testid="trace-header">
       <h2 className="flex flex-wrap items-center gap-x-2 gap-y-1 text-base font-semibold">
@@ -169,6 +173,11 @@ function Header(props: { detail: TraceDetail; dataSource: DataSource; epoch: Uni
                 className="rounded-full bg-ink/10 px-2 py-0.5 text-xs"
               >
                 p{Math.round(percentile)}
+              </span>
+            )}
+            {percentile !== null && approximate && (
+              <span title={APPROXIMATE_TITLE} className="text-xs text-muted">
+                approximate
               </span>
             )}
           </span>
