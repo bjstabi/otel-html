@@ -94,7 +94,8 @@ export function spanRowsQuery(f: SqlFilter, sort: SpanSort, limit: number): Quer
 /**
  * The traces of the matching spans: `traces` aggregated per trace_id over every `traces` file, for the traces with a matching span
  * (a trace split across partitions is one row, whatever the window): `span_count`, `error_count`, `log_count` summed, `start_ns` / `end_ns` the min and
- * max over rows with spans and a time (R33), the root from the row with the smallest start whose `root_name` is set,
+ * max over rows with spans and a time (R33), `share` the stored `service_share` text when the trace has spans in exactly one
+ * `traces` row of the scope (else, or when that row has none, NULL; it reads the `traces` column only, never a span), the root from the row with the smallest start whose `root_name` is set,
  * the lower partition on a tie (R35). Also `duration_ns` and `total`.
  */
 export function traceRowsQuery(f: SqlFilter, sort: TraceSort, limit: number): Query {
@@ -186,6 +187,8 @@ function traceAggregate(epoch: bigint): SelectQuery {
       log_count: sql`CAST(sum(log_count) AS BIGINT)`,
       start_ns: sql`min(${relTime('start_time_unix_nano', epoch)}) FILTER (WHERE ${timed})`,
       end_ns: sql`max(${relTime('end_time_unix_nano', epoch)}) FILTER (WHERE ${timed})`,
+      // the stored share of the one row with spans, null when the trace has spans in several rows (or none stored)
+      share: sql`CASE WHEN count(*) FILTER (WHERE span_count > 0) = 1 THEN max(service_share) FILTER (WHERE span_count > 0) END`,
       root: sql`arg_min({'service': root_service, 'name': root_name, 'resource': root_resource}, (start_time_unix_nano, filename)) FILTER (WHERE ${rooted})`,
     })
     .groupby('trace_id');
@@ -203,6 +206,7 @@ function traceRowsOf(agg: Query, sort: TraceSort, limit: number): Query {
     root_service: sql`root.service`,
     root_name: sql`root.name`,
     root_resource: sql`root.resource`,
+    share: column('share'),
   });
   return Query.from({ t: withDuration })
     .select('*', { total: sql`count(*) OVER ()` })

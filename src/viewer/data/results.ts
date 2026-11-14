@@ -1,3 +1,4 @@
+import type { ServiceShare } from '../../format/service-share.js';
 import type { TraceId } from '../../model/ids.js';
 import type { ResourceRecord, ScopeRecord, SpanRecord } from '../../model/records.js';
 import type { FacetCounts } from '../../rollups/facets.js';
@@ -165,6 +166,8 @@ export interface TraceRow {
   durationNs: number;
   spans: number;
   errors: number;
+  /** The stored exclusive time per service; null when it is not exact (several partitions, none stored, malformed): the cell loads it. */
+  share: ServiceShare | null;
 }
 
 export interface RowTables {

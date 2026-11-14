@@ -5,6 +5,7 @@ import {
   SharedInterner,
   spanFromRow,
 } from '../../format/parquet/decode.js';
+import { decodeServiceShare, type ServiceShare } from '../../format/service-share.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId } from '../../model/ids.js';
 import type { SpanRecord } from '../../model/records.js';
@@ -156,6 +157,16 @@ export function spanRows(
   return { ...internRows(entries), total, share: entries.map((e) => e.share) };
 }
 
+/** The stored share text decoded; null when absent or malformed (the cell then loads it from the spans). */
+function storedShare(v: unknown): ServiceShare | null {
+  if (typeof v !== 'string') return null;
+  try {
+    return decodeServiceShare(v);
+  } catch {
+    return null;
+  }
+}
+
 /** The rows of `traceRowsQuery`; a trace without a timed span row has start and duration 0, one without a root has no `rootSummary`. */
 export function traceRows(t: Table): { rows: TraceRow[]; total: number } {
   const rows = rowsOf(t);
@@ -174,6 +185,7 @@ export function traceRows(t: Table): { rows: TraceRow[]; total: number } {
       durationNs: real(cell(r, 'duration_ns'), 'duration_ns') ?? 0,
       spans: toNumber(cell(r, 'span_count'), 'span_count'),
       errors: toNumber(cell(r, 'error_count'), 'error_count'),
+      share: storedShare(cell(r, 'share')),
     }),
   );
   const first = rows[0];

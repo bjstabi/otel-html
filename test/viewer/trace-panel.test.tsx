@@ -336,6 +336,7 @@ describe('j/k ownership', () => {
     durationNs: 500,
     spans: 2,
     errors: 0,
+    share: null,
   });
 
   function setup() {

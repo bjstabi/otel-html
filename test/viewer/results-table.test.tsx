@@ -160,6 +160,7 @@ describe('ResultsTable', () => {
       durationNs: 100,
       spans: 4,
       errors: 0,
+      share: null,
     };
 
     test("loads the share of that row's trace and draws a bar, never a partial label", async () => {
