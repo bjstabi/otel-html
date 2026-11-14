@@ -501,6 +501,33 @@ export class StreamNormalizer {
     return latest;
   }
 
+  /**
+   * Re-expresses every remembered time against a new anchor: each moves by `delta` ns (old anchor minus new), the
+   * start time in a stream's key too. A series' latest time beyond 2^53 ns of the new anchor is held at that limit,
+   * so it stays before (or after) every point the new anchor can reach, which is all the out-of-order and restart
+   * checks ask of it. A stream whose start moved out of reach is dropped: no point can name it again.
+   */
+  shift(delta: bigint): void {
+    const max = BigInt(Number.MAX_SAFE_INTEGER);
+    const move = (t: number): number =>
+      Math.min(Math.max(Number(BigInt(t) + delta), -Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER);
+    const moved = new Map<string, Stream>();
+    for (const [key, s] of this.#streams) {
+      const cut = key.lastIndexOf(':');
+      const start = key.slice(cut + 1);
+      let next = key;
+      if (start !== 'none') {
+        const v = BigInt(start) + delta;
+        if (v > max || v < -max) continue;
+        next = `${key.slice(0, cut + 1)}${Number(v)}`;
+      }
+      moved.set(next, { time: move(s.time), last: s.last });
+    }
+    this.#streams.clear();
+    for (const [key, s] of moved) this.#streams.set(key, s);
+    for (const [key, t] of this.#latest) this.#latest.set(key, move(t));
+  }
+
   toJSON(): SerializedStreams {
     const out: SerializedStreams = {
       keys: [],

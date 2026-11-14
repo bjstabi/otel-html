@@ -339,6 +339,35 @@ describe('StreamNormalizer', () => {
     expect(h.kind === 'ok' && h.agg.k === 'hist' && h.agg.counts).toEqual([1, 0]);
   });
 
+  describe('shift to a new anchor', () => {
+    const MAX = Number.MAX_SAFE_INTEGER;
+
+    it('keeps a stream continuing when its times and start move together', () => {
+      const s = new StreamNormalizer();
+      s.normalize(0, sum(5, 100, { start: rel(50) }));
+      s.shift(-40n); // the new anchor is 40 ns later
+      expect(deltaOf(s.normalize(0, sum(8, 70, { start: rel(10) }))).delta).toBe(3);
+      expect(s.normalize(0, sum(9, 60, { start: rel(10) }))).toEqual({
+        kind: 'skip',
+        reason: 'out-of-order',
+      });
+    });
+
+    it('holds a series time past the new window at its limit and drops a stream whose start is out of reach', () => {
+      const s = new StreamNormalizer();
+      s.normalize(0, sum(5, 100, { start: rel(50) }));
+      s.shift(BigInt(MAX) + 1000n); // the new anchor is far earlier
+      const json = s.toJSON();
+      expect(json.keys).toEqual([]);
+      expect(json.seriesTimes).toEqual([MAX]);
+      const back = new StreamNormalizer();
+      back.normalize(0, sum(5, 100, { start: null }));
+      back.shift(-(BigInt(MAX) + 1000n)); // the new anchor is far later
+      expect(back.toJSON().keys).toHaveLength(1); // a stream with no start time has nothing to drop it by
+      expect(back.toJSON().seriesTimes).toEqual([-MAX]);
+    });
+  });
+
   it('rejects a malformed checkpoint', () => {
     expect(() => StreamNormalizer.from({ streams: 3 }, 'streams')).toThrow(OtelHtmlError);
   });

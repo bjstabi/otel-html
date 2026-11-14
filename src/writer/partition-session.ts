@@ -89,7 +89,8 @@ import { writeWrapper } from './wrapper-file.js';
 
 interface Restored {
   lock: LockHandle;
-  epoch: UnixNanos | null;
+  /** The anchor the restored stream state's times are relative to (the checkpoint's); `null` when it has none. */
+  stateEpoch: UnixNanos | null;
   dedupe: DedupeSet;
   drain: Drain;
   normalizer: StreamNormalizer;
@@ -102,8 +103,6 @@ interface Restored {
   createdAt: string;
   title: string;
   slot: StateSlot;
-  /** The format of the manifest this session writes: 6 when the report resumed as format 6 (a format-6 merge input raises it). */
-  formatVersion?: 5 | 6;
   /** Resumed from an existing report. */
   resumed: boolean;
   /** An existing report is being replaced; its data goes just before this session first writes. */
@@ -127,7 +126,7 @@ export async function openPartitionSession(
     if (!folder.appending) {
       restored = {
         lock,
-        epoch: null,
+        stateEpoch: null,
         dedupe: new DedupeSet(config.writer.dedupeCapacity),
         drain: new Drain(),
         normalizer: new StreamNormalizer(),
@@ -169,7 +168,7 @@ export async function openPartitionSession(
         deps.logger.info('removed unlisted partition data left by an interrupted session', { pruned });
       restored = {
         lock,
-        epoch:
+        stateEpoch:
           cp.state.epochUnixNano === null
             ? null
             : parseUnixNanos(cp.state.epochUnixNano, 'state.epochUnixNano'),
@@ -191,7 +190,6 @@ export async function openPartitionSession(
             ? null
             : { start: BigInt(cp.manifest.range.start), end: BigInt(cp.manifest.range.end) },
         createdAt: cp.manifest.createdAt,
-        formatVersion: cp.manifest.formatVersion,
         title: config.title ?? cp.manifest.title,
         slot: cp.slot,
         resumed: true,
@@ -223,7 +221,10 @@ class PartitionSession implements WriterSession {
   readonly #statisticsKeys: Record<Table, string[]>;
   readonly #createdAt: string;
   readonly #title: string;
-  #epoch: UnixNanos | null;
+  /** This session's anchor: its own first record's time, fixed once data is accepted. Times in files are absolute. */
+  #epoch: UnixNanos | null = null;
+  /** The anchor the held stream state's times are relative to: the checkpoint's until this session picks its own. */
+  #stateEpoch: UnixNanos | null;
   #ctx: NormalizeContext | null = null;
   #committed: PartitionEntry[];
   /** Cut partitions the committed manifest does not list yet (a checkpoint failed after the cut). */
@@ -245,7 +246,6 @@ class PartitionSession implements WriterSession {
   /** Set when close released the live state: only `close` (again) and `abort` remain. */
   #closing = false;
   #replacing: boolean;
-  #formatVersion: 5 | 6;
   #partial = false;
   /** `WriterDeps.beforeMetrics` runs once, when the first metric points arrive. */
   #metricsSeen = false;
@@ -277,23 +277,20 @@ class PartitionSession implements WriterSession {
       nextPartition: r.nextPartition,
       format: config.writer.format,
       derive: (taken) => {
-        const p = patternRows(this.#live(this.#drain), taken.logs, this.#epoch ?? 0n);
+        const p = patternRows(this.#live(this.#drain), taken.logs, this.#anchor() ?? 0n);
         const r = this.#rollups(taken);
         return {
           rows: { traces: traceRows(taken.spans, taken.logs), patterns: p.rows, ...r.rows },
           rollups: r.descriptions,
           commit: () => {
             this.#drain = p.drain;
-            // A flushed partition carries the service share, which only a format-6 manifest lists.
-            this.#formatVersion = 6;
           },
         };
       },
     });
     this.#createdAt = r.createdAt;
     this.#title = r.title;
-    this.#epoch = r.epoch;
-    if (r.epoch !== null) this.#ctx = createNormalizeContext(r.epoch);
+    this.#stateEpoch = r.stateEpoch;
     this.#committed = r.committed;
     this.#flushed = r.flushed;
     this.#totals = r.totals;
@@ -302,7 +299,6 @@ class PartitionSession implements WriterSession {
     this.#checkpointSeq = r.checkpoint;
     this.#dirty = r.resumed;
     this.#replacing = r.replacing;
-    this.#formatVersion = r.formatVersion ?? 5;
     this.#everCommitted = r.resumed;
     this.#lastFlushMs = deps.clock.monotonicMs();
   }
@@ -461,10 +457,7 @@ class PartitionSession implements WriterSession {
       // A background write may be cutting: partition numbers are taken only between cuts.
       await this.#inflight;
       await this.#wipeReplaced();
-      // An empty report's epoch is 0 and means "none": it must not become this report's.
-      if (copy.partitions.length > 0) this.#ensureEpoch(copy.epoch);
-      // One format-6 input makes the output format 6, with or without stored shares (format 6 only drops the epoch).
-      if (copy.formatVersion === 6) this.#formatVersion = 6;
+      // Copied files hold absolute times: the copy neither needs nor sets this session's anchor.
       const taken = this.#copied.get(copy.origin) ?? [];
       this.#copied.set(copy.origin, taken);
       for (const src of copy.partitions) {
@@ -558,13 +551,28 @@ class PartitionSession implements WriterSession {
     this.#epoch = candidate;
     this.#ctx =
       this.#ctx === null ? fresh : { ...fresh, resources: this.#ctx.resources, scopes: this.#ctx.scopes };
+    this.#reanchorStreams(candidate);
     this.#dirty = true;
     return this.#ctx;
+  }
+
+  /** The anchor the state this session checkpoints is relative to. */
+  #anchor(): UnixNanos | null {
+    return this.#stateEpoch;
+  }
+
+  /** A resumed session's stream times move from the checkpoint's anchor to this session's own. */
+  #reanchorStreams(to: UnixNanos): void {
+    const from = this.#stateEpoch;
+    this.#stateEpoch = to;
+    if (from === null || from === to || this.#normalizer === null) return;
+    this.#normalizer.shift(from - to);
   }
 
   #settleEpoch(records: number): void {
     if (records === 0 || this.#epoch !== null || this.#ctx === null) return;
     this.#epoch = this.#ctx.epoch;
+    this.#reanchorStreams(this.#ctx.epoch);
     this.#dirty = true;
   }
 
@@ -1184,7 +1192,7 @@ class PartitionSession implements WriterSession {
         slot: this.#slot === 0 ? 1 : 0,
         state: writeState
           ? {
-              epoch: this.#epoch === null ? null : this.#epoch.toString(),
+              epoch: this.#anchor()?.toString() ?? null,
               dedupe:
                 this.#frozen === null
                   ? this.#live(this.#dedupe).toJSON()
@@ -1197,7 +1205,7 @@ class PartitionSession implements WriterSession {
             }
           : null,
         updatedAt: iso(this.#deps.clock),
-        epoch: this.#epoch === null ? '0' : this.#epoch.toString(),
+        epoch: this.#anchor()?.toString() ?? '0',
         totals: { ...this.#totals },
         range: this.#range === null ? null : { ...this.#range },
       };
@@ -1261,7 +1269,6 @@ class PartitionSession implements WriterSession {
             partitions: [...this.#committed, ...this.#pending],
             statisticsKeys: this.#statisticsKeys,
             config: this.#config,
-            formatVersion: this.#formatVersion,
           },
           p,
         ),

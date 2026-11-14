@@ -44,8 +44,6 @@ export interface PartitionCopy {
   /** The input report's folder: where its partition files are read from. */
   dir: string;
   epoch: UnixNanos;
-  /** The input's format: a format-6 input makes the output format 6. */
-  formatVersion: 5 | 6;
   totals: Record<Signal, number>;
   /** Absolute int64 nanosecond text, as in the manifest. */
   range: { start: string; end: string } | null;

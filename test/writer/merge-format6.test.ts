@@ -143,13 +143,22 @@ describe('merge and format 6', () => {
     expect(shared.filter((v) => v === true)).toHaveLength(1);
     expect(shared.filter((v) => v === undefined)).toHaveLength(1);
   });
-  test('format-5 inputs write format 5', async () => {
+  test('format-5 inputs write format 6: the copies keep their files, the manifest drops the epoch', async () => {
     await report('a', 0, false);
     await report('b', 10, false);
+    const sizes = (name: string) =>
+      manifestAt(name)
+        .manifest.partitions.flatMap((p) => Object.values(p.files).map((f) => f.bytes))
+        .sort((x, y) => x - y);
+    const before = [...sizes('a'), ...sizes('b')].sort((x, y) => x - y);
     await merge(['a', 'b']);
     const { raw } = manifestAt('m');
-    expect(raw.formatVersion).toBe(5);
-    expect(raw.epochUnixNano).toBeDefined();
+    expect(raw.formatVersion).toBe(6);
+    expect(raw.epochUnixNano).toBeUndefined();
+    expect(sizes('m')).toEqual(before); // every file copied byte for byte
+    expect(manifestAt('m').manifest.partitions.every((p) => p.files.traces?.serviceShare === undefined)).toBe(
+      true,
+    );
   });
   test('an upgraded format-6 input without stored shares and a format-5 input write format 6', async () => {
     await report('up', 0, false);
@@ -190,5 +199,42 @@ describe('merge and format 6', () => {
     await again.add(otlp(spansRequest(2, 0, 40)), 'c.json');
     await again.close();
     expect(manifestAt('e').manifest.partitions).toHaveLength(1);
+  });
+});
+
+describe('appending to a format-5 report', () => {
+  const DAY = 86_400_000_000_000;
+
+  test('upgrades its manifest to format 6 in place, leaves the old partitions untouched, and takes data any distance away', async () => {
+    await report('five', 0, false);
+    const old = manifestAt('five').manifest.partitions;
+    const oldFiles = old.flatMap((p) => Object.values(p.files)).map((f) => [f.path, f.bytes] as const);
+    const before = oldFiles.map(([path]) => readFileSync(join(dir, 'five', path)));
+    const w = real();
+    const s = await openSession(w.deps, {
+      out: join(dir, 'five'),
+      config: testConfig(cfg),
+      mode: 'append',
+    });
+    // Over 104 days past the report's epoch: a format-5 session could not take it.
+    await s.add(otlp(spansRequest(2, 400 * DAY, 10)), 'late.json');
+    await s.close();
+    const { raw, manifest } = manifestAt('five');
+    expect(raw.formatVersion).toBe(6);
+    expect(raw.epochUnixNano).toBeUndefined();
+    expect(manifest.totals.spans).toBe(4);
+    expect(manifest.partitions.slice(0, old.length)).toEqual(old);
+    expect(oldFiles.map(([path]) => readFileSync(join(dir, 'five', path)))).toEqual(before);
+    expect(manifest.partitions.some((p) => p.files.traces?.serviceShare === true)).toBe(true);
+    expect(BigInt(manifest.range?.end ?? 0)).toBeGreaterThan(BigInt(EPOCH_NS) + BigInt(399 * DAY));
+  });
+
+  test('a session without data still upgrades the manifest', async () => {
+    await report('five', 0, false);
+    const w = real();
+    const s = await openSession(w.deps, { out: join(dir, 'five'), config: testConfig(cfg), mode: 'append' });
+    await s.close();
+    expect(manifestAt('five').raw.formatVersion).toBe(6);
+    expect(manifestAt('five').raw.epochUnixNano).toBeUndefined();
   });
 });

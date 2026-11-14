@@ -3,8 +3,8 @@ import { describe, expect, test } from 'vitest';
 import type { CliDeps } from '../../src/cli/program.js';
 import { runCli } from '../../src/cli/program.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
-import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
-import { manifestOf, spansRequest } from '../writer/helpers.js';
+import { createTestWriter, EPOCH_NS, type TestWriter } from '../../test-support/writer-deps.js';
+import { allSpans, cell, manifestOf, rawManifestOf, spansRequest } from '../writer/helpers.js';
 
 interface Run {
   code: number;
@@ -366,5 +366,33 @@ describe('cli', () => {
     const r = await run(w, ['convert', 'in/a.json', '-o', 'out', '--config', '/work/custom.yaml']);
     expect(r.code).toBe(0);
     expect(manifestOf(w, 'out').config.dashboards[0]?.source).toBe('custom.yaml');
+  });
+});
+
+describe('format 6: a report of any width takes appends (#216)', () => {
+  const DAY = 86_400_000_000_000;
+
+  test('merge a 2023-2026 report, then convert --append with current data succeeds and the report holds both', async () => {
+    const w = createTestWriter(); // the data's "now" is 1700000000000000000, November 2023
+    await put(w, 'in/old.json', JSON.stringify(spansRequest(2, 0, 0)));
+    await put(w, 'in/recent.json', JSON.stringify(spansRequest(2, 1100 * DAY, 10)));
+    await put(w, 'in/current.json', JSON.stringify(spansRequest(2, 1110 * DAY, 20)));
+    expect((await run(w, ['convert', 'in/old.json', '-o', 'old', '--format', 'site'])).code).toBe(0);
+    expect((await run(w, ['convert', 'in/recent.json', '-o', 'recent', '--format', 'site'])).code).toBe(0);
+    const merged = await run(w, ['merge', 'old', 'recent', '-o', 'm', '--format', 'site']);
+    expect(merged.code).toBe(0);
+    const appended = await run(w, ['convert', 'in/current.json', '-o', 'm', '--format', 'site', '--append']);
+    expect(appended.stderr).toBe('');
+    expect(appended.code).toBe(0);
+    expect(appended.stdout).toBe('wrote m: 6 spans, 0 logs, 0 metric points\n');
+    const m = manifestOf(w, 'm');
+    expect(m.totals.spans).toBe(6);
+    const starts = allSpans(w, 'm')
+      .map((s) => BigInt(String(cell(s, 'start_time_unix_nano'))))
+      .sort((a, b) => (a < b ? -1 : 1));
+    expect(starts).toHaveLength(6);
+    expect(starts[0]).toBe(BigInt(EPOCH_NS));
+    expect(starts[5]).toBe(BigInt(EPOCH_NS) + BigInt(1110 * DAY) + 1000n);
+    expect(rawManifestOf(w, 'm')).not.toHaveProperty('epochUnixNano');
   });
 });

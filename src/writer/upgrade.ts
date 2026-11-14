@@ -9,7 +9,7 @@ import {
   partitionKey,
   partitionWrapperPath,
 } from '../format/paths.js';
-import { oldFormatMessage } from '../format/version.js';
+import { oldFormatMessage, PARTITION_FORMAT_VERSION } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { assetsInside, pruneOwnAssets } from './assets-cleanup.js';
 import { at, writeManifest } from './checkpoint.js';
@@ -105,7 +105,7 @@ export async function upgradeReport(
   } finally {
     await lock.release();
   }
-  return { title: manifest.title, formatVersion: manifest.formatVersion };
+  return { title: manifest.title, formatVersion: PARTITION_FORMAT_VERSION };
 }
 
 /** A report on a shared base is upgraded only when told the base: the shared copy is the publisher's, so upgrade cannot know it holds this version's files. */
@@ -164,8 +164,10 @@ async function upgradePartitioned(
   );
   await fs.writeTextAtomic(at(dir, '.nojekyll'), '');
   const engine = { version: ENGINE_VERSION, format, assetsBase };
-  if (JSON.stringify(engine) !== JSON.stringify(manifest.engine)) {
-    await writeManifest(fs, dir, { ...manifest, engine });
+  // 5 to 6 rewrites the manifest only: it drops `epochUnixNano`, and no partition file changes.
+  const toSix = manifest.formatVersion === 5;
+  if (toSix || JSON.stringify(engine) !== JSON.stringify(manifest.engine)) {
+    await writeManifest(fs, dir, { ...manifest, engine, formatVersion: PARTITION_FORMAT_VERSION });
   }
   // Also for a site report that is already site: an earlier upgrade may have died after its manifest write.
   if (format === 'site') await removeWrappers(fs, dir, manifest);

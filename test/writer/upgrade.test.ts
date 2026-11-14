@@ -14,6 +14,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { runCli } from '../../src/cli/program.js';
+import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
+import { isPartitioned, parseAnyManifest } from '../../src/format/manifest.js';
+import { decodeTable } from '../../src/format/parquet/codec.js';
+import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { oldFormatMessage } from '../../src/format/version.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
@@ -41,6 +45,10 @@ async function formatFourReport(): Promise<string> {
   await s.add(otlp(spansRequest(2)), 'in.json');
   await s.close();
   return dir;
+}
+
+function readManifest(dir: string): unknown {
+  return reviveDataJson(unwrapDataFile(readFileSync(join(dir, 'data/manifest.js'), 'utf8'), MANIFEST_KEY));
 }
 
 function hashTree(dir: string, rel = ''): Record<string, string> {
@@ -145,6 +153,36 @@ describe('upgradeReport', () => {
     expect(e.code).toBe('usage');
     expect(e.hint).toBe('another otel-html has the report open');
     expect(hashTree(dir)).toEqual(before);
+  });
+});
+
+describe('upgrade of the frozen format-5 report', () => {
+  const FORMAT5 = join(import.meta.dirname, '../../fixtures/reports/format-5');
+
+  test('5 to 6 rewrites the manifest only: no epoch on disk, every partition file unchanged, every row reads', async () => {
+    const dir = copyReport(FORMAT5);
+    const partitions = hashTree(dir, 'data/partitions');
+    const state = hashTree(dir, 'data/state');
+    const before = parseAnyManifest(readManifest(dir));
+    if (!isPartitioned(before)) throw new Error('not a partition manifest');
+    const r = await upgradeReport(deps(), dir);
+    expect(r.formatVersion).toBe(6);
+    expect(hashTree(dir, 'data/partitions')).toEqual(partitions);
+    expect(hashTree(dir, 'data/state')).toEqual(state);
+    const raw = readManifest(dir);
+    expect(raw).toMatchObject({ formatVersion: 6 });
+    expect(raw).not.toHaveProperty('epochUnixNano');
+    const after = parseAnyManifest(raw);
+    if (!isPartitioned(after)) throw new Error('not a partition manifest');
+    expect(after.partitions).toEqual(before.partitions);
+    expect(after.totals).toEqual(before.totals);
+    expect(after.epochUnixNano).toBe(after.range?.start); // a reader's derived anchor
+    let traces = 0;
+    for (const p of after.partitions) {
+      const file = p.files.traces;
+      if (file !== undefined) traces += decodeTable('traces', readFileSync(join(dir, file.path))).length;
+    }
+    expect(traces).toBeGreaterThan(0);
   });
 });
 

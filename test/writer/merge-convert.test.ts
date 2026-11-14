@@ -26,7 +26,7 @@ import {
   traceRequest,
 } from '../../test-support/otlp-builders.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
-import { cumulativeRequest, manifestOf, spansRequest } from './helpers.js';
+import { cumulativeRequest, manifestOf, rawManifestOf, spansRequest } from './helpers.js';
 
 const REPORTS = join(import.meta.dirname, '../../fixtures/reports');
 
@@ -124,8 +124,9 @@ test('three inputs with the same spans are deduplicated and the earliest epoch i
   await mergeWith({ inputs: ['format-1', 'format-2', 'format-3'], out: 'm', config }, w.deps);
   const m = v4Manifest(w, 'm');
   expect(m.totals.spans).toBe(one.totals.spans);
-  // A conversion flushes, so the output is format 6: it stores no epoch and a reader anchors on the range start.
-  expect(m.epochUnixNano).toBe(m.range?.start);
+  // A conversion flushes, so the output is format 6: no stored epoch, and the data reaches back to the earliest input's epoch.
+  expect(rawManifestOf(w, 'm')).not.toHaveProperty('epochUnixNano');
+  expect(BigInt(m.range?.start ?? 0) <= BigInt(one.epochUnixNano)).toBe(true);
   // Points are not deduplicated: 3 x 230.
   expect(m.totals.metrics).toBe(3 * one.totals.metrics);
   expect(one.totals.metrics).toBe(230);
