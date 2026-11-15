@@ -230,6 +230,7 @@ description = "Unit tests: the parallel pass, then the @perf pass"
 run = [{ task = "test:unit:main" }, { task = "test:unit:perf" }]
 
 [tasks."test:unit:main"]
+depends = ["engine:assets"]
 description = "vitest, everything but @perf, in parallel (args after `--` go to vitest: `-- --shard=1/2` splits the files by the seconds in test-support/shard-weights.json)"
 # Beyond the code: what tests read from disk (fixtures/reports, the committed JSON schema, the shipped CI dashboard
 # config, .github/actions scripts, scripts/load-receiver-plan, the e2e helpers they import (e2e/*.ts and e2e/otel-page/,
@@ -253,13 +254,28 @@ cache = { enabled = true, env = ["CI", "OTEL_HTML_LOAD", "OTEL_HTML_BINARY"] }
 env = { OTEL_HTML_PERF_PASS = "0" }
 run = "pnpm exec vitest run"
 
+[tasks."scaling:reports"]
+description = """Build the scaling reports into .cache/scaling-reports/<key> (skipped while up to date)
+<key> hashes the files the generator imports (test-support/scaling/report-cache.ts), so a report is never older than
+the writer; test:scaling and predict:queries depend on it, and the unit tests read it through the scaling global setup
+(building a missing shape into it). Older key folders are removed. OTEL_HTML_SCALING_CACHE=off bypasses the cache."""
+sources = [
+  "@group:deps",
+  "src/**",
+  "test-support/**",
+  "scripts/scaling-reports.ts",
+]
+outputs = [".cache/scaling-reports/**"]
+run = "bun scripts/scaling-reports.ts"
+
 [tasks."test:scaling"]
+depends = ["engine:assets", "scaling:reports"]
 description = """The scaling measurement: every catalogue entry cold on the generated reports, classified and compared with the declared classes
 Builds the reports of test-support/scaling/generator.ts (retention, density and window at 2, 4 and 8, dense and sparse),
 runs each entry of src/viewer/data/catalogue.ts cold through the counting engine and asserts the class it declares
 (test/scaling/classes-<axis>-<spacing>.test.ts: one file per axis and spacing plus the cross shape, so vitest runs them in
 parallel workers; test/scaling/classes.test.ts holds the cheap declared-rules tests and checks the split covers every entry
-and axis). About 50 seconds on 4 cores; the workers share the generated reports and the cold runs through a folder in the temp directory; cached by the content of its inputs, so an unchanged tree replays it.
+and axis). About 50 seconds on 4 cores; the workers share the generated reports the reports come from the scaling:reports cache and the cold runs through a folder in the temp directory (per run); cached by the content of its inputs, so an unchanged tree replays it.
 `check` depends on it and CI's `check` job runs it; the unit tasks skip the measurement (OTEL_HTML_SCALING unset).
 OTEL_HTML_SCALING_PRINT=1 prints the entry x axis x class table to stderr (only on an uncached run)."""
 sources = [
@@ -386,21 +402,46 @@ depends = ["check"]
 run = { task = "test:e2e:chromium" }
 
 [tasks.coverage]
+depends = ["engine:assets"]
 # No sources and no cache, on purpose: with neither, mise always runs it, so a restored task cache can never replay it
 # and leave coverage/ empty. Coverage is only meaningful from the whole suite, never from the subset the cached
 # test:unit:main would skip or `vitest --changed` would pick. Pinned like test:unit:main: an inherited
 # OTEL_HTML_PERF_PASS=1 would measure only the @perf tests.
-description = "Unit coverage from the suite without @perf, per vitest project, into coverage/unit-<project>/ (lcov, summary); never cached"
+description = "Unit coverage from the suite without @perf, per vitest project, into coverage/unit-<project>/ (lcov, summary); never cached. Local use; CI runs coverage:shard in the unit shards and coverage:merge"
 env = { OTEL_HTML_PERF_PASS = "0" }
 run = [
   # Each run is charged only for its own sources. The CLI --coverage.exclude replaces vitest.config.ts's list, so the
-  # node run repeats those excludes (generated files) and adds the viewer's.
-  "pnpm exec vitest run --project node --coverage --coverage.reportsDirectory=coverage/unit-node '--coverage.exclude=src/model/gen/**' '--coverage.exclude=src/**/*.gen.ts' '--coverage.exclude=src/**/*.gen.terms.ts' '--coverage.exclude=src/viewer/**'",
+  # node run repeats those excludes (generated files, the grammar) and adds the viewer's.
+  "pnpm exec vitest run --project node --coverage --coverage.reportsDirectory=coverage/unit-node '--coverage.exclude=src/model/gen/**' '--coverage.exclude=src/**/*.gen.ts' '--coverage.exclude=src/**/*.gen.terms.ts' '--coverage.exclude=src/**/*.grammar' '--coverage.exclude=src/viewer/**'",
   "pnpm exec vitest run --project viewer --coverage --coverage.reportsDirectory=coverage/unit-viewer '--coverage.include=src/viewer/**'",
   "bun scripts/coverage-summary.ts",
 ]
 
+# One unit shard with coverage: the same projects, pin and weighted sequencer as test:unit:main, plus blob reports that
+# carry the coverage for coverage:merge. Never cached (a replay would write no blob). The two projects run as two vitest
+# runs with their own coverage flags (the same as `coverage`'s): a merged blob keeps the run's coverage as it was
+# collected, ignores --project and the include/exclude flags of the merge, and cannot be split by project afterwards.
+[tasks."coverage:shard"]
+depends = ["engine:assets"]
+description = "One unit shard (`<i/n>`) with coverage into .vitest-reports/<project>/blob-<i>-<n>.json; merge them with coverage:merge"
+usage = 'arg "<shard>" help="the shard, i/n"'
+env = { OTEL_HTML_PERF_PASS = "0" }
+run = [
+  "pnpm exec vitest run --project node --shard=$usage_shard --reporter=default --reporter=blob --outputFile.blob=.vitest-reports/node/blob-$(echo $usage_shard | tr / -).json --coverage --coverage.reporter=json '--coverage.exclude=src/model/gen/**' '--coverage.exclude=src/**/*.gen.ts' '--coverage.exclude=src/**/*.gen.terms.ts' '--coverage.exclude=src/**/*.grammar' '--coverage.exclude=src/viewer/**'",
+  "pnpm exec vitest run --project viewer --shard=$usage_shard --reporter=default --reporter=blob --outputFile.blob=.vitest-reports/viewer/blob-$(echo $usage_shard | tr / -).json --coverage --coverage.reporter=json '--coverage.include=src/viewer/**'",
+]
+
+[tasks."coverage:merge"]
+description = "Merge the .vitest-reports/<project> blobs into coverage/unit-<project>/ (lcov, summary), as `coverage` writes them, and print the summary"
+env = { OTEL_HTML_PERF_PASS = "0" }
+run = [
+  "pnpm exec vitest run --merge-reports .vitest-reports/node --coverage --coverage.reportsDirectory=coverage/unit-node",
+  "pnpm exec vitest run --merge-reports .vitest-reports/viewer --coverage --coverage.reportsDirectory=coverage/unit-viewer",
+  "bun scripts/coverage-summary.ts",
+]
+
 [tasks."test:unit:changed"]
+depends = ["engine:assets"]
 description = "Unit tests whose import graph reaches a file changed since `ref` (default main)"
 usage = 'arg "[ref]" default="main"'
 run = "pnpm exec vitest run --changed $usage_ref"
@@ -449,6 +490,19 @@ sources = [
 # in .cache/duckdb-extensions, so only the first build needs the network (OTEL_HTML_DUCKDB_EXTENSIONS_DIR: offline).
 outputs = ["dist/viewer/**"]
 run = ["pnpm exec vite build", "bun scripts/engine-assets.ts"]
+
+[tasks."engine:assets"]
+description = """The DuckDB engine files for the host and the unit tests into .cache/engine-assets (skipped while up to date)
+The same files build:viewer copies into dist/viewer/assets (scripts/engine-assets.ts), outside dist/ so the unit,
+scaling and coverage tasks can depend on them without a build; the extensions are downloaded once into .cache/duckdb-extensions."""
+sources = [
+  "@group:deps",
+  "scripts/duckdb-extensions.json",
+  "scripts/engine-assets.ts",
+  "src/format/engine.ts",
+]
+outputs = [".cache/duckdb-extensions/**", ".cache/engine-assets/**"]
+run = "bun scripts/engine-assets.ts --out .cache/engine-assets"
 
 [tasks.build]
 description = "Build the library, then the viewer, into dist/"
@@ -503,8 +557,39 @@ sources = [
   "test-support/scale-logs.ts",
   "test-support/scale-metrics.ts",
 ]
-outputs = ["e2e/.reports-scale/**"]
+# Not `**`: rowgroups has a task of its own (e2e:fixtures:rowgroups:data), and overlapping outputs would make this one skip
+# after a rowgroups-only build. This task wipes the folder, so that one then reruns.
+outputs = [
+  "e2e/.reports-scale/many/**",
+  "e2e/.reports-scale/scale/**",
+  "e2e/.reports-scale/writer.sha256",
+]
 run = "bun e2e/build-scale-fixtures.ts"
+
+# Only e2e/calibration.spec.ts reads `rowgroups`, so a selection that names it and not scale.spec.ts builds just this one.
+[tasks."e2e:fixtures:rowgroups:data"]
+description = "Write the e2e `rowgroups` report alone (site format) into e2e/.reports-scale/rowgroups (skipped while up to date); the other scale reports are left as they are"
+depends = ["build"]
+sources = [
+  "@group:deps",
+  "dist/cli/**",
+  "dist/receiver-*.js",
+  "dist/index.d.ts",
+  "dist/index.js",
+  "e2e/build-scale-fixtures.ts",
+  "e2e/fixture.ts",
+  "test-support/fixture-ids.ts",
+  "test-support/otlp-builders.ts",
+  "test-support/scale-logs.ts",
+  "test-support/scale-metrics.ts",
+]
+outputs = ["e2e/.reports-scale/rowgroups/**"]
+run = "bun e2e/build-scale-fixtures.ts --only rowgroups"
+
+[tasks."e2e:fixtures:rowgroups"]
+description = "The e2e `rowgroups` report with the current viewer (only e2e/calibration.spec.ts reads it); `otel-html upgrade` swaps in dist/viewer"
+depends = ["e2e:fixtures:rowgroups:data"]
+run = "node dist/cli/main.js upgrade e2e/.reports-scale/rowgroups"
 
 [tasks."e2e:fixtures:scale"]
 description = """The e2e `scale`, `many` and `rowgroups` reports with the current viewer (only e2e/scale.spec.ts and e2e/calibration.spec.ts read them)
@@ -527,7 +612,8 @@ Sharding: `--shard 1/2` runs half of each pass. The main pass splits the spec fi
 Playwright's own `-- --shard=1/2` still works, but splits both passes by count.
 The perf pass is skipped for a browser without a `-perf-file` project. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
-The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only when the selection includes e2e/scale.spec.ts or e2e/calibration.spec.ts, decided
+The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only when the selection includes e2e/scale.spec.ts or the perf pass includes
+e2e/calibration.spec.ts; a main pass that includes only e2e/calibration.spec.ts builds just the `rowgroups` report (e2e:fixtures:rowgroups). Decided
 by `playwright test --list` with the same args; a direct `playwright test e2e/scale.spec.ts` needs that task run first.
 Browsers are installed first unless OTEL_HTML_SKIP_BROWSER_INSTALL is set (CI's Playwright image has them).
 The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (CI runs it in its own Chromium job): it writes a
@@ -599,15 +685,31 @@ case "$usage_browser" in chromium | '*') has_perf=1 ;; *) has_perf=0 ;; esac
 # and the shard it runs with (`env` carries the main pass's OTEL_HTML_E2E_SHARD), so the listing selects the same tests
 # as the pass; a listing that fails builds them too, and the passes below report its error. --skip-deps: dist/ is
 # already built (and in CI it must not be rebuilt under the job shell).
+# Prints what a listing needs: `all` (scale.spec.ts, or calibration.spec.ts in the perf pass, which reads scale too),
+# `rowgroups` (calibration.spec.ts in the main pass), `none`; a listing that fails needs `all`.
 needs_scale() {
-  local listed
-  listed=$(env "$@" --list 2>&1) || return 0
-  grep -qE '(scale|calibration)[.]spec[.]ts' <<<"$listed"
+  local listed pass=$1
+  shift
+  listed=$(env "$@" --list 2>&1) || { echo all; return 0; }
+  if grep -qE 'scale[.]spec[.]ts' <<<"$listed"; then echo all
+  elif grep -qE 'calibration[.]spec[.]ts' <<<"$listed"; then
+    if [ "$pass" = perf ]; then echo all; else echo rowgroups; fi
+  else echo none; fi
 }
-if { [ "$usage_pass" != perf ] && needs_scale "${main_env[@]}" pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "$http" --grep-invert @perf; } ||
-  { [ "$has_perf" = 1 ] && needs_scale pnpm exec playwright test "$@" "${perf_shard[@]}" --project "$perf"; }; then
+need=none
+if [ "$usage_pass" != perf ]; then
+  need=$(needs_scale main "${main_env[@]}" pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "$http" --grep-invert @perf)
+fi
+if [ "$need" != all ] && [ "$has_perf" = 1 ]; then
+  perf_need=$(needs_scale perf pnpm exec playwright test "$@" "${perf_shard[@]}" --project "$perf")
+  if [ "$perf_need" = all ]; then need=all; elif [ "$perf_need" = rowgroups ]; then need=rowgroups; fi
+fi
+if [ "$need" = all ]; then
   echo "test:e2e: the selection needs the scale reports (e2e:fixtures:scale)"
   mise run --skip-deps e2e:fixtures:scale:data && mise run --skip-deps e2e:fixtures:scale || exit 1
+elif [ "$need" = rowgroups ]; then
+  echo "test:e2e: the selection needs the rowgroups report (e2e:fixtures:rowgroups)"
+  mise run --skip-deps e2e:fixtures:rowgroups:data && mise run --skip-deps e2e:fixtures:rowgroups || exit 1
 else
   echo "test:e2e: the selection does not need the scale reports"
 fi
@@ -665,6 +767,7 @@ bun scripts/bench-metrics.ts "$@"
 """
 
 [tasks."predict:queries"]
+depends = ["scaling:reports"]
 description = """Print the requests, megabytes and modelled milliseconds the viewer's pages cost on named report shapes
 An estimate: it prints the prediction and asserts nothing about it, but exits non-zero when the one-engine check misses
 (the fit without the cross against a page rendered whole, within 25 % or 2 requests). Measures every catalogue entry cold
@@ -699,7 +802,8 @@ files across shards by these recorded seconds, so every shard computes the same 
 the table weighs the median. Unit files get the seconds a worker spends on them (environment, setup, import and tests);
 Playwright spec files the sum of their tests' durations (Chromium's `-file` and `-http` projects together). Failing
 tests still record their durations, and the task then exits non-zero. `-- unit chromium` rewrites only those parts of the table
-(parts: unit, chromium, firefox, webkit); a browser run that hangs is killed after 20 minutes and its part is kept."""
+(parts: unit, chromium, firefox, webkit); a browser run that hangs is killed after 20 minutes and its part is kept.
+A file whose seconds moved more than 2x since the last table prints a "weight drifted" warning on stderr (never a failure)."""
 depends = ["e2e:fixtures"]
 run = "bun scripts/shard-weights.ts"
 

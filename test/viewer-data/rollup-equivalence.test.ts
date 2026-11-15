@@ -15,7 +15,7 @@ import {
   withoutRollups,
 } from '../../test-support/rollup-fixture.js';
 import { ROLLUP_ENTRIES } from '../../test-support/scaling/rollup-entries.js';
-import { type Opened, openLayout } from './rollup-open.js';
+import { freshSource, type Opened, openLayout } from './rollup-open.js';
 
 // Most tests open fresh DuckDB engines several times: about 1.3 s here, up to 4 times that on a CI runner.
 vi.setConfig({ testTimeout: 30_000 });
@@ -96,7 +96,9 @@ async function run(
 ): Promise<unknown> {
   const o = await openedOf(layout, shift);
   const ctx: CatalogueContext = { window: windowed ? longWindow(o.epoch) : null, ids: IDS };
-  // a fresh data source per run: the trace and metric memos are per source
+  // one data source per layout and shift, shared by every case: its result cache is keyed by the SQL text on the same
+  // database, so a repeated statement returns what a fresh source would; the trace and metric memos do not serve these
+  // aggregate entries. Tests that count requests use `freshSource` instead.
   return plain(await entry.run(withCondition(o.ds, condition), ctx));
 }
 
@@ -149,14 +151,14 @@ describe('rollup equivalence', () => {
       const entry = ROLLUP_ENTRIES.find((e) => e.id === id);
       if (entry === undefined) throw new Error(id);
       const seen = async (layout: Layout): Promise<{ rollup: boolean; base: boolean }> => {
-        const o = await openLayout(layout.fixture);
-        try {
-          await entry.run(o.ds, { window: longWindow(o.epoch), ids: IDS });
-          const sql = o.db.connector.requests.map((r) => r.sql).join('\n');
-          return { rollup: /FROM "(span|log)_rollups"/.test(sql), base: /FROM "(spans|logs)"/.test(sql) };
-        } finally {
-          o.close();
-        }
+        const o = await openedOf(layout, 0n);
+        const from = o.db.connector.requests.length;
+        await entry.run(freshSource(o), { window: longWindow(o.epoch), ids: IDS });
+        const sql = o.db.connector.requests
+          .slice(from)
+          .map((r) => r.sql)
+          .join('\n');
+        return { rollup: /FROM "(span|log)_rollups"/.test(sql), base: /FROM "(spans|logs)"/.test(sql) };
       };
       // an attribute condition never reads a rollup; a statistics-key condition meets C's weak rollup, which lacks the key
       const attribute = id.includes('.total.attr.');
@@ -169,39 +171,37 @@ describe('rollup equivalence', () => {
   );
 
   test('a condition on a statistics key reads the weak rollup of C through the raw file', async () => {
-    const o = await openLayout(layouts.C.fixture);
-    try {
-      // the weak rollup of C lacks that dimension, so its partition reads the raw file
-      await o.ds.querySpans(
-        spanQuery({
-          window: longWindow(o.epoch),
-          needs: ['total', 'timeline'],
-          condition: 'resource.attributes["run.id"] != "none"',
-        }),
-      );
-      const sql = o.db.connector.requests.map((r) => r.sql).join('\n');
-      expect(sql).toMatch(/FROM "span_rollups"/);
-      expect(sql).toMatch(/FROM "spans"/);
-    } finally {
-      o.close();
-    }
+    const o = await openedOf(layouts.C, 0n);
+    const from = o.db.connector.requests.length;
+    // the weak rollup of C lacks that dimension, so its partition reads the raw file
+    await freshSource(o).querySpans(
+      spanQuery({
+        window: longWindow(o.epoch),
+        needs: ['total', 'timeline'],
+        condition: 'resource.attributes["run.id"] != "none"',
+      }),
+    );
+    const sql = o.db.connector.requests
+      .slice(from)
+      .map((r) => r.sql)
+      .join('\n');
+    expect(sql).toMatch(/FROM "span_rollups"/);
+    expect(sql).toMatch(/FROM "spans"/);
   });
 });
 
 describe('core facets under a long window', () => {
   /** The statements one call sends over the base table, a fresh data source per call (the coordinator caches by SQL text). */
   async function over(layout: Layout, table: 'spans' | 'logs', condition: string | null, long: boolean) {
-    const o = await openLayout(layout.fixture);
-    try {
-      const window = long ? longWindow(o.epoch) : shortWindow(o.epoch);
-      await (table === 'spans'
-        ? o.ds.querySpans(spanQuery({ window, condition, needs: ['facets'], facetKeys: null }))
-        : o.ds.queryLogs(logQuery({ window, condition, needs: ['facets'], facetKeys: null })));
-      const own = new RegExp(`FROM "${table}"`);
-      return o.db.connector.requests.filter((r) => r.type === 'arrow' && own.test(r.sql)).length;
-    } finally {
-      o.close();
-    }
+    const o = await openedOf(layout, 0n);
+    const from = o.db.connector.requests.length;
+    const ds = freshSource(o);
+    const window = long ? longWindow(o.epoch) : shortWindow(o.epoch);
+    await (table === 'spans'
+      ? ds.querySpans(spanQuery({ window, condition, needs: ['facets'], facetKeys: null }))
+      : ds.queryLogs(logQuery({ window, condition, needs: ['facets'], facetKeys: null })));
+    const own = new RegExp(`FROM "${table}"`);
+    return o.db.connector.requests.slice(from).filter((r) => r.type === 'arrow' && own.test(r.sql)).length;
   }
 
   test.each([
@@ -248,17 +248,17 @@ const logQuery = (over: Partial<LogQuery>): LogQuery => ({
 
 describe('a service.name that is not a plain name', () => {
   test('a condition on it is answered from the rollups, which keep the key as a dimension', async () => {
-    const o = await openLayout(layouts.A.fixture);
-    try {
-      await o.ds.querySpans(
-        spanQuery({ window: longWindow(o.epoch), condition: SERVICE_NAMES[0]?.[1] ?? '', needs: ['total'] }),
-      );
-      const sql = o.db.connector.requests.map((r) => r.sql).join('\n');
-      expect(sql).toMatch(/FROM "span_rollups"/);
-      expect(sql).not.toMatch(/FROM "spans"/);
-    } finally {
-      o.close();
-    }
+    const o = await openedOf(layouts.A, 0n);
+    const from = o.db.connector.requests.length;
+    await freshSource(o).querySpans(
+      spanQuery({ window: longWindow(o.epoch), condition: SERVICE_NAMES[0]?.[1] ?? '', needs: ['total'] }),
+    );
+    const sql = o.db.connector.requests
+      .slice(from)
+      .map((r) => r.sql)
+      .join('\n');
+    expect(sql).toMatch(/FROM "span_rollups"/);
+    expect(sql).not.toMatch(/FROM "spans"/);
   });
 
   test.each(SERVICE_NAMES)(

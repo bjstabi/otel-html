@@ -12,8 +12,8 @@ const browsers = [
 // The specs a browser leaves out of its `-file` project (and Chromium's `-http`).
 const ignored: Record<string, string[]> = {
   chromium: [],
-  firefox: ['scale.spec.ts', 'preview.spec.ts'],
-  webkit: ['scale.spec.ts', 'preview.spec.ts'],
+  firefox: ['scale.spec.ts', 'preview.spec.ts', 'calibration.spec.ts'],
+  webkit: ['scale.spec.ts', 'preview.spec.ts', 'calibration.spec.ts'],
 };
 
 // `OTEL_HTML_E2E_SHARD=i/n` (set by `test:e2e --shard i/n`) limits a browser's main-pass projects to shard i of n of its

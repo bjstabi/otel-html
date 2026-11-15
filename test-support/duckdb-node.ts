@@ -34,24 +34,32 @@ interface NodeConnection {
 interface DuckDbNode {
   readonly NODE_RUNTIME: unknown;
   readonly ConsoleLogger: new () => unknown;
-  createDuckDB(
-    bundles: unknown,
-    logger: unknown,
-    runtime: unknown,
-  ): Promise<{
-    instantiate(): Promise<void>;
-    registerFileBuffer(name: string, buf: Uint8Array): void;
-    registerFileText(name: string, text: string): void;
-    connect(): NodeConnection;
-  }>;
+  createDuckDB(bundles: unknown, logger: unknown, runtime: unknown): Promise<DuckDbInstance>;
+}
+
+interface DuckDbInstance {
+  instantiate(): Promise<void>;
+  registerFileBuffer(name: string, buf: Uint8Array): void;
+  registerFileText(name: string, text: string): void;
+  dropFiles(names?: string[]): void;
+  reset(): void;
+  connect(): NodeConnection;
 }
 
 // The Node build is CommonJS; `require` also finds the WASM bundles that sit next to it (see parquet-metadata.ts).
 const require = createRequire(import.meta.url);
 const ENTRY = '@duckdb/duckdb-wasm/dist/duckdb-node-blocking.cjs';
 
-/** A DuckDB-WASM Node blocking database for tests. */
-export async function openTestDb(): Promise<TestDb> {
+const { OTEL_HTML_DUCKDB_POOL: POOL_ENV } = process.env;
+const idle: DuckDbInstance[] = [];
+const stats = { created: 0, reused: 0 };
+
+/** How many instances this module (one per test file) created and how many opens reused an idle one. */
+export function testDbPoolStats(): { created: number; reused: number } {
+  return { ...stats };
+}
+
+async function createInstance(): Promise<DuckDbInstance> {
   const duckdb = require(ENTRY) as DuckDbNode;
   const dist = dirname(require.resolve(ENTRY));
   const bundles = {
@@ -60,7 +68,26 @@ export async function openTestDb(): Promise<TestDb> {
   };
   const db = await duckdb.createDuckDB(bundles, new duckdb.ConsoleLogger(), duckdb.NODE_RUNTIME);
   await db.instantiate();
+  stats.created++;
+  return db;
+}
+
+/**
+ * A DuckDB-WASM Node blocking database for tests. Pooled by default (`OTEL_HTML_DUCKDB_POOL=0` or `{ pooled: false }`
+ * gives a fresh instance): `close()` drops the registered files and resets the instance, and every open turns the
+ * parquet metadata and file caches off, so a later open that registers other bytes under the same name reads them.
+ */
+export async function openTestDb(opts: { pooled?: boolean } = {}): Promise<TestDb> {
+  const pooled = opts.pooled ?? POOL_ENV !== '0';
+  const reuse = pooled ? idle.pop() : undefined;
+  if (reuse) stats.reused++;
+  const db = reuse ?? (await createInstance());
   const conn = db.connect();
+  let closed = false;
+  if (pooled) {
+    conn.query('SET enable_object_cache = false');
+    conn.query('SET enable_external_file_cache = false');
+  }
   const requests: { type: string; sql: string }[] = [];
   const connector = {
     requests,
@@ -87,6 +114,14 @@ export async function openTestDb(): Promise<TestDb> {
         .toArray()
         .map((r) => r.toJSON() as Record<string, unknown>),
     connector,
-    close: () => conn.close(),
+    close() {
+      if (closed) return; // the data source and the test may both close; a second push would hand one instance to two opens
+      closed = true;
+      conn.close();
+      if (!pooled) return;
+      db.dropFiles();
+      db.reset();
+      idle.push(db);
+    },
   };
 }

@@ -5,6 +5,7 @@ import { type HostEngineFiles, hostEngineFiles } from '../../host/engine-files.j
 import { readHostManifest } from '../../host/manifest.js';
 import { startHostServer } from '../../host/server.js';
 import type { Listener } from '../../receiver/http.js';
+import type { Logger } from '../../writer/ports.js';
 import type { CliIo } from '../io.js';
 import { type CliDeps, CliExit } from '../program.js';
 import { nextSignal, portOf } from './receive.js';
@@ -80,7 +81,12 @@ async function shutdown(io: CliIo, running: Running): Promise<void> {
 }
 
 /** The second stop signal during start-up: close what exists now and what `starting` leaves when it settles; 130. */
-async function abandon(io: CliIo, running: Running, starting: Promise<unknown>): Promise<never> {
+async function abandon(
+  io: CliIo,
+  running: Running,
+  starting: Promise<unknown>,
+  logger: Logger,
+): Promise<never> {
   const had = { ...running };
   const late = (async () => {
     await starting.catch(() => undefined);
@@ -89,6 +95,7 @@ async function abandon(io: CliIo, running: Running, starting: Promise<unknown>):
     if (running.engine !== had.engine) rest.engine = running.engine;
     if (running.files !== had.files) rest.files = running.files;
     await closeAllOf(rest);
+    logger.debug('host: the start-up stopped during start-up has settled and is closed');
   })();
   late.catch(() => undefined); // the process may exit first; a late engine dies with it
   await closeAllOf(had);
@@ -148,7 +155,7 @@ async function serveReport(io: CliIo, deps: CliDeps, report: string, flags: Host
         again.signalled.then(() => true),
       ]);
       again.cancel();
-      if (second) await abandon(io, running, starting);
+      if (second) await abandon(io, running, starting, full.logger);
       await shutdown(io, running);
       return;
     }

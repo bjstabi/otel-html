@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { literal, Query, sql } from '@uwdata/mosaic-sql';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterAll, describe, expect, test } from 'vitest';
 import { parseLogRef, refParts } from '../../src/viewer/data/log-query.js';
 import { COMPACTION_SPAN_NS } from '../../src/writer/compaction.js';
 import { openTestDb } from '../../test-support/duckdb-node.js';
@@ -10,6 +10,7 @@ import { ROW_GROUP_ROWS } from '../../test-support/scaling/cost.js';
 import { HARNESS_SMALL_FILE_BYTES, openCountingEngine } from '../../test-support/scaling/counting-engine.js';
 import {
   BASE,
+  buildFreshReport,
   buildScalingReport,
   CROSS,
   type ScalingReport,
@@ -63,19 +64,26 @@ describe('the scaling report generator', { timeout: 120_000 }, () => {
     opened.push(r);
     return r;
   };
-  afterEach(async () => {
+  // every report stays open to the end of the file: a shape asked for twice is built (or opened) once
+  afterAll(async () => {
     for (const r of opened.splice(0)) await r.close();
   });
 
-  test('the same shape gives byte-identical files', async () => {
+  test('the same shape gives byte-identical files, and the cache holds those bytes', async () => {
     const shape = stepsOf('density', 'dense')[0] ?? BASE;
-    const a = await buildScalingReport(shape);
+    // two builds in this process, never the shared cache: the cached folder would be compared with itself
+    const a = await buildFreshReport(shape);
+    opened.push(a);
     const first = await hashes(a.dir);
-    await a.close();
-    const b = await buildScalingReport(shape);
+    const b = await buildFreshReport(shape);
     opened.push(b);
+    expect(b.dir).not.toBe(a.dir);
     expect(await hashes(b.dir)).toEqual(first);
     expect(first.size).toBeGreaterThan(3);
+    // the cached (or shared) copy holds the same bytes, but for the meta file the cache adds
+    const cached = await hashes((await build(shape)).dir);
+    cached.delete('meta.json');
+    expect(cached).toEqual(first);
   });
 
   test.each(['dense', 'sparse'] as const)(

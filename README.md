@@ -488,7 +488,7 @@ These subcommands are for the actions; stable flags, output format not guarantee
 | `ci update stop` | Stops a running pusher (SIGKILL after 90 s); with `--log`, prints the failure lines of that log as one notice. Does nothing without a pusher. Never fails the job. | `--publish-dir` (default `.otel-html/publish`); `--log` (the pusher log to summarise; collect passes `<publish-dir>/pusher.log`) |
 | `ci pusher` | Starts the pusher (see [The pusher](#the-pusher-push-every)): re-spawns itself detached, its output in `<report>/../publish/pusher.log`, and returns at once. | `--report`, `--every` (a duration such as `60s`, `2m` or `500ms`) (both required); `--config`; `--deployer-workflow` (default `pages-deploy.yml`); `--detached` is internal |
 | `ci upload` | Zips a folder and uploads it as an artifact of the current run. Needs the runtime variables (`ACTIONS_RUNTIME_TOKEN`, `ACTIONS_RESULTS_URL`) that only a JavaScript action's environment holds, so it runs as a child of one (`actions/github-script`). | `--name`, `--path` (both required); `--retention-days` |
-| `ci dispatch` | Wakes the deployer workflow on the default branch, for a same-repository run by a user. Never fails the job; a refusal is one log line. | `--workflow` (default `pages-deploy.yml`); `--repository`; `--run-id` (default `$GITHUB_RUN_ID`) |
+| `ci dispatch` | Wakes the deployer workflow on the default branch, for a same-repository run by a user. Never fails the job; a refusal is one log line. | `--workflow` (default `pages-deploy.yml`); `--repository`; `--run-id` (default `$GITHUB_RUN_ID`); `--no-watch` (skip the 20 s wait for the deployer run to start) |
 | `ci deploy plan` | Finds the last deployed site, the newest site state and the pending updates; writes `pending.json` and the state. Writes `pending`, `base_kind`, `base_run_id`, `base_artifact_id`, `base_deployment_id` and `wait` to `$GITHUB_OUTPUT`. | `--out`, `--state-out`, `--pages-url` (all required); `--repository`; `--ci-workflows` (default `ci.yml`); `--report-workflow` (default `ci-report.yml`); `--deployer-workflow` (default `pages-deploy.yml`; only its runs on the default branch may upload a consumed state) |
 | `ci deploy fetch` | Downloads the accepted updates of `pending.json` into `<out>/<update name>/`. An unreadable download (a malformed zip, an oversized body) marks that update rejected for good in `pending.json` (`unreadable: ...`); a network or HTTP failure marks it `retry`, and the next pass tries it again. | `--pending`, `--out` (both required); `--repository` |
 | `ci deploy apply` | Applies the pending updates to the unpacked site in the specified order, deleting superseded files only after a later pass, and writes `site-state/`. Calls no API and deploys nothing. Writes `changed`, `consumed`, `deploy`, `previews` and `pending_jobs` to `$GITHUB_OUTPUT`. | `--site`, `--updates` (required); `--pending` (required without `--trust-updates`); `--state`; `--repository`; `--retention` (30), `--pr-retention` (10); `--config`; `--pass-run-id` (default `$GITHUB_RUN_ID`); test flags: `--trust-updates` (accept every update folder without `pending.json`), `--channel` (with it, the channel to apply them to) |
@@ -562,7 +562,7 @@ with:
   dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
 ```
 
-The action mints a token with `actions: write` scoped to this repository alone, only for the dispatch; every other command keeps `token`. Without the two settings (or if minting fails) the dispatch uses `token` as before; `otel-html ci dispatch` then notices the deployer run that ends in `startup_failure` and prints a warning naming it, and the site updates only when `ci-report` ends and on the deployer's five-minute schedule.
+The action mints a token with `actions: write` scoped to this repository alone, only for the dispatch; every other command keeps `token`. Without the two settings (or if minting fails) the dispatch uses `token` as before; `otel-html ci dispatch` then notices the deployer run that ends in `startup_failure` and prints a warning naming it (the collect action dispatches with `--no-watch`, so only the dispatches that watch, such as the pusher's, warn), and the site updates only when `ci-report` ends and on the deployer's five-minute schedule.
 
 #### The publisher and the deployer
 
@@ -900,9 +900,29 @@ lint, typecheck and knip (the part of `check` without tests)
 
 ## `coverage`
 
+- Depends: engine:assets
+
 - **Usage:** `coverage`
 
-Unit coverage from the suite without @perf, per vitest project, into coverage/unit-&lt;project>/ (lcov, summary); never cached
+Unit coverage from the suite without @perf, per vitest project, into coverage/unit-&lt;project>/ (lcov, summary); never cached. Local use; CI runs coverage:shard in the unit shards and coverage:merge
+
+## `coverage:merge`
+
+- **Usage:** `coverage:merge`
+
+Merge the .vitest-reports/&lt;project> blobs into coverage/unit-&lt;project>/ (lcov, summary), as `coverage` writes them, and print the summary
+
+## `coverage:shard`
+
+One unit shard (`<i/n>`) with coverage into .vitest-reports/<project>/blob-<i>-<n>.json; merge them with coverage:merge
+
+
+- Depends: engine:assets
+
+- **Usage:** `coverage:shard <shard>`
+
+### Arguments
+- **`<shard>`** — the shard, i/n
 
 ## `demo`
 
@@ -924,6 +944,22 @@ refuses to run in CI.
 
 Build the e2e fixture reports into e2e/.reports/ and their site copies into e2e/.reports-site/ (skipped while up to date)
 All but `scale`, `many` and `rowgroups`, which e2e:fixtures:scale builds; about a second after `build`.
+
+## `e2e:fixtures:rowgroups`
+
+- Depends: e2e:fixtures:rowgroups:data
+
+- **Usage:** `e2e:fixtures:rowgroups`
+
+The e2e `rowgroups` report with the current viewer (only e2e/calibration.spec.ts reads it); `otel-html upgrade` swaps in dist/viewer
+
+## `e2e:fixtures:rowgroups:data`
+
+- Depends: build
+
+- **Usage:** `e2e:fixtures:rowgroups:data`
+
+Write the e2e `rowgroups` report alone (site format) into e2e/.reports-scale/rowgroups (skipped while up to date); the other scale reports are left as they are
 
 ## `e2e:fixtures:scale`
 
@@ -950,6 +986,14 @@ not the viewer's: a viewer change only reruns e2e:fixtures:scale.
 - **Usage:** `e2e:otel-recorder`
 
 Bundle the e2e in-page span recorder into e2e/.cache/otel-recorder.js (skipped while up to date)
+
+## `engine:assets`
+
+- **Usage:** `engine:assets`
+
+The DuckDB engine files for the host and the unit tests into .cache/engine-assets (skipped while up to date)
+The same files build:viewer copies into dist/viewer/assets (scripts/engine-assets.ts), outside dist/ so the unit,
+scaling and coverage tasks can depend on them without a build; the extensions are downloaded once into .cache/duckdb-extensions.
 
 ## `fixtures`
 
@@ -1004,10 +1048,21 @@ the page fits, the one-engine table, and per page and per shape (rolling = test-
 --dir dist/predict-queries --after 4
 
 
+- Depends: scaling:reports
+
 - **Usage:** `predict:queries [args]…`
 
 ### Arguments
 - **`[args]…`**
+
+## `scaling:reports`
+
+- **Usage:** `scaling:reports`
+
+Build the scaling reports into .cache/scaling-reports/&lt;key> (skipped while up to date)
+&lt;key> hashes the files the generator imports (test-support/scaling/report-cache.ts), so a report is never older than
+the writer; test:scaling and predict:queries depend on it, and the unit tests read it through the scaling global setup
+(building a missing shape into it). Older key folders are removed. OTEL_HTML_SCALING_CACHE=off bypasses the cache.
 
 ## `setup`
 
@@ -1028,6 +1083,7 @@ the table weighs the median. Unit files get the seconds a worker spends on them 
 Playwright spec files the sum of their tests' durations (Chromium's `-file` and `-http` projects together). Failing
 tests still record their durations, and the task then exits non-zero. `-- unit chromium` rewrites only those parts of the table
 (parts: unit, chromium, firefox, webkit); a browser run that hangs is killed after 20 minutes and its part is kept.
+A file whose seconds moved more than 2x since the last table prints a "weight drifted" warning on stderr (never a failure).
 
 ## `test:e2e`
 
@@ -1040,7 +1096,8 @@ Sharding: `--shard 1/2` runs half of each pass. The main pass splits the spec fi
 Playwright's own `-- --shard=1/2` still works, but splits both passes by count.
 The perf pass is skipped for a browser without a `-perf-file` project. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
-The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only when the selection includes e2e/scale.spec.ts or e2e/calibration.spec.ts, decided
+The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only when the selection includes e2e/scale.spec.ts or the perf pass includes
+e2e/calibration.spec.ts; a main pass that includes only e2e/calibration.spec.ts builds just the `rowgroups` report (e2e:fixtures:rowgroups). Decided
 by `playwright test --list` with the same args; a direct `playwright test e2e/scale.spec.ts` needs that task run first.
 Browsers are installed first unless OTEL_HTML_SKIP_BROWSER_INSTALL is set (CI's Playwright image has them).
 The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (CI runs it in its own Chromium job): it writes a
@@ -1110,6 +1167,8 @@ the Traces and Logs landings with e2e/load.spec.ts.
 
 ## `test:scaling`
 
+- Depends: engine:assets, scaling:reports
+
 - **Usage:** `test:scaling`
 
 The scaling measurement: every catalogue entry cold on the generated reports, classified and compared with the declared classes
@@ -1117,7 +1176,7 @@ Builds the reports of test-support/scaling/generator.ts (retention, density and 
 runs each entry of src/viewer/data/catalogue.ts cold through the counting engine and asserts the class it declares
 (test/scaling/classes-&lt;axis>-&lt;spacing>.test.ts: one file per axis and spacing plus the cross shape, so vitest runs them in
 parallel workers; test/scaling/classes.test.ts holds the cheap declared-rules tests and checks the split covers every entry
-and axis). About 50 seconds on 4 cores; the workers share the generated reports and the cold runs through a folder in the temp directory; cached by the content of its inputs, so an unchanged tree replays it.
+and axis). About 50 seconds on 4 cores; the workers share the generated reports the reports come from the scaling:reports cache and the cold runs through a folder in the temp directory (per run); cached by the content of its inputs, so an unchanged tree replays it.
 `check` depends on it and CI's `check` job runs it; the unit tasks skip the measurement (OTEL_HTML_SCALING unset).
 OTEL_HTML_SCALING_PRINT=1 prints the entry x axis x class table to stderr (only on an uncached run).
 
@@ -1132,6 +1191,8 @@ Unit tests: the parallel pass, then the @perf pass
 Unit tests whose import graph reaches a file changed since `ref` (default main)
 
 
+- Depends: engine:assets
+
 - **Usage:** `test:unit:changed [ref]`
 
 ### Arguments
@@ -1140,6 +1201,8 @@ Unit tests whose import graph reaches a file changed since `ref` (default main)
   **Default:** `main`
 
 ## `test:unit:main`
+
+- Depends: engine:assets
 
 - **Usage:** `test:unit:main`
 

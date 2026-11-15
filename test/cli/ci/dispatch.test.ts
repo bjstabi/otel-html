@@ -1,6 +1,8 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { runDispatch } from '../../../src/cli/ci/dispatch.js';
 import type { CliIo } from '../../../src/cli/io.js';
+import { runCli } from '../../../src/cli/program.js';
+import { createTestWriter } from '../../../test-support/writer-deps.js';
 
 type Call = { url: string; method: string; body?: unknown };
 
@@ -184,5 +186,23 @@ describe('runDispatch', () => {
       );
       expect(s.lines).toHaveLength(1);
     });
+  });
+});
+
+describe('ci dispatch --no-watch', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  test('dispatches once and never looks for the run', async () => {
+    const s = setup({});
+    vi.stubGlobal('fetch', s.fetchFn);
+    const code = await runCli(
+      ['ci', 'dispatch', '--no-watch', '--repository', 'o/r', '--run-id', '42'],
+      s.io,
+      createTestWriter().deps,
+    );
+    expect(code).toBe(0);
+    expect(s.calls.filter((c) => c.method === 'POST').map((c) => c.url)).toEqual([
+      'https://api.github.com/repos/o/r/actions/workflows/pages-deploy.yml/dispatches',
+    ]);
+    expect(s.calls.filter((c) => /\/runs\?/.test(c.url))).toEqual([]);
   });
 });

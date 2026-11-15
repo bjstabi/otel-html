@@ -16,6 +16,17 @@ export interface Opened {
   close(): void;
 }
 
+/**
+ * A new data source over the bytes `o` already opened, with its own coordinator: no memo or coordinator cache carries
+ * over from another test. Read the requests it made from the index the connector had when the test began.
+ */
+export function freshSource(o: Opened): DataSource {
+  return createDuckDbDataSource({
+    engine: mosaicQueryEngine(createCoordinator(o.db.connector, silentLogger), o.db),
+    manifest: o.manifest,
+  });
+}
+
 /** A data source over `f`, with the manifest's epoch moved by `epochShiftNs` (a merge that moved it). */
 export async function openLayout(f: Format4Fixture, epochShiftNs = 0n): Promise<Opened> {
   const db = await openFixtureDb(f);

@@ -1,7 +1,7 @@
 import { request } from 'node:http';
 import { createServer } from 'node:net';
 import { tableFromIPC } from 'apache-arrow';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { startHostEngine } from '../../src/host/engine.js';
 import { readHostManifest } from '../../src/host/manifest.js';
 import {
@@ -18,7 +18,7 @@ import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { buildFormat4Report, spansOnlyRequest } from '../../test-support/format4-fixture.js';
 import { packageHostEngineFiles } from '../../test-support/host-engine-files.js';
 import { writeReportDir } from '../../test-support/report-dir.js';
-import { createTestWriter, fakeViewerAssets } from '../../test-support/writer-deps.js';
+import { createTestWriter, fakeViewerAssets, type TestWriter } from '../../test-support/writer-deps.js';
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
@@ -27,10 +27,12 @@ afterEach(async () => {
   for (const c of cleanups.splice(0).reverse()) await c();
 });
 
-async function serve(bindHost = '127.0.0.1') {
+/** Starts a host and says how to stop it; the caller owns the cleanup. */
+async function start(bindHost = '127.0.0.1') {
+  const stops: (() => Promise<void>)[] = [];
   const fixture = await buildFormat4Report([spansOnlyRequest(3), spansOnlyRequest(2)], { close: false });
   const report = await writeReportDir(fixture);
-  cleanups.push(report.close);
+  stops.push(report.close);
   const fs = createNodeFileSystem();
   const w = createTestWriter();
   const manifest = await readHostManifest(fs, report.dir);
@@ -43,7 +45,7 @@ async function serve(bindHost = '127.0.0.1') {
     timeoutMs: 30_000,
     maxResultBytes: 64 * 1024 * 1024,
   });
-  cleanups.push(() => engine.close());
+  stops.push(() => engine.close());
   const listener = await startHostServer({
     report: report.dir,
     manifest,
@@ -53,9 +55,41 @@ async function serve(bindHost = '127.0.0.1') {
     port: 0,
     logger: w.deps.logger,
     tracer: w.deps.tracer,
+  }).catch(async (error: unknown) => {
+    for (const c of stops.splice(0).reverse()) await c();
+    throw error;
   });
-  cleanups.push(() => listener.close());
-  return { base: listener.address, w };
+  stops.push(() => listener.close());
+  return {
+    base: listener.address,
+    w,
+    close: async () => {
+      for (const c of stops.splice(0).reverse()) await c();
+    },
+  };
+}
+
+/** A host of this test alone, closed after it. */
+async function serve(bindHost = '127.0.0.1') {
+  const h = await start(bindHost);
+  cleanups.push(h.close);
+  return { base: h.base, w: h.w };
+}
+
+/**
+ * Inside a `describe`: `const serve1 = sharedServe();` and `await serve1()` in the tests that only send requests (they
+ * assert on no log or span of `w` and bind no other host). The first call starts the host; `afterAll` closes it.
+ */
+function sharedServe(): () => Promise<{ base: string; w: TestWriter }> {
+  let started: ReturnType<typeof start> | undefined;
+  afterAll(async () => {
+    if (started !== undefined) await (await started).close();
+  });
+  return async () => {
+    started ??= start();
+    const { base, w } = await started;
+    return { base, w };
+  };
 }
 
 const post = (base: string, body: string, path = QUERY_PATH) =>
@@ -63,8 +97,9 @@ const post = (base: string, body: string, path = QUERY_PATH) =>
 const q = (base: string, sql: string, type = 'arrow') => post(base, JSON.stringify({ type, sql }));
 
 describe('POST /query', () => {
+  const serve1 = sharedServe();
   it('answers an arrow query as an IPC stream', async () => {
-    const { base } = await serve();
+    const { base } = await serve1();
     const res = await q(base, 'SELECT count(*) AS n FROM spans');
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe(ARROW_STREAM_TYPE);
@@ -92,7 +127,7 @@ describe('POST /query', () => {
   });
 
   it('is 405 for GET', async () => {
-    const { base } = await serve();
+    const { base } = await serve1();
     expect((await fetch(base + QUERY_PATH)).status).toBe(405);
   });
 
@@ -139,8 +174,9 @@ describe('chunked bodies', () => {
 });
 
 describe('static routes', () => {
+  const serve1 = sharedServe();
   it('serves the shell, assets and manifest only', async () => {
-    const { base } = await serve();
+    const { base } = await serve1();
     for (const p of ['/', '/index.html']) {
       const res = await fetch(base + p);
       expect(res.status).toBe(200);
@@ -165,7 +201,7 @@ describe('static routes', () => {
   });
 
   it('never leaves the asset map', async () => {
-    const { base } = await serve();
+    const { base } = await serve1();
     const url = new URL(base);
     for (const p of ['/../package.json', '/assets/..%2f..%2fpackage.json', '/%2e%2e/package.json']) {
       // fetch normalises dot segments, so send the raw request line too.
@@ -236,8 +272,9 @@ function withHost(
 }
 
 describe('cross-site and rebound requests (I2)', () => {
+  const serve1 = sharedServe();
   it('answers 415 to a query that is not application/json, and runs one that is', async () => {
-    const { base } = await serve();
+    const { base } = await serve1();
     const body = JSON.stringify({ type: 'arrow', sql: 'SELECT 1' });
     for (const type of ['text/plain', 'application/x-www-form-urlencoded', undefined]) {
       const res = await withHost(base, new URL(base).host, { method: 'POST', path: QUERY_PATH, type, body });
@@ -253,7 +290,7 @@ describe('cross-site and rebound requests (I2)', () => {
   });
 
   it('answers 403 to a foreign Host on a loopback bind, for every route', async () => {
-    const { base } = await serve();
+    const { base } = await serve1();
     const { port } = new URL(base);
     for (const host of [
       'evil.example',
@@ -280,7 +317,7 @@ describe('cross-site and rebound requests (I2)', () => {
   });
 
   it('accepts the loopback names with the bound port', async () => {
-    const { base } = await serve();
+    const { base } = await serve1();
     const { port } = new URL(base);
     for (const host of [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`, `LOCALHOST:${port}`]) {
       expect([host, (await withHost(base, host)).status]).toEqual([host, 200]);
@@ -295,7 +332,7 @@ describe('cross-site and rebound requests (I2)', () => {
   });
 
   it('marks every response nosniff, the 404 that echoes the path included', async () => {
-    const { base } = await serve();
+    const { base } = await serve1();
     const host = new URL(base).host;
     for (const [method, path] of [
       ['GET', '/'],

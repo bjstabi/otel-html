@@ -10,7 +10,7 @@ import { oldFormatMessage } from '../../src/format/version.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { buildFormat4Report, spansOnlyRequest } from '../../test-support/format4-fixture.js';
 import { writeReportDir } from '../../test-support/report-dir.js';
-import { createTestWriter } from '../../test-support/writer-deps.js';
+import { createTestWriter, type LogEntry } from '../../test-support/writer-deps.js';
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
@@ -19,10 +19,12 @@ interface Harness {
   stderr: string;
   fire(signal?: StopSignal): void;
   subscribed(): boolean;
+  logs: readonly LogEntry[];
   result: Promise<number>;
 }
 
 function start(argv: readonly string[]): Harness {
+  const writer = createTestWriter();
   const handlers = new Set<(s: StopSignal) => void>();
   const h: Harness = {
     stdout: '',
@@ -31,6 +33,7 @@ function start(argv: readonly string[]): Harness {
       for (const fn of [...handlers]) fn(signal);
     },
     subscribed: () => handlers.size > 0,
+    logs: writer.logs,
     result: Promise.resolve(0),
   };
   const io: CliIo = {
@@ -50,7 +53,7 @@ function start(argv: readonly string[]): Harness {
     },
     spawn,
   };
-  h.result = runCli(argv, io, { ...createTestWriter().deps, fs: createNodeFileSystem() });
+  h.result = runCli(argv, io, { ...writer.deps, fs: createNodeFileSystem() });
   return h;
 }
 
@@ -218,7 +221,13 @@ describe('host', () => {
     expect(await h.result).toBe(130);
     expect(h.stdout).not.toContain('serving');
     // What was still starting is closed when it settles.
-    await new Promise((r) => setTimeout(r, 6000));
+    await vi.waitFor(
+      () =>
+        expect(h.logs.map((l) => l.msg)).toContain(
+          'host: the start-up stopped during start-up has settled and is closed',
+        ),
+      { timeout: 20_000, interval: 50 },
+    );
     await expect(fetch(`http://127.0.0.1:${port}/`)).rejects.toThrow();
   });
 

@@ -1,5 +1,10 @@
 {
   "extends": "./tsconfig.viewer.json",
   "compilerOptions": { "types": ["node"], "allowImportingTsExtensions": true },
-  "include": ["test/viewer-data/**/*", "test/scaling/**/*", "test-support/perf-context.d.ts"]
+  "include": [
+    "test/viewer-data/**/*",
+    "test/scaling/**/*",
+    "scripts/scaling-reports.ts",
+    "test-support/perf-context.d.ts"
+  ]
 }

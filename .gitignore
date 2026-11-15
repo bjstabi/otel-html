@@ -2,6 +2,7 @@
 node_modules/
 dist/
 coverage/
+.vitest-reports/
 *.tsbuildinfo
 e2e/.reports/
 e2e/.reports-site/

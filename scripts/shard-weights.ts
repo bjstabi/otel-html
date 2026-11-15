@@ -53,6 +53,21 @@ export function normalise(seconds: FileSeconds): FileSeconds {
   );
 }
 
+/**
+ * Files whose seconds moved by more than `factor` either way between two tables, as `<file>: <old> s -> <new> s`,
+ * sorted by file. Only files in both tables count (a new or removed file is not drift).
+ */
+export function drifted(old: FileSeconds, fresh: FileSeconds, factor = 2): string[] {
+  return Object.keys(old)
+    .filter((f) => fresh[f] !== undefined)
+    .sort()
+    .filter((f) => {
+      const [a, b] = [old[f] as number, fresh[f] as number];
+      return b > a * factor || b < a / factor;
+    })
+    .map((f) => `${f}: ${old[f]} s -> ${fresh[f]} s`);
+}
+
 /** A Playwright run that hangs (a crashed browser) is killed after this long. */
 const BROWSER_TIMEOUT_MS = 20 * 60_000;
 
@@ -101,6 +116,7 @@ function main(): void {
   const dir = mkdtempSync(join(tmpdir(), 'shard-weights-'));
   const failures: string[] = [];
   const table = readTable();
+  const before = structuredClone(table);
   const unit = (perf: boolean): FileSeconds => {
     const out = join(dir, perf ? 'perf.json' : 'main.json');
     const status = run(
@@ -142,6 +158,14 @@ function main(): void {
     );
     table.e2e[browser] = normalise({ ...idle, ...playwrightSeconds(report) });
   }
+
+  const warn = (part: string, old: FileSeconds, fresh: FileSeconds | undefined): void => {
+    for (const line of drifted(old, fresh ?? {}))
+      process.stderr.write(`warning: ${part} weight drifted ${line}\n`);
+  };
+  warn('unit', before.unit, table.unit);
+  warn('unit-perf', before['unit-perf'], table['unit-perf']);
+  for (const browser of BROWSERS) warn(browser, before.e2e[browser] ?? {}, table.e2e[browser]);
 
   writeFileSync(TABLE, `${JSON.stringify(table, null, 2)}\n`);
   process.stdout.write(`wrote ${TABLE}\n`);

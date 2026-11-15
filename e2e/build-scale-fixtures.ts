@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { toJson } from '@bufbuild/protobuf';
 import { Report } from '../src/api/index.js';
+import { OtelHtmlError } from '../src/model/errors.js';
 import { ExportMetricsServiceRequestSchema } from '../src/model/gen/opentelemetry/proto/collector/metrics/v1/metrics_service_pb.js';
 import { scaleLogsRequest } from '../test-support/scale-logs.js';
 import { scaleMetrics } from '../test-support/scale-metrics.js';
@@ -183,6 +184,26 @@ async function buildRowGroupsReport(inputs: URL): Promise<void> {
   await convertTo(reportDir('rowgroups'), [file, logs], 'rowgroups run');
 }
 
-await rm(SCALE_REPORTS_DIR, { recursive: true, force: true });
-await buildScaleReports();
-await writeFile(SCALE_WRITER_STAMP, writerBuildHash());
+/**
+ * `--only rowgroups` rebuilds `rowgroups` alone (what `e2e/calibration.spec.ts` reads): it removes that report and its
+ * own inputs, and leaves `scale`, `many` and the writer stamp as they are.
+ */
+async function buildRowGroupsOnly(): Promise<void> {
+  const inputs = new URL('inputs/', SCALE_REPORTS_DIR);
+  await rm(reportDir('rowgroups'), { recursive: true, force: true });
+  await rm(new URL('rowgroups.json', inputs), { force: true });
+  await rm(new URL('rowgroups-logs.json', inputs), { force: true });
+  await mkdir(inputs, { recursive: true });
+  await buildRowGroupsReport(inputs);
+}
+
+const only = process.argv.indexOf('--only');
+if (only === -1) {
+  await rm(SCALE_REPORTS_DIR, { recursive: true, force: true });
+  await buildScaleReports();
+  await writeFile(SCALE_WRITER_STAMP, writerBuildHash());
+} else if (process.argv[only + 1] === 'rowgroups') {
+  await buildRowGroupsOnly();
+} else {
+  throw new OtelHtmlError('usage', { message: 'build-scale-fixtures: --only takes `rowgroups`' });
+}
