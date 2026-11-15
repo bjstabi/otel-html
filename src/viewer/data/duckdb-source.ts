@@ -72,6 +72,7 @@ import {
   traceBoundOf,
   tracePartitionsQuery,
   traceRowsQuery,
+  traceShareQuery,
   traceSpansQuery,
   traceSummaryQuery,
   windowTracePartitionsQuery,
@@ -127,6 +128,7 @@ import {
   serviceStats,
   spanEntries,
   spanRows,
+  storedShare,
   timeline,
   timelineBuckets,
   toNumber,
@@ -1268,6 +1270,11 @@ export function createDuckDbDataSource(opts: {
       return Number(cell(r, 'percentile'));
     },
     async serviceShare(traceId, signal) {
+      // an exact stored share (format 6, the trace in one `traces` row) answers from the `traces` files alone
+      const stored = storedShare(
+        cell(rowsOf(await read(['traces'], undefined, traceShareQuery(traceId), signal))[0] ?? {}, 'share'),
+      );
+      if (stored !== null) return stored.map(({ service, ns }) => ({ service, ns: Number(ns) }));
       // its own load: the open trace's memo stays, and the log summary is not read
       const { rows, share } = await readTrace(traceId, false, signal);
       // `share` is each span's times relative to the trace's earliest start, taken exactly in SQL: the anchor-relative

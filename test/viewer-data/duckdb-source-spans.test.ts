@@ -516,7 +516,7 @@ describe('the other questions', () => {
     const open = await counted(() => fresh.getTrace(T1));
     expect(open.arrow).toBe(3); // trace partitions, then spans and summary
     const share = await counted(() => fresh.serviceShare(T3));
-    expect(share.arrow).toBe(2); // trace partitions, spans: no summary
+    expect(share.arrow).toBe(3); // the stored share (none here), trace partitions, spans: no summary
     expect(share.exec).toBe(0);
     expect(share.value.map((x) => x.service).sort()).toEqual(['svc-a', 'svc-b']);
     const again = await counted(() => fresh.getTrace(T1));
@@ -877,10 +877,10 @@ describe('getTrace and serviceShare with a span that ends before it starts', () 
     const open = await arrows(() => fresh().getTrace(T1));
     expect(open.arrow).toBe(3);
     const share = await arrows(() => fresh().serviceShare(T1));
-    expect(share.arrow).toBe(2);
+    expect(share.arrow).toBe(3); // the stored-share check, then partitions and spans
     // the malformed trace pays one more
     expect((await arrows(() => fresh().getTrace(T5))).arrow).toBe(4);
-    expect((await arrows(() => fresh().serviceShare(T5))).arrow).toBe(3);
+    expect((await arrows(() => fresh().serviceShare(T5))).arrow).toBe(4);
   });
 });
 

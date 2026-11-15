@@ -158,7 +158,7 @@ export function spanRows(
 }
 
 /** The stored share text decoded; null when absent or malformed (the cell then loads it from the spans). */
-function storedShare(v: unknown): ServiceShare | null {
+export function storedShare(v: unknown): ServiceShare | null {
   if (typeof v !== 'string') return null;
   try {
     return decodeServiceShare(v);

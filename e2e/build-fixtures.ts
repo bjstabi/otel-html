@@ -632,7 +632,7 @@ async function buildWideFormat6Report(): Promise<void> {
 
 /**
  * The frozen data folders (`fixtures/reports/format-<n>/`, never edited) converted into format-5 reports by
- * `otel-html merge`, which writes the current viewer beside the data (D12: the viewer reads format 5 only).
+ * `otel-html merge`, which writes the current viewer beside the data (D12: the viewer reads formats 5 and 6 only).
  */
 async function buildFrozenReports(): Promise<void> {
   // Format 5 takes the path a user's report takes: the frozen folder is upgraded in place, so its manifest and
