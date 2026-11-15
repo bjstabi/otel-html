@@ -366,9 +366,18 @@ export interface SerializedStreams {
   lasts: (number | BucketAgg)[];
   seriesKeys: string[];
   seriesTimes: number[];
+  /**
+   * `[index, exact ns]` for the stream (`farStreams`) or series (`farSeries`) time at that index when it lies beyond
+   * 2^53 ns of the anchor, where the number in `times`/`seriesTimes` is only the limit it is held at. Absent when
+   * none is: a state written by an older build still reads.
+   */
+  farStreams?: [number, string][] | undefined;
+  farSeries?: [number, string][] | undefined;
   /** Kept so a state written by an older build still reads; always empty now (no series is folded). */
   folded: [number, string[]][];
 }
+
+const FarTimeSchema = z.tuple([z.number().int().nonnegative(), z.string().regex(/^-?[0-9]+$/)]);
 
 const SerializedStreamsSchema: z.ZodType<SerializedStreams> = z
   .strictObject({
@@ -377,6 +386,8 @@ const SerializedStreamsSchema: z.ZodType<SerializedStreams> = z
     lasts: z.array(z.union([z.number().finite(), BucketAggSchema])),
     seriesKeys: z.array(z.string()),
     seriesTimes: z.array(z.number().finite()),
+    farStreams: z.array(FarTimeSchema).optional(),
+    farSeries: z.array(FarTimeSchema).optional(),
     folded: z.array(z.tuple([z.number().int().nonnegative(), z.array(z.string())])).default([]),
   })
   .refine((s) => s.times.length === s.keys.length && s.lasts.length === s.keys.length, {
@@ -386,10 +397,24 @@ const SerializedStreamsSchema: z.ZodType<SerializedStreams> = z
   .refine((s) => s.seriesTimes.length === s.seriesKeys.length, {
     message: 'one time per series key',
     path: ['seriesKeys'],
-  });
+  })
+  .refine(
+    (s) =>
+      (s.farStreams ?? []).every(([i]) => i < s.keys.length) &&
+      (s.farSeries ?? []).every(([i]) => i < s.seriesKeys.length),
+    { message: 'a far time names an existing key', path: ['farStreams'] },
+  );
 
-interface Stream {
+/**
+ * A remembered time relative to the session's anchor. `far` is its exact value when that lies beyond 2^53 ns of the
+ * anchor; `time` is then only the limit it is held at, enough for every comparison a point within reach can make.
+ */
+interface Stamp {
   time: number;
+  far?: bigint | undefined;
+}
+
+interface Stream extends Stamp {
   last: number | BucketAgg;
 }
 
@@ -400,7 +425,7 @@ interface Stream {
 export class StreamNormalizer {
   readonly #streams = new Map<string, Stream>();
   /** Time of each series' latest cumulative point, over all its streams: tells a restart from a second producer. */
-  readonly #latest = new Map<string, number>();
+  readonly #latest = new Map<string, Stamp>();
   /**
    * Per series, the time of its latest cumulative point in each input report, for points that name one (merge only;
    * never checkpointed). Merged reports can overlap in time, so a restart is judged against its own report's points.
@@ -475,15 +500,16 @@ export class StreamNormalizer {
     const prev = this.#streams.get(key);
     if (prev !== undefined && p.time <= prev.time) return { kind: 'skip', reason: 'out-of-order' };
     const latest = this.#latest.get(owner);
-    if (latest === undefined || p.time > latest) this.#latest.set(owner, p.time);
+    if (latest === undefined || p.time > latest.time) this.#latest.set(owner, { time: p.time });
     // A new stream is a restart only after an earlier point of the same report: in a merge, that report's own.
-    const before = t.origin === undefined ? latest : this.#latestInOrigin(owner, t.origin, p.time);
+    const before = t.origin === undefined ? latest?.time : this.#latestInOrigin(owner, t.origin, p.time);
     if (prev === undefined) {
       this.#streams.set(key, { time: p.time, last: cur });
       return p.start === null ? wrap(zero(cur), false) : wrap(cur, before !== undefined && p.start > before);
     }
     const last = recall(prev.last);
     prev.time = p.time;
+    prev.far = undefined;
     prev.last = cur;
     const delta = last === null ? null : diff(cur, last);
     return delta === null ? wrap(cur, true) : wrap(delta, false);
@@ -501,6 +527,34 @@ export class StreamNormalizer {
     return latest;
   }
 
+  /**
+   * Re-expresses every remembered time against a new anchor: each moves by `delta` ns (old anchor minus new), the
+   * start time in a stream's key too. The move is exact whatever the distance and however many times it repeats:
+   * a time that leaves 2^53 ns of the new anchor keeps its exact value (`far`, checkpointed) and is held at that
+   * limit only for comparisons, where it stays before (or after) every point the anchor can reach, which is all
+   * the out-of-order and restart checks ask of it. A stream whose start is out of reach keeps its key, which no
+   * point can name until a later shift brings it back.
+   */
+  shift(delta: bigint): void {
+    const max = BigInt(Number.MAX_SAFE_INTEGER);
+    const move = (s: Stamp): Stamp => {
+      const v = (s.far ?? BigInt(s.time)) + delta;
+      if (v > max) return { time: Number.MAX_SAFE_INTEGER, far: v };
+      if (v < -max) return { time: -Number.MAX_SAFE_INTEGER, far: v };
+      return { time: Number(v) };
+    };
+    const moved = new Map<string, Stream>();
+    for (const [key, s] of this.#streams) {
+      const cut = key.lastIndexOf(':');
+      const start = key.slice(cut + 1);
+      const next = start === 'none' ? key : `${key.slice(0, cut + 1)}${BigInt(start) + delta}`;
+      moved.set(next, { ...move(s), last: s.last });
+    }
+    this.#streams.clear();
+    for (const [key, s] of moved) this.#streams.set(key, s);
+    for (const [key, t] of this.#latest) this.#latest.set(key, move(t));
+  }
+
   toJSON(): SerializedStreams {
     const out: SerializedStreams = {
       keys: [],
@@ -510,15 +564,21 @@ export class StreamNormalizer {
       seriesTimes: [],
       folded: [],
     };
+    const farStreams: [number, string][] = [];
+    const farSeries: [number, string][] = [];
     for (const [key, s] of this.#streams) {
       out.keys.push(key);
+      if (s.far !== undefined) farStreams.push([out.keys.length - 1, String(s.far)]);
       out.times.push(s.time);
       out.lasts.push(s.last);
     }
     for (const [key, t] of this.#latest) {
       out.seriesKeys.push(key);
-      out.seriesTimes.push(t);
+      if (t.far !== undefined) farSeries.push([out.seriesKeys.length - 1, String(t.far)]);
+      out.seriesTimes.push(t.time);
     }
+    if (farStreams.length > 0) out.farStreams = farStreams;
+    if (farSeries.length > 0) out.farSeries = farSeries;
     return out;
   }
 
@@ -530,10 +590,18 @@ export class StreamNormalizer {
       const last = s.lasts[i];
       if (time !== undefined && last !== undefined) n.#streams.set(key, { time, last });
     });
+    for (const [i, far] of s.farStreams ?? []) {
+      const stream = n.#streams.get(s.keys[i] ?? '');
+      if (stream !== undefined) stream.far = BigInt(far);
+    }
     s.seriesKeys.forEach((key, i) => {
       const time = s.seriesTimes[i];
-      if (time !== undefined) n.#latest.set(key, time);
+      if (time !== undefined) n.#latest.set(key, { time });
     });
+    for (const [i, far] of s.farSeries ?? []) {
+      const stamp = n.#latest.get(s.seriesKeys[i] ?? '');
+      if (stamp !== undefined) stamp.far = BigInt(far);
+    }
     return n;
   }
 }

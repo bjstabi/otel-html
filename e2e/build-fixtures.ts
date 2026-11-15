@@ -6,7 +6,6 @@ import { Report } from '../src/api/index.js';
 import { reviveDataJson, unwrapDataFile } from '../src/format/data-file.js';
 import { isPartitioned, parseAnyManifest } from '../src/format/manifest.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
-import { withServiceShare } from '../test-support/format6.js';
 import {
   DASHBOARDS_CONFIG,
   DASHBOARDS_HOSTILE_DEFAULT,
@@ -16,6 +15,7 @@ import {
   FORMAT_6_STEP_NS,
   FORMAT_6_T0,
   FORMAT_6_TRACES,
+  FORMAT_6_WIDE_GAP_NS,
   fixtureFiles,
   HOSTILE_REPORT_DIR,
   HOSTILE_SPAN_NAME,
@@ -554,14 +554,13 @@ async function buildRefreshReport(): Promise<void> {
 }
 
 /**
- * The `format-6` report (see `ReportName`): a `site` report of 12 two-span traces (`checkout` calling `payments`) one
- * minute apart, written as format 5 and then upgraded as the CI path does: no `epochUnixNano`, `serviceShare` stored.
+ * A `site` report of `FORMAT_6_TRACES` two-span traces (`checkout` calling `payments`) one minute apart from `t0`,
+ * written by the current writer: format 6, no `epochUnixNano`, the service share stored.
  */
-async function buildFormat6Report(): Promise<void> {
-  const out = fileURLToPath(reportDir('format-6', 'http'));
+async function buildTraceReport(out: string, title: string, t0: bigint): Promise<void> {
   const hex = (n: number, width: number): string => (n + 1).toString(16).padStart(width, '0');
   const spans = Array.from({ length: FORMAT_6_TRACES }, (_, i) => {
-    const start = FORMAT_6_T0 + BigInt(i) * FORMAT_6_STEP_NS;
+    const start = t0 + BigInt(i) * FORMAT_6_STEP_NS;
     const trace = hex(i, 32);
     return [
       {
@@ -603,23 +602,42 @@ async function buildFormat6Report(): Promise<void> {
       ),
     })),
   };
-  const report = await Report.create({ out, title: 'format 6 run', format: 'site' });
+  const report = await Report.create({ out, title, format: 'site' });
   await report.addSpans(request);
   await report.close();
+}
+
+/** The `format-6` report (see `ReportName`): one `buildTraceReport` at `FORMAT_6_T0`. */
+async function buildFormat6Report(): Promise<void> {
+  const out = fileURLToPath(reportDir('format-6', 'http'));
+  await buildTraceReport(out, 'format 6 run', FORMAT_6_T0);
   const text = await readFile(`${out}data/manifest.js`, 'utf8');
   const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
   if (!isPartitioned(manifest)) throw new Error('the format-6 fixture did not write a partition manifest');
-  await withServiceShare(out, manifest);
+}
+
+/**
+ * The `wide-format-6` report: two `buildTraceReport`s about three years apart merged (as #216's CLI test does), so
+ * the report spans more than 2^53 ns. `e2e/format-6.spec.ts` opens it and sets a window in the later year.
+ */
+async function buildWideFormat6Report(): Promise<void> {
+  const parts = fileURLToPath(new URL('wide-format-6-parts/', REPORTS_DIR));
+  await rm(parts, { recursive: true, force: true });
+  await buildTraceReport(`${parts}early`, 'wide early', FORMAT_6_T0);
+  await buildTraceReport(`${parts}late`, 'wide late', FORMAT_6_T0 + FORMAT_6_WIDE_GAP_NS);
+  const out = fileURLToPath(reportDir('wide-format-6', 'http'));
+  await cli(['merge', `${parts}early`, `${parts}late`, '--out', out, '--format', 'site']);
+  await rm(parts, { recursive: true, force: true });
 }
 
 /**
  * The frozen data folders (`fixtures/reports/format-<n>/`, never edited) converted into format-5 reports by
- * `otel-html merge`, which writes the current viewer beside the data (D12: the viewer reads format 5 only).
+ * `otel-html merge`, which writes the current viewer beside the data (D12: the viewer reads formats 5 and 6 only).
  */
 async function buildFrozenReports(): Promise<void> {
   // Format 5 takes the path a user's report takes: the frozen folder is upgraded in place, so its manifest and
   // `.parquet.js` wrappers are what the viewer reads.
-  for (const n of [5] as const) {
+  for (const n of [5, 6] as const) {
     const out = fileURLToPath(reportDir(`frozen-format-${n}`));
     await rm(out, { recursive: true, force: true });
     await cp(fileURLToPath(new URL(`../fixtures/reports/format-${n}`, import.meta.url)), out, {
@@ -656,6 +674,7 @@ const SITE_REPORTS: readonly ReportName[] = [
   'frozen-format-2',
   'frozen-format-3',
   'frozen-format-5',
+  'frozen-format-6',
   ...FIXTURE_REPORTS,
 ];
 
@@ -697,3 +716,4 @@ await Promise.all([
 ]);
 await buildSiteCopies();
 await buildFormat6Report();
+await buildWideFormat6Report();

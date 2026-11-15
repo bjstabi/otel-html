@@ -13,7 +13,6 @@ import {
 import { ROLLUP_OF, TABLES } from '../../format/parquet/columns.js';
 import { statisticsKeysFor } from '../../format/parquet/stats.js';
 import { MANIFEST_KEY, MANIFEST_PATH, partitionFilePath } from '../../format/paths.js';
-import { PARTITION_FORMAT_VERSION } from '../../format/version.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import { renderIndexHtml } from '../../writer/html.js';
 import type { FileSystem } from '../../writer/ports.js';
@@ -31,23 +30,22 @@ export const emptyRunState = (attempt: number): RunReportState => ({ next: 0, at
 
 export interface NewManifestOptions {
   title: string;
-  epochUnixNano: string;
   createdAt: string;
   assetsBase: string;
   config: ResolvedConfig;
   version: string;
 }
 
-/** An empty, `complete: false` format-5 manifest in `site` format with `statisticsKeysFor` each table from `config`. */
+/** An empty, `complete: false` format-6 manifest (no stored epoch; the in-memory anchor is derived as a read derives it, and `withSharesFormat` upgrades a format-5 manifest an older build left on disk) in `site` format with `statisticsKeysFor` each table from `config`. */
 export function newRunManifest(o: NewManifestOptions): ManifestV4 {
   const statisticsKeys = Object.fromEntries(
     TABLES.map((t) => [t, statisticsKeysFor(t, o.config)]),
   ) as StatisticsKeys;
   return {
-    formatVersion: PARTITION_FORMAT_VERSION,
+    formatVersion: 6,
     otelHtmlVersion: o.version,
     title: o.title,
-    epochUnixNano: o.epochUnixNano,
+    epochUnixNano: (BigInt(Date.parse(o.createdAt)) * 1_000_000n).toString(),
     createdAt: o.createdAt,
     updatedAt: o.createdAt,
     complete: false,
@@ -317,6 +315,7 @@ export async function readRunManifest(fs: FileSystem, dir: string): Promise<Mani
   const path = `${dir}/${MANIFEST_PATH}`;
   if (!(await fs.exists(path))) return null;
   const m = parseAnyManifest(reviveDataJson(unwrapDataFile(await fs.readText(path), MANIFEST_KEY)));
-  if (!isPartitioned(m)) throw new OtelHtmlError('invalid-report', { path, expected: 'a format 5 manifest' });
+  if (!isPartitioned(m))
+    throw new OtelHtmlError('invalid-report', { path, expected: 'a format 5 or 6 manifest' });
   return m;
 }

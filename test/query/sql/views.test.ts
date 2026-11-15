@@ -181,7 +181,6 @@ describe('format-6 traces view', () => {
       expect(names(some)).toEqual(names(none));
       expect(names(none)).toEqual([
         ...TABLE_COLUMNS.traces.map((c) => c.name),
-        'service_share',
         'file_row_number',
         'filename',
       ]);

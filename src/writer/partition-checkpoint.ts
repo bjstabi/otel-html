@@ -63,7 +63,7 @@ interface ManifestInputs {
   partitions: readonly PartitionEntry[];
   statisticsKeys: Record<Table, string[]>;
   config: ResolvedConfig;
-  /** 6 when the report is format 6 (a merge input was, or the report resumed as such); 5 otherwise. */
+  /** The format of the manifest written: 6 unless a caller names another. */
   formatVersion?: ManifestV4['formatVersion'];
 }
 

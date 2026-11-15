@@ -17,8 +17,8 @@ function shiftNanos(t: RelNanos, shift: bigint, path: string): RelNanos {
   if (v > BigInt(Number.MAX_SAFE_INTEGER) || v < BigInt(Number.MIN_SAFE_INTEGER)) {
     throw new OtelHtmlError('time-out-of-range', {
       path,
-      expected: 'offset within 2^53 ns (~104 days) of the report epoch',
-      actual: `${v} ns`,
+      expected: "a session's data spanning at most 2^53 ns (~104 days)",
+      actual: `${v} ns from the session's first record, so its own data spans more than 2^53 ns`,
     });
   }
   return Number(v) as RelNanos;

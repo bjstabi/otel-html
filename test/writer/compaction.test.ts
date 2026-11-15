@@ -9,9 +9,11 @@ import { batchFromRows } from '../../src/format/parquet/batch.js';
 import { decodeTable, encodeColumnsUnfiltered, encodeTable } from '../../src/format/parquet/codec.js';
 import type { Table } from '../../src/format/parquet/columns.js';
 import type { Row } from '../../src/format/parquet/rows.js';
-import { fileStatistics } from '../../src/format/parquet/stats.js';
+import { completeStatistics, fileStatistics } from '../../src/format/parquet/stats.js';
 import { partitionKey, partitionWrapperPath } from '../../src/format/paths.js';
+import { encodeServiceShare, type ShareSpan, serviceShareOf } from '../../src/format/service-share.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
+import { shareSpanOf } from '../../src/viewer/data/trace-tree.js';
 import type { CompactOptions } from '../../src/writer/compaction.js';
 import { COMPACTION_SPAN_NS, compactPartitions, timeGroups } from '../../src/writer/compaction.js';
 import { mergeReports } from '../../src/writer/merge.js';
@@ -26,9 +28,11 @@ import {
 } from '../../src/writer/rollup-rows.js';
 import { openSession } from '../../src/writer/session.js';
 import { traceRows } from '../../src/writer/trace-summaries.js';
+import { withoutColumn, withoutServiceShare } from '../../test-support/format6.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 import { logRecord, logsRequest, span, traceRequest } from '../../test-support/otlp-builders.js';
 import { chunksOf } from '../../test-support/parquet-footer.js';
+import { viewerRow } from '../../test-support/viewer-row.js';
 import {
   createTestWriter,
   EPOCH_NS,
@@ -397,6 +401,7 @@ function trace(id: string, over: Row = {}): Row {
     root_name: null,
     root_resource: null,
     log_count: 0,
+    service_share: null,
     ...over,
   };
 }
@@ -1335,5 +1340,264 @@ describe('compaction by time group: sources and statistics', () => {
         fold(g.flatMap((j) => (open[j] === undefined ? [] : [open[j]]))),
       );
     }
+  });
+});
+
+// -- the service share through compaction ---------------------------------------------------------------------------
+
+const svcAttr = (name: string) => [{ key: 'service.name', value: { stringValue: name } }];
+const hexId = (n: number, len: number): string => n.toString(16).padStart(len, '0');
+
+interface SpanSpec {
+  trace: number;
+  id: number;
+  parent: number | null;
+  service: string;
+  start: number;
+  end: number;
+  provisional?: boolean;
+}
+
+const BASE = BigInt(EPOCH_NS);
+
+/** Adds the spans, one request per service, to the session. */
+async function addSpans(
+  s: Awaited<ReturnType<typeof openSession>>,
+  specs: readonly SpanSpec[],
+  name: string,
+) {
+  for (const service of new Set(specs.map((x) => x.service))) {
+    const spans = specs
+      .filter((x) => x.service === service)
+      .map((x) =>
+        span({
+          traceId: hexId(x.trace, 32),
+          spanId: hexId(x.id, 16),
+          ...(x.parent === null ? {} : { parentSpanId: hexId(x.parent, 16) }),
+          startTimeUnixNano: String(BASE + BigInt(x.start)),
+          endTimeUnixNano: String(BASE + BigInt(x.end)),
+        }),
+      );
+    await s.add(otlp(traceRequest(spans, svcAttr(service))), `${name}-${service}.json`);
+  }
+}
+
+/** The share a trace's spans give, computed here from the decoded rows (not through the writer's code path). */
+function shareOfRows(rows: readonly Row[]): string {
+  const starts = rows.map((r) => Reflect.get(r, 'start_time_unix_nano') as bigint);
+  let origin = starts[0] ?? 0n;
+  for (const t of starts) if (t < origin) origin = t;
+  return encodeServiceShare(
+    serviceShareOf(
+      rows.map((r): ShareSpan => {
+        const start = Number((Reflect.get(r, 'start_time_unix_nano') as bigint) - origin);
+        const end = Number((Reflect.get(r, 'end_time_unix_nano') as bigint) - origin);
+        return {
+          spanId: String(Reflect.get(r, 'span_id')),
+          parentId: (Reflect.get(r, 'parent_span_id') as string | null) ?? null,
+          service: String(Reflect.get(r, 'service_name') ?? ''),
+          start,
+          end,
+          durationNs: Number(Reflect.get(r, 'duration_ns') as bigint),
+          provisional: false,
+        };
+      }),
+    ),
+  );
+}
+
+/** Every trace row's stored share equals the share of its spans among `spans`, except the `unknown` ids (null). */
+function expectStoredShares(traces: readonly Row[], spans: readonly Row[], unknown: readonly string[] = []) {
+  expect(traces.length).toBeGreaterThan(0);
+  for (const t of traces) {
+    const id = String(Reflect.get(t, 'trace_id'));
+    const mine = spans.filter((s) => Reflect.get(s, 'trace_id') === id);
+    expect(Reflect.get(t, 'service_share'), id).toBe(unknown.includes(id) ? null : shareOfRows(mine));
+  }
+}
+
+const FLUSHES: SpanSpec[][] = [
+  [
+    { trace: 1, id: 1, parent: null, service: 'api', start: 0, end: 100 },
+    { trace: 1, id: 2, parent: 1, service: 'db', start: 10, end: 40 },
+    { trace: 2, id: 3, parent: null, service: 'api', start: 5, end: 50 },
+  ],
+  [
+    { trace: 1, id: 4, parent: 1, service: 'cache', start: 50, end: 90 },
+    { trace: 2, id: 5, parent: 3, service: 'db', start: 10, end: 30 },
+    { trace: 3, id: 6, parent: null, service: 'api', start: 200, end: 260 },
+  ],
+  [
+    { trace: 2, id: 7, parent: 5, service: 'cache', start: 12, end: 20 },
+    { trace: 4, id: 8, parent: null, service: 'db', start: 300, end: 330 },
+  ],
+  [
+    { trace: 2, id: 9, parent: 3, service: 'api', start: 60, end: 70 },
+    { trace: 5, id: 10, parent: null, service: 'api', start: 400, end: 410 },
+  ],
+];
+
+async function flushed(w: TestWriter, out: string, close: boolean): Promise<void> {
+  const s = await openSession(w.deps, {
+    out,
+    config: testConfig({ writer: { format: 'site' } }),
+    mode: 'replace',
+  });
+  for (const [i, specs] of FLUSHES.entries()) {
+    await addSpans(s, specs, `f${i}`);
+    await s.flush();
+  }
+  if (close) await s.close();
+}
+
+/** Partitions of the given spans, each with the traces rows a flush writes (shares included). */
+function writeSpansParts(fs: FileSystem, parts: readonly (readonly SpanSpec[])[]): Promise<PartitionEntry[]> {
+  return writeParts(
+    fs,
+    parts.map((specs) => {
+      const spans = specs.map(
+        (x): Row => ({
+          trace_id: hexId(x.trace, 32),
+          span_id: hexId(x.id, 16),
+          parent_span_id: x.parent === null ? null : hexId(x.parent, 16),
+          name: 'op',
+          start_time_unix_nano: BASE + BigInt(x.start),
+          end_time_unix_nano: BASE + BigInt(x.end),
+          duration_ns: BigInt(x.end - x.start),
+          attributes: x.provisional === true ? JSON.stringify({ 'otel_html.ci.provisional': true }) : '{}',
+          service_name: x.service,
+          status_code: 0,
+        }),
+      );
+      return { spans, traces: traceRows(batchFromRows('spans', spans), batchFromRows('logs', [])) };
+    }),
+  );
+}
+
+describe('compaction and the stored service share', () => {
+  test('four flushes with traces crossing them compact to shares equal to those of the compacted spans', async () => {
+    const w = createTestWriter();
+    await flushed(w, 'r', true);
+    const m = manifestOf(w, 'r');
+    expect(m.partitions).toHaveLength(1);
+    expect(m.partitions[0]?.files.traces?.serviceShare).toBe(true);
+    const traces = tableRowsOf(w, 'r', 'traces');
+    expect(traces).toHaveLength(5);
+    expectStoredShares(traces, tableRowsOf(w, 'r', 'spans'));
+  });
+
+  test('merge --compact of two format-6 inputs keeps every share equal to that of the spans', async () => {
+    const w = createTestWriter();
+    await flushed(w, 'a', false);
+    await flushed(w, 'b', false);
+    await mergeReports(w.deps, ['a', 'b'], {
+      out: 'm',
+      config: testConfig({ writer: { format: 'site', compactOnMerge: true } }),
+      mode: 'replace',
+    });
+    const m = manifestOf(w, 'm');
+    expect(m.partitions).toHaveLength(2);
+    for (const p of m.partitions) expect(p.files.traces?.serviceShare).toBe(true);
+    const spans = tableRowsOf(w, 'm', 'spans');
+    // the same span ids sit in both inputs, each compacted on its own: a trace's rows are per partition
+    for (const p of m.partitions) {
+      const bytes = w.fs.snapshotBytes();
+      const ofPartition = (t: Table) =>
+        decodeTable(t, bytes.get(`m/${p.files[t]?.path}`) ?? new Uint8Array());
+      expectStoredShares(ofPartition('traces'), ofPartition('spans'));
+    }
+    expect(spans).toHaveLength(2 * FLUSHES.flat().length);
+  });
+
+  test('a provisional copy in one input and the final copy in another resolve as the viewer resolves them', async () => {
+    const fs = createMemoryFileSystem();
+    const entries = await writeSpansParts(fs, [
+      [
+        { trace: 1, id: 1, parent: null, service: 'api', start: 0, end: 100, provisional: true },
+        { trace: 1, id: 2, parent: 1, service: 'db', start: 10, end: 40, provisional: true },
+      ],
+      [
+        { trace: 1, id: 1, parent: null, service: 'api', start: 0, end: 120 },
+        { trace: 1, id: 2, parent: 1, service: 'db', start: 10, end: 90 },
+      ],
+    ]);
+    const out = await compactPartitions(fs, OUT, entries, opts(2));
+    const traces = decodeTable('traces', await bytesOf(fs, out, 'traces'));
+    const spans = decodeTable('spans', await bytesOf(fs, out, 'spans'));
+    expect(spans).toHaveLength(4);
+    const origin = BASE; // the earliest span start
+    const fallback = serviceShareOf(spans.map((r) => shareSpanOf(viewerRow(r, origin))));
+    expect(fallback).toEqual(
+      [
+        { service: 'api', ns: 40n },
+        { service: 'db', ns: 80n },
+      ].sort((a, b) => Number(b.ns - a.ns)),
+    );
+    expect(Reflect.get(traces[0] ?? {}, 'service_share')).toBe(encodeServiceShare(fallback));
+  });
+
+  test('a traces file missing a column other than service_share is still refused', async () => {
+    for (const missing of ['log_count', 'span_count']) {
+      const fs = createMemoryFileSystem();
+      const entries = await writeSpansParts(fs, [FLUSHES[0] ?? [], FLUSHES[1] ?? []]);
+      const f = entries[1]?.files.traces;
+      if (f === undefined) throw new Error('no traces file');
+      await fs.writeBytes(`${OUT}/${f.path}`, withoutColumn(await fs.readBytes(`${OUT}/${f.path}`), missing));
+      const err = await compactPartitions(fs, OUT, entries, opts(2)).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err, missing).toBeInstanceOf(OtelHtmlError);
+      expect((err as OtelHtmlError).code).toBe('invalid-report');
+    }
+  });
+
+  describe('with a format-5 copy', () => {
+    test('a trace split between a format-5 copy and a format-6 flush is recomputed, one only in the copy is null', async () => {
+      const fs = createMemoryFileSystem();
+      const entries = await writeSpansParts(fs, FLUSHES.slice(0, 2));
+      // partition 0 becomes a format-5 file: no service_share column, and no flag on its entry
+      const first = entries[0];
+      const f = first?.files.traces;
+      if (first === undefined || f === undefined) throw new Error('no traces file');
+      await fs.writeBytes(`${OUT}/${f.path}`, withoutServiceShare(await fs.readBytes(`${OUT}/${f.path}`)));
+      const { serviceShare: _flag, ...unflagged } = f;
+      const five: PartitionEntry[] = [
+        { ...first, files: { ...first.files, traces: unflagged } },
+        ...entries.slice(1),
+      ];
+      const out = await compactPartitions(fs, OUT, five, opts(2));
+      expect(out.files.traces?.serviceShare).toBe(true);
+      const traces = decodeTable('traces', await bytesOf(fs, out, 'traces'));
+      const spans = decodeTable('spans', await bytesOf(fs, out, 'spans'));
+      // trace 1 and 2 have spans in both inputs, 3 only in the format-6 one; none is only in the copy here
+      expectStoredShares(traces, spans);
+      expect(traces.map((t) => Reflect.get(t, 'trace_id'))).toHaveLength(3);
+    });
+
+    test('a trace only in the format-5 input has a null share, and statistics can read the file without the column', async () => {
+      const fs = createMemoryFileSystem();
+      const entries = await writeSpansParts(fs, [FLUSHES[0] ?? [], FLUSHES[2] ?? []]);
+      const first = entries[0];
+      const f = first?.files.traces;
+      if (first === undefined || f === undefined) throw new Error('no traces file');
+      const without = withoutServiceShare(await fs.readBytes(`${OUT}/${f.path}`));
+      await fs.writeBytes(`${OUT}/${f.path}`, without);
+      const { serviceShare: _flag, ...unflagged } = f;
+      const five: PartitionEntry[] = [
+        { ...first, files: { ...first.files, traces: unflagged } },
+        ...entries.slice(1),
+      ];
+      // the statistics path reads the same file
+      const done = await completeStatistics('traces', unflagged, ['root_service'], 100, async () => without);
+      expect(Reflect.get(done.values, 'root_service')).toBeDefined();
+      const out = await compactPartitions(fs, OUT, five, opts(2));
+      const traces = decodeTable('traces', await bytesOf(fs, out, 'traces'));
+      const spans = decodeTable('spans', await bytesOf(fs, out, 'spans'));
+      const idOf = (n: number) => hexId(n, 32);
+      // trace 2 has spans in both inputs (recomputed), trace 1 only in the copy (null), trace 4 only in the format-6 flush
+      expectStoredShares(traces, spans, [idOf(1)]);
+      expect(traces.filter((t) => Reflect.get(t, 'service_share') === null)).toHaveLength(1);
+    });
   });
 });

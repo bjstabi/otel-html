@@ -69,6 +69,7 @@ describe.each([
   ['format-2', 2],
   ['format-3', 3],
   ['format-5', 5],
+  ['format-6', 6],
 ])('the viewer opens frozen %s after merge', (name, version) => {
   test('reads the totals and one trace', async () => {
     const src = parseAnyManifest(
@@ -147,13 +148,21 @@ async function openAsWritten(name: string) {
   };
 }
 
-describe.each([['format-5', 5]])('the viewer opens the frozen %s report as written', (name, version) => {
+describe.each([
+  ['format-5', 5],
+  ['format-6', 6],
+])('the viewer opens the frozen %s report as written', (name, version) => {
   test('its manifest and .parquet.js wrappers are read directly, as after `otel-html upgrade` of a local report', async () => {
     const r = await openAsWritten(name);
     try {
       expect(r.manifest.formatVersion).toBe(version);
+      // format 6 stores each trace's share; the viewer's trace list reads it instead of loading the spans
+      for (const partition of r.manifest.partitions)
+        expect(partition.files.traces?.serviceShare).toBe(version === 6 ? true : undefined);
       expect((await r.ds.querySpans(query({}))).total).toBe(1228);
-      expect((await r.ds.querySpans(query({ mode: 'traces' }))).total).toBe(FROZEN_TRACES);
+      const traces = await r.ds.querySpans(query({ mode: 'traces' }));
+      expect(traces.total).toBe(FROZEN_TRACES);
+      if (version === 6) expect(traces.rows.every((t) => (t as TraceRow).share !== null)).toBe(true);
       // 10 metrics, counted once from the fixture (the points side of the Parquet files).
       expect((await r.ds.metricCatalog()).entries).toHaveLength(10);
     } finally {

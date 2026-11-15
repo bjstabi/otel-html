@@ -90,7 +90,7 @@ test('the workflow-trace report merges with a job report and keeps spans, logs a
   expect(manifestOf(w, 'merged').complete).toBe(true);
 });
 
-test('the rolling merge skips a format-4 run report with a warning and writes the format-5 one', async () => {
+test('the rolling merge skips a format-4 run report with a warning and writes the format-6 one', async () => {
   const w = createTestWriter();
   const make = async (out: string, spanId: string) => {
     const r = await createReportWith({ out, replace: true }, w.deps);
@@ -104,9 +104,9 @@ test('the rolling merge skips a format-4 run report with a warning and writes th
   // Turn "four" into what a format-4 writer left: its manifest says format 4, which this otel-html no longer reads.
   const m = manifestOf(w, 'four');
   await w.fs.writeTextAtomic('four/data/manifest.js', wrapDataFile(MANIFEST_KEY, { ...m, formatVersion: 4 }));
-  expect(manifestOf(w, 'five').formatVersion).toBe(5);
+  expect(manifestOf(w, 'five').formatVersion).toBe(6);
 
-  // The deployer's rolling merge: the format-4 run report is skipped with a warning, the format-5 one is written.
+  // The deployer's rolling merge: the format-4 run report is skipped with a warning, the format-6 one is written.
   const warnings: string[] = [];
   const { inputs } = await mergeSkippingBad({
     merge: (ins, out) => mergeWith({ inputs: ins, out, replace: true }, w.deps),
@@ -121,7 +121,7 @@ test('the rolling merge skips a format-4 run report with a warning and writes th
   expect(warnings[0]).toContain('skipping four: ');
   expect(warnings[0]).toContain(oldFormatMessage(4));
   const merged = manifestOf(w, 'both');
-  expect(merged.formatVersion).toBe(5);
+  expect(merged.formatVersion).toBe(6);
   expect(merged.totals.spans).toBe(1);
   expect(tableRowsOf(w, 'both', 'spans')).toHaveLength(1);
 });

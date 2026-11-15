@@ -1,12 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises';
-import {
-  Table as ArrowTable,
-  tableFromIPC,
-  tableToIPC,
-  Utf8,
-  type Vector,
-  vectorFromArray,
-} from 'apache-arrow';
+import { Table as ArrowTable, tableFromIPC, tableToIPC, Utf8, vectorFromArray } from 'apache-arrow';
 import { readParquet, Table as WasmTable, writeParquet } from 'parquet-wasm/esm';
 import { wrapDataFile } from '../src/format/data-file.js';
 import {
@@ -110,11 +103,13 @@ export async function withServiceShare(
     const arrow = tableFromIPC(readParquet(await readFile(`${dir}/${traces.path}`)).intoIPCStream());
     const column = arrow.getChild('trace_id');
     const cells = Array.from({ length: arrow.numRows }, (_, i) => shares.get(String(column?.get(i))) ?? null);
-    const named = Object.fromEntries(arrow.schema.fields.map((f) => [f.name, arrow.getChild(f.name)]));
-    const withColumn = new ArrowTable({
-      ...(named as Record<string, Vector>),
-      [SERVICE_SHARE_COLUMN.name]: vectorFromArray(cells, new Utf8()),
-    });
+    // `select` keeps each field as the file has it (nullability included), which the readers' schema check compares.
+    const kept = arrow.select(
+      arrow.schema.fields.map((f) => f.name).filter((n) => n !== SERVICE_SHARE_COLUMN.name),
+    );
+    const withColumn = kept.assign(
+      new ArrowTable({ [SERVICE_SHARE_COLUMN.name]: vectorFromArray(cells, new Utf8()) }),
+    );
     const bytes = writeParquet(
       WasmTable.fromIPCStream(tableToIPC(withColumn, 'stream')),
       writerProperties({ rowGroupRows: 1000 }),
@@ -151,4 +146,53 @@ export async function format6Fixture(
     }
   }
   return { manifest, files, epoch: manifestAnchor(manifest), dir: report.dir, close: report.close };
+}
+
+/** A traces file's bytes without the column `name`, the other fields kept as the file has them. */
+export function withoutColumn(bytes: Uint8Array, name: string): Uint8Array {
+  ensureParquetWasm();
+  const arrow = tableFromIPC(readParquet(bytes).intoIPCStream());
+  const kept = arrow.select(arrow.schema.fields.map((f) => f.name).filter((n) => n !== name));
+  return writeParquet(
+    WasmTable.fromIPCStream(tableToIPC(kept, 'stream')),
+    writerProperties({ rowGroupRows: 1000 }),
+  );
+}
+
+/** A traces file's bytes without its `service_share` column (what a format-5 flush wrote). */
+export function withoutServiceShare(bytes: Uint8Array): Uint8Array {
+  return withoutColumn(bytes, SERVICE_SHARE_COLUMN.name);
+}
+
+/** `manifest` as the format 5 a writer wrote before format 6: `epochUnixNano` as given, no `serviceShare`, traces `sizes` from `bytesOf`. */
+export function asFormat5Manifest(
+  manifest: ManifestV4,
+  epochUnixNano: string,
+  bytesOf: (path: string) => number,
+): ManifestV4 {
+  const partitions = manifest.partitions.map((entry) => {
+    const { traces } = entry.files;
+    if (traces === undefined) return entry;
+    const { serviceShare: _dropped, ...kept } = traces;
+    return { ...entry, files: { ...entry.files, traces: { ...kept, bytes: bytesOf(traces.path) } } };
+  });
+  return { ...manifest, formatVersion: 5, epochUnixNano, partitions };
+}
+
+/**
+ * The test stand-in for a format-5 report: every traces file of `dir` rewritten without its `service_share` column,
+ * `serviceShare` dropped from the listing, and the manifest written as format 5 with the epoch `manifest` carries.
+ */
+export async function asFormat5(dir: string, manifest: ManifestV4): Promise<ManifestV4> {
+  const sizes = new Map<string, number>();
+  for (const entry of manifest.partitions) {
+    const { traces } = entry.files;
+    if (traces === undefined) continue;
+    const bytes = withoutServiceShare(await readFile(`${dir}/${traces.path}`));
+    await writeFile(`${dir}/${traces.path}`, bytes);
+    sizes.set(traces.path, bytes.length);
+  }
+  const out = asFormat5Manifest(manifest, manifest.epochUnixNano, (p) => sizes.get(p) ?? 0);
+  await writeFile(`${dir}/data/manifest.js`, wrapDataFile(MANIFEST_KEY, out));
+  return out;
 }

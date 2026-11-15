@@ -33,6 +33,7 @@ describe.each([
   ['format-2', 2],
   ['format-3', 3],
   ['format-5', 5],
+  ['format-6', 6],
 ])('%s', (name, version) => {
   test('merge reads it and the totals survive', async () => {
     const w = createTestWriter();
@@ -43,14 +44,15 @@ describe.each([
     expect(summary.totals).toEqual(expected.totals);
     expect(summary.totals.spans).toBeGreaterThan(0);
     expect(summary.totals.metrics).toBeGreaterThan(0);
-    expect(manifestOf(w, 'm').formatVersion).toBe(5);
+    // Every merge writes format 6: a chunk report is replayed through a flush, a format-5 report's partitions are copied as they are.
+    expect(manifestOf(w, 'm').formatVersion).toBe(6);
   });
-  test('merge into a format-5 (site) report keeps the totals', async () => {
+  test('merge into a format-6 (site) report keeps the totals', async () => {
     const w = createTestWriter();
     const expected = await copyFixtureReport(w, name);
     const config = { writer: { format: 'site' as const } };
     const summary = await mergeWith({ inputs: [name], out: 'm4', config }, w.deps);
     expect(summary.totals).toEqual(expected.totals);
-    expect(w.fs.snapshot().get('m4/data/manifest.js')).toContain('"formatVersion":5');
+    expect(w.fs.snapshot().get('m4/data/manifest.js')).toContain('"formatVersion":6');
   });
 });

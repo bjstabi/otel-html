@@ -21,7 +21,7 @@ import { openSession } from '../../src/writer/session.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { perfFactor } from '../../test-support/perf-inject.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
-import { spansRequest } from './helpers.js';
+import { rawManifestOf, spansRequest } from './helpers.js';
 
 type Format = 'local' | 'site';
 const cfg = (format: Format, extra: object = {}) => ({ writer: { format, ...extra } });
@@ -456,7 +456,7 @@ describe('an empty format-4 input', () => {
   async function emptyReport(w: TestWriter, out: string): Promise<void> {
     const s = await openSession(w.deps, { out, config: testConfig(cfg('site')), mode: 'replace' });
     await s.close();
-    expect(v4Manifest(w, out).epochUnixNano).toBe('0');
+    expect(rawManifestOf(w, out)).not.toHaveProperty('epochUnixNano');
   }
 
   test("does not fix the epoch: a chunks input after it merges, and the epoch is that input's", async () => {
@@ -465,7 +465,9 @@ describe('an empty format-4 input', () => {
     const v3 = await chunksInput(w, 'v3');
     await mergeWith({ inputs: ['e', 'v3'], out: 'm', config: cfg('site') }, w.deps);
     const m = v4Manifest(w, 'm');
-    expect(m.epochUnixNano).toBe(v3.epochUnixNano);
+    // The conversion flushes: format 6 stores no epoch, and the empty input did not fix the session's anchor.
+    expect(rawManifestOf(w, 'm')).not.toHaveProperty('epochUnixNano');
+    expect(BigInt(m.range?.start ?? 0) <= BigInt(v3.epochUnixNano)).toBe(true);
     expect(m.totals.spans).toBe(v3.totals.spans);
   });
 

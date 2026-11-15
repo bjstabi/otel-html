@@ -19,8 +19,7 @@ import { recordingDataSource } from '../../test-support/scaling/recording-source
 export const PAGES = ['#/dashboards/ci', '#/traces?mode=traces', '#/traces', '#/logs', '#/metrics'] as const;
 
 /**
- * Every method each page asks over a scaling report. The settle waits for all of them: the trace list asks the service share
- * of its rows, and the log list whether its traces exist, only once the rows have rendered.
+ * Every method each page asks over a scaling report. The settle waits for all of them: the log list asks whether its traces exist, only once the rows have rendered.
  */
 export const PAGE_CALLS: Readonly<Record<string, readonly string[]>> = {
   '#/dashboards/ci': [
@@ -31,7 +30,8 @@ export const PAGE_CALLS: Readonly<Record<string, readonly string[]>> = {
     'metricRunQuery',
     'metricPoints',
   ],
-  '#/traces?mode=traces': ['querySpans', 'serviceShare'],
+  // A format-6 report stores each trace's share, so the trace list asks no `serviceShare` for its rows.
+  '#/traces?mode=traces': ['querySpans'],
   '#/traces': ['querySpans'],
   '#/logs': ['queryLogs', 'hasTrace'],
   '#/metrics': ['metricCatalog', 'metricShowOptions', 'metricQuery'],

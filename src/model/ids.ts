@@ -74,8 +74,8 @@ export function toRelNanos(t: UnixNanos, epoch: UnixNanos, path: string): RelNan
   if (d > BigInt(Number.MAX_SAFE_INTEGER) || d < BigInt(Number.MIN_SAFE_INTEGER)) {
     throw new OtelHtmlError('time-out-of-range', {
       path,
-      expected: 'offset within 2^53 ns (~104 days) of trace epoch',
-      actual: `${d} ns`,
+      expected: "a session's data spanning at most 2^53 ns (~104 days)",
+      actual: `${d} ns from the session's first record, so its own data spans more than 2^53 ns`,
     });
   }
   return Number(d) as RelNanos;

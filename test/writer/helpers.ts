@@ -19,6 +19,15 @@ export function manifestOf(w: TestWriter, out: string): ManifestV4 {
   return m;
 }
 
+/** The manifest as it is stored: no derived fields, so a format-6 report shows no `epochUnixNano`. */
+export function rawManifestOf(w: TestWriter, out: string): Record<string, unknown> {
+  const text = w.fs.snapshot().get(`${out}/data/manifest.js`);
+  if (text === undefined) throw new Error('no manifest');
+  const raw = reviveDataJson(unwrapDataFile(text, MANIFEST_KEY));
+  if (typeof raw !== 'object' || raw === null) throw new Error('manifest is not an object');
+  return Object.fromEntries(Object.entries(raw));
+}
+
 /** Every row of one table across the report's partitions, in partition order, as the Parquet files decode. */
 export function tableRowsOf(w: TestWriter, out: string, table: Table): Row[] {
   const bytes = w.fs.snapshotBytes();

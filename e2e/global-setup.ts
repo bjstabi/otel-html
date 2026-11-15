@@ -33,8 +33,8 @@ async function assertReportsBuilt(mounted: readonly ReportName[]): Promise<void>
     if (name === 'metrics-scale' || name === 'scale' || name === 'many' || name === 'rowgroups') continue;
     // `no-manifest` is a copy of `main` without its manifest, by design.
     const probe = name === 'no-manifest' ? 'index.html' : 'data/manifest.js';
-    // `refresh` and `format-6` are `site` reports, read over HTTP only.
-    for (const kind of name === 'refresh' || name === 'format-6'
+    // `refresh`, `format-6` and `wide-format-6` are `site` reports, read over HTTP only.
+    for (const kind of name === 'refresh' || name === 'format-6' || name === 'wide-format-6'
       ? (['http'] as const)
       : (['file', 'http'] as const)) {
       try {
@@ -75,6 +75,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     'frozen-format-2',
     'frozen-format-3',
     'frozen-format-5',
+    'frozen-format-6',
+    'wide-format-6',
     ...FIXTURE_REPORTS,
   ];
   // The load spec serves its own report (`dist/load-receiver`) and runs without the fixture reports built.

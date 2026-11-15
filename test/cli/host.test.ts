@@ -140,6 +140,18 @@ describe('host', () => {
     expect(h.stderr).toBe('');
   });
 
+  test('host serves the frozen format-6 report: one query over spans and one over points', async () => {
+    const dir = join(import.meta.dirname, '../../fixtures/reports/format-6');
+    const h = start(['host', dir, '--port', '0']);
+    open.push(h);
+    const base = baseOf(await line(h));
+    expect(await count(base, 'spans')).toEqual([{ n: 1228n }]);
+    expect(await count(base, 'points')).toEqual([{ n: 230n }]);
+    h.fire('SIGINT');
+    expect(await h.result).toBe(0);
+    expect(h.stderr).toBe('');
+  });
+
   test('SIGTERM stops it too', async () => {
     const h = start(['host', await reportDir('site'), '--port', '0']);
     open.push(h);

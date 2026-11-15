@@ -176,6 +176,16 @@ export function windowTraceRowsQuery(f: SqlFilter, traces: Pruned, sort: TraceSo
   return traceRowsOf(agg, sort, limit);
 }
 
+/** The stored share of the one `traces` row with spans, NULL when a trace has spans in several rows (or none stored). */
+const STORED_SHARE = sql`CASE WHEN count(*) FILTER (WHERE span_count > 0) = 1 THEN max(service_share) FILTER (WHERE span_count > 0) END`;
+
+/** One row, `share`: the trace's stored `service_share` text when it is exact (as in `traceRowsQuery`), else NULL. Reads `traces` only. */
+export function traceShareQuery(traceId: TraceId): Query {
+  return Query.from('traces')
+    .select({ share: STORED_SHARE })
+    .where(eq(column('trace_id'), literal(traceId)));
+}
+
 function traceAggregate(epoch: bigint): SelectQuery {
   const timed = TIMED;
   const rooted = sql`root_name IS NOT NULL AND start_time_unix_nano IS NOT NULL`;
@@ -188,7 +198,7 @@ function traceAggregate(epoch: bigint): SelectQuery {
       start_ns: sql`min(${relTime('start_time_unix_nano', epoch)}) FILTER (WHERE ${timed})`,
       end_ns: sql`max(${relTime('end_time_unix_nano', epoch)}) FILTER (WHERE ${timed})`,
       // the stored share of the one row with spans, null when the trace has spans in several rows (or none stored)
-      share: sql`CASE WHEN count(*) FILTER (WHERE span_count > 0) = 1 THEN max(service_share) FILTER (WHERE span_count > 0) END`,
+      share: STORED_SHARE,
       root: sql`arg_min({'service': root_service, 'name': root_name, 'resource': root_resource}, (start_time_unix_nano, filename)) FILTER (WHERE ${rooted})`,
     })
     .groupby('trace_id');

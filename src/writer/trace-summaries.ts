@@ -1,5 +1,11 @@
 import type { ColumnBatch } from '../format/parquet/batch.js';
 import type { Row } from '../format/parquet/rows.js';
+import {
+  encodeServiceShare,
+  isProvisional,
+  type ShareSpan,
+  serviceShareOf,
+} from '../format/service-share.js';
 import { StatusCode } from '../model/records.js';
 
 interface Acc {
@@ -12,6 +18,8 @@ interface Acc {
   logEnd: bigint | null;
   /** Index of the root candidate in the spans batch. */
   root: number | null;
+  /** Indices of the trace's spans in the spans batch. */
+  spans: number[];
 }
 
 const cell = (b: ColumnBatch, k: string, i: number): unknown => b.cells[k]?.[i];
@@ -28,6 +36,35 @@ function rootBefore(spans: ColumnBatch, x: number, y: number): boolean {
 }
 
 /**
+ * One span of `spans` as the share sees it: times relative to the trace's earliest start `origin` (bigint arithmetic,
+ * exact), duration as stored. A span without a start or end, or a trace without an origin, adds nothing (null).
+ */
+export function shareSpanAt(spans: ColumnBatch, i: number, origin: bigint | null): ShareSpan | null {
+  const start = big(cell(spans, 'start_time_unix_nano', i));
+  const end = big(cell(spans, 'end_time_unix_nano', i));
+  if (start === null || end === null || origin === null) return null;
+  return {
+    spanId: text(cell(spans, 'span_id', i)) ?? '',
+    parentId: text(cell(spans, 'parent_span_id', i)),
+    service: text(cell(spans, 'service_name', i)) ?? '',
+    start: Number(start - origin),
+    end: Number(end - origin),
+    durationNs: Number(big(cell(spans, 'duration_ns', i)) ?? 0n),
+    provisional: isProvisional(cell(spans, 'attributes', i)),
+  };
+}
+
+/** The share input of a trace's spans (`shareSpanAt` of each). */
+function shareSpansOf(spans: ColumnBatch, indices: readonly number[], origin: bigint | null): ShareSpan[] {
+  const out: ShareSpan[] = [];
+  for (const i of indices) {
+    const s = shareSpanAt(spans, i, origin);
+    if (s !== null) out.push(s);
+  }
+  return out;
+}
+
+/**
  * The `traces` rows of one partition: one per trace id found in its spans or logs (a log without a trace id adds
  * nothing). Pure, so a cut that is retried derives the same rows again.
  *
@@ -36,6 +73,7 @@ function rootBefore(spans: ColumnBatch, x: number, y: number): boolean {
  *   trace with no time at all gets null start and end (the columns are nullable).
  * - root_*: from the span with a null `parent_span_id`; with several such spans in one partition the earliest
  *   start wins (ties break on the smaller span_id), so the choice does not depend on row order. Null when there is none.
+ * - service_share: the trace's exclusive time per service (`serviceShareOf`) over the spans of this batch.
  * - Rows come out ordered by start time, then trace id.
  */
 export function traceRows(spans: ColumnBatch, logs: ColumnBatch): Row[] {
@@ -52,6 +90,7 @@ export function traceRows(spans: ColumnBatch, logs: ColumnBatch): Row[] {
         logStart: null,
         logEnd: null,
         root: null,
+        spans: [],
       };
       acc.set(id, a);
     }
@@ -64,6 +103,7 @@ export function traceRows(spans: ColumnBatch, logs: ColumnBatch): Row[] {
     const start = big(cell(spans, 'start_time_unix_nano', s));
     const end = big(cell(spans, 'end_time_unix_nano', s));
     a.spanCount++;
+    a.spans.push(s);
     if (cell(spans, 'status_code', s) === StatusCode.ERROR) a.errorCount++;
     if (start !== null && (a.start === null || start < a.start)) a.start = start;
     if (end !== null && (a.end === null || end > a.end)) a.end = end;
@@ -95,6 +135,7 @@ export function traceRows(spans: ColumnBatch, logs: ColumnBatch): Row[] {
       root_name: a.root === null ? null : text(cell(spans, 'name', a.root)),
       root_resource: a.root === null ? null : text(cell(spans, 'resource_name', a.root)),
       log_count: a.logCount,
+      service_share: encodeServiceShare(serviceShareOf(shareSpansOf(spans, a.spans, a.start))),
     });
   }
   return rows.sort((x, y) => {

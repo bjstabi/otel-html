@@ -302,8 +302,6 @@ export async function mergeReports(
         await session.copyPartitions({
           origin,
           dir: input.dir,
-          epoch: input.epoch,
-          formatVersion: input.manifest.formatVersion,
           totals: input.manifest.totals,
           range: input.manifest.range,
           partitions: input.manifest.partitions,

@@ -26,6 +26,7 @@ import {
   cell,
   counterRequest,
   manifestOf,
+  rawManifestOf,
   spanIdOf,
   spansRequest,
 } from './helpers.js';
@@ -40,6 +41,13 @@ function spanBatch(n: number): RecordBatch {
 
 async function open(w: TestWriter, config = testConfig()): Promise<WriterSession> {
   return openSession(w.deps, { out: OUT, config, mode: 'replace' });
+}
+
+/** The report is format 6 and its manifest file holds no epoch: the anchor of a reader is derived, a writer's is its own. */
+function expectNoStoredEpoch(w: TestWriter): void {
+  const raw = rawManifestOf(w, OUT);
+  expect(raw).toHaveProperty('formatVersion', 6);
+  expect(raw).not.toHaveProperty('epochUnixNano');
 }
 
 async function failure(p: Promise<unknown>): Promise<OtelHtmlError> {
@@ -61,7 +69,8 @@ describe('create -> add -> close', () => {
     expect(summary.totals).toEqual({ spans: 2_000, logs: 0, metrics: 0 });
     const m = manifestOf(w, OUT);
     expect(m.complete).toBe(true);
-    expect(m.epochUnixNano).toBe(EPOCH_NS);
+    expectNoStoredEpoch(w);
+    expect(m.epochUnixNano).toBe(m.range?.start); // the reader's derived anchor
     expect(m.totals.spans).toBe(2_000);
     expect(summary.chunks).toBe(m.partitions.length);
     expect(summary.bytes).toBe(
@@ -140,8 +149,8 @@ describe('create -> add -> close', () => {
       complete: true,
       range: null,
       partitions: [],
-      epochUnixNano: '0',
     });
+    expectNoStoredEpoch(w); // a new empty report is format 6 too
     expect(w.fs.snapshot().has('r/index.html')).toBe(true);
   });
   test('logs-only input is valid, with zero spans and no traces file', async () => {
@@ -165,7 +174,8 @@ describe('create -> add -> close', () => {
     expect(summary.totals).toEqual({ spans: 0, logs: 3, metrics: 0 });
     const m = manifestOf(w, OUT);
     expect(m.partitions.flatMap((p) => Object.keys(p.files))).not.toContain('traces');
-    expect(m.epochUnixNano).toBe(String(BigInt(EPOCH_NS) + 10n));
+    expectNoStoredEpoch(w);
+    expect(m.range?.start).toBe(String(BigInt(EPOCH_NS) + 10n));
     expect(
       allLogs(w, OUT)
         .map((l) => cell(l, 'time_unix_nano'))
@@ -205,7 +215,8 @@ describe('epoch', () => {
       'a.json',
     );
     await s.close();
-    expect(manifestOf(w, OUT).epochUnixNano).toBe(t(100));
+    expectNoStoredEpoch(w);
+    expect(manifestOf(w, OUT).range?.start).toBe(t(100));
     expect(
       allSpans(w, OUT)
         .map((x) => cell(x, 'start_time_unix_nano'))
@@ -220,7 +231,7 @@ describe('epoch', () => {
     await s.add(otlp(spansRequest(1, 0, 1)), 'b.json');
     await s.close();
     const m = manifestOf(w, OUT);
-    expect(m.epochUnixNano).toBe(String(BigInt(EPOCH_NS) + 1_000n));
+    expectNoStoredEpoch(w);
     expect(
       allSpans(w, OUT)
         .map((x) => cell(x, 'start_time_unix_nano'))
@@ -234,9 +245,13 @@ describe('epoch', () => {
     const s = await open(w);
     await s.add(otlp(spansRequest(1)), 'a.json');
     const far = 2n ** 54n;
-    await expect(s.add(otlp(spansRequest(1, Number(far), 5)), 'far.json')).rejects.toMatchObject({
-      code: 'time-out-of-range',
-    });
+    const refused = await failure(s.add(otlp(spansRequest(1, Number(far), 5)), 'far.json'));
+    expect(refused.code).toBe('time-out-of-range');
+    // It names the session's own span, not a report epoch.
+    expect(refused.actual).toContain(
+      "from the session's first record, so its own data spans more than 2^53 ns",
+    );
+    expect(refused.expected).not.toContain('epoch');
     expect(await s.close().then((x) => x.totals.spans)).toBe(1);
   });
 
@@ -245,7 +260,8 @@ describe('epoch', () => {
     const s = await open(w);
     await s.add(otlp(logsRequest([logRecord({ timeUnixNano: '0', observedTimeUnixNano: '0' })])), 'l.json');
     await s.close();
-    expect(manifestOf(w, OUT).epochUnixNano).toBe(EPOCH_NS);
+    expectNoStoredEpoch(w);
+    expect(manifestOf(w, OUT).range?.start).toBe(EPOCH_NS);
   });
 
   test('addRecords rebases a batch recorded against another epoch', async () => {

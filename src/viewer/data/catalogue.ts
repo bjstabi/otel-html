@@ -485,7 +485,7 @@ export const CATALOGUE = [
     id: 'trace.share',
     family: 'read by id',
     method: 'serviceShare',
-    builders: ['tracePartitionsQuery', 'traceSpansQuery'],
+    builders: ['traceShareQuery'],
     run: (ds, ctx) => ds.serviceShare(traceIdOf(ctx.ids)),
   }),
   point({
@@ -805,7 +805,7 @@ const BASELINE: Record<string, Declared> = {
     scanOf: 'traces.list.long',
   }),
   'trace.get': decl(['files', 'scan', null], { needed: ONE_GROUP }),
-  'trace.share': decl(['files', 'scan', null], { needed: ONE_GROUP }),
+  'trace.share': decl(['files', 'files', null], { needed: ONE_GROUP }),
   'trace.has': decl(['files', 'files', null], { needed: ONE_GROUP }),
   'trace.logs': decl(['files', 'files', null], { needed: ONE_GROUP }),
   'log.get': decl(['fixed', 'files', null], { needed: ONE_GROUP }),
@@ -878,6 +878,7 @@ const SMALL_TABLE_BUILDERS: ReadonlySet<string> = new Set([
   'windowTracePartitionsQuery',
   'windowTraceRowsQuery',
   'tracePartitionsQuery',
+  'traceShareQuery',
   'traceSummaryQuery',
   'patternsQuery',
 ]);
@@ -927,6 +928,4 @@ const owed = (
  * #283 (paid by PR 7: compaction groups its inputs by time, so no file spans more than 24 h unless an input does) and #291 (opening a trace reads the spans files of its partitions whole; no PR of
  * the plan fixes it, so PR 9 carries it).
  */
-export const KNOWN_DEBT: readonly DebtLine[] = [
-  ...owed(291, 9, 'density', 'matched', true, ['trace.get', 'trace.share']),
-];
+export const KNOWN_DEBT: readonly DebtLine[] = [...owed(291, 9, 'density', 'matched', true, ['trace.get'])];

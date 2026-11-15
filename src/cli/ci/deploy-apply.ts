@@ -2,7 +2,6 @@ import { copyFile, lstat, mkdir, readdir, rmdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { resolveApiConfig } from '../../api/report.js';
 import type { ResolvedConfig } from '../../config/schema.js';
-import { ROLLUP_OF } from '../../format/parquet/columns.js';
 import { MANIFEST_PATH } from '../../format/paths.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { FileSystem } from '../../writer/ports.js';
@@ -397,10 +396,8 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
       let manifest = indexed === undefined ? null : await readRunManifest(fs, runDir);
       if (manifest === null) {
         resolved ??= await resolveApiConfig(deps, o.config, undefined, { format: 'site', assetsBase });
-        const top = live.reduce((a, b) => ((b.u.sequence ?? 0) > (a.u.sequence ?? 0) ? b : a));
         manifest = newRunManifest({
           title: `run ${first.run.runId}`,
-          epochUnixNano: earliestNano(top.u, top.createdAt),
           createdAt: o.now,
           assetsBase,
           config: resolved,
@@ -572,22 +569,7 @@ function stripEvent(run: SiteRun & { event: string }): SiteRun {
   return rest;
 }
 
-/** The earliest time of the update's partitions (R127: the epoch is the report's first data), else the update's creation. */
-function earliestNano(u: UpdateJson, createdAt: string): string {
-  let min: bigint | undefined;
-  const parts = [...(u.partitions ?? []), ...(u.ci === undefined ? [] : [u.ci])];
-  // Rollup files start at a grain floor, before the first record: only the base tables say when data began.
-  for (const p of parts)
-    for (const [table, f] of Object.entries(p.files))
-      if (!(table in ROLLUP_OF) && f.timeMin !== null && f.timeMin !== undefined) {
-        const t = BigInt(f.timeMin);
-        if (min === undefined || t < min) min = t;
-      }
-  if (min !== undefined && min >= 0n) return min.toString();
-  return (BigInt(ms(createdAt) ?? 0) * 1_000_000n).toString();
-}
-
-/** A `run` update's report must be a format 5 report whose listed files are in the update. */
+/** A `run` update's report must be a partition report (format 5 or 6) whose listed files are in the update. */
 async function checkRunReport(fs: FileSystem, dir: string): Promise<void> {
   let manifest: Awaited<ReturnType<typeof readRunManifest>>;
   try {

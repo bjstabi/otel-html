@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { wrapDataFile } from '../src/format/data-file.js';
+import { manifestForWrite } from '../src/format/manifest.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
 import type { Format4Fixture } from './format4-fixture.js';
 
@@ -13,7 +14,7 @@ export async function writeReportDir(f: Format4Fixture): Promise<{ dir: string; 
     await mkdir(dirname(file), { recursive: true });
     await writeFile(file, data);
   };
-  await write('data/manifest.js', wrapDataFile(MANIFEST_KEY, f.manifest));
+  await write('data/manifest.js', wrapDataFile(MANIFEST_KEY, manifestForWrite(f.manifest)));
   for (const [path, bytes] of f.files) await write(path, bytes);
   return { dir, close: () => rm(dir, { recursive: true, force: true }) };
 }

@@ -31,7 +31,7 @@ import {
 } from '../../../src/cli/ci/update.js';
 import type { CliIo } from '../../../src/cli/io.js';
 import { wrapDataFile } from '../../../src/format/data-file.js';
-import type { ManifestV4 } from '../../../src/format/manifest.js';
+import { type ManifestV4, manifestForWrite } from '../../../src/format/manifest.js';
 import { TABLES } from '../../../src/format/parquet/columns.js';
 import { MANIFEST_KEY } from '../../../src/format/paths.js';
 import type { WriterDeps } from '../../../src/writer/session.js';
@@ -475,7 +475,7 @@ describe('push', () => {
       ...m,
       partitions: [{ ...first, files: { ...first.files, spans: { ...spans, bytes: 600 * 1024 * 1024 } } }],
     };
-    writeFileSync(join(site, RUN42, 'data/manifest.js'), wrapDataFile(MANIFEST_KEY, huge));
+    writeFileSync(join(site, RUN42, 'data/manifest.js'), wrapDataFile(MANIFEST_KEY, manifestForWrite(huge)));
     const p = addPush({
       sequence: 2,
       parts: [

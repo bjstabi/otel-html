@@ -339,6 +339,64 @@ describe('StreamNormalizer', () => {
     expect(h.kind === 'ok' && h.agg.k === 'hist' && h.agg.counts).toEqual([1, 0]);
   });
 
+  describe('shift to a new anchor', () => {
+    const MAX = Number.MAX_SAFE_INTEGER;
+
+    it('keeps a stream continuing when its times and start move together', () => {
+      const s = new StreamNormalizer();
+      s.normalize(0, sum(5, 100, { start: rel(50) }));
+      s.shift(-40n); // the new anchor is 40 ns later
+      expect(deltaOf(s.normalize(0, sum(8, 70, { start: rel(10) }))).delta).toBe(3);
+      expect(s.normalize(0, sum(9, 60, { start: rel(10) }))).toEqual({
+        kind: 'skip',
+        reason: 'out-of-order',
+      });
+    });
+
+    it('holds a time past the new window at its limit, exactly, and keeps a stream whose start is out of reach', () => {
+      const s = new StreamNormalizer();
+      s.normalize(0, sum(5, 100, { start: rel(50) }));
+      s.shift(BigInt(MAX) + 1000n); // the new anchor is far earlier
+      const json = s.toJSON();
+      expect(json.keys).toHaveLength(1);
+      expect(json.seriesTimes).toEqual([MAX]);
+      expect(json.farSeries).toEqual([[0, String(BigInt(MAX) + 1100n)]]);
+      const back = new StreamNormalizer();
+      back.normalize(0, sum(5, 100, { start: null }));
+      back.shift(-(BigInt(MAX) + 1000n)); // the new anchor is far later
+      expect(back.toJSON().keys).toHaveLength(1);
+      expect(back.toJSON().seriesTimes).toEqual([-MAX]);
+    });
+
+    it('survives a round trip through a far anchor, in memory and through a checkpoint', () => {
+      const far = BigInt(MAX) + 1000n;
+      for (const viaJson of [false, true]) {
+        let s = new StreamNormalizer();
+        s.normalize(0, sum(5, 100, { start: null }));
+        s.normalize(1, sum(5, 100, { start: rel(50) }));
+        s.shift(-far); // a log-only session at a far later anchor
+        if (viaJson) s = StreamNormalizer.from(JSON.parse(JSON.stringify(s.toJSON())), 'streams');
+        s.shift(far); // back to the first anchor
+        if (viaJson) s = StreamNormalizer.from(JSON.parse(JSON.stringify(s.toJSON())), 'streams');
+        expect(s.toJSON().farSeries).toBeUndefined();
+        expect(deltaOf(s.normalize(0, sum(8, 200, { start: null }))).delta).toBe(3);
+        expect(deltaOf(s.normalize(1, sum(8, 200, { start: rel(50) }))).delta).toBe(3);
+        expect(s.normalize(0, sum(9, 150, { start: null }))).toEqual({
+          kind: 'skip',
+          reason: 'out-of-order',
+        });
+      }
+    });
+
+    it('reads a checkpoint written before far times existed', () => {
+      const s = new StreamNormalizer();
+      s.normalize(0, sum(5, 100, { start: null }));
+      const json = s.toJSON();
+      expect(json.farStreams).toBeUndefined();
+      expect(() => StreamNormalizer.from(JSON.parse(JSON.stringify(json)), 'streams')).not.toThrow();
+    });
+  });
+
   it('rejects a malformed checkpoint', () => {
     expect(() => StreamNormalizer.from({ streams: 3 }, 'streams')).toThrow(OtelHtmlError);
   });

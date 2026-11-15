@@ -56,9 +56,11 @@ function viewStatement(
   const files = tableFiles(manifest, table, resolve);
   // `traces` always has `service_share` (format 6): the stored text where a file has it, NULL where it does not.
   const shared = table === 'traces';
+  // The share is added below, from the file's own column or as NULL, so the table's column list leaves it out.
+  const base = TABLE_COLUMNS[table].filter((c) => c.name !== SERVICE_SHARE_COLUMN.name);
   if (files.length === 0) {
     const columns = [
-      ...TABLE_COLUMNS[table].map((c) => `NULL::${duckdbType(c.type)} AS ${quoteIdent(c.name)}`),
+      ...base.map((c) => `NULL::${duckdbType(c.type)} AS ${quoteIdent(c.name)}`),
       ...(shared ? [`NULL::VARCHAR AS ${SHARE}`] : []),
       'NULL::BIGINT AS file_row_number',
       'NULL::VARCHAR AS filename',
@@ -67,7 +69,7 @@ function viewStatement(
   }
   if (shared) {
     // Two homogeneous groups, each bound by one footer: files that store the share read as-is, the others get NULL.
-    const names = TABLE_COLUMNS.traces.map((c) => quoteIdent(c.name));
+    const names = base.map((c) => quoteIdent(c.name));
     const select = (paths: string[], share: string): string =>
       `SELECT ${[...names, share, 'file_row_number', 'filename'].join(', ')} FROM read_parquet([${paths.map(quoteString).join(', ')}], filename = true, file_row_number = true, union_by_name = false)`;
     const stored: string[] = [];

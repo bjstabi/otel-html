@@ -69,6 +69,8 @@ const P2: S[] = [
 let db: TestDb;
 let close: () => Promise<void>;
 let rows: Map<string, TraceRow>;
+let ds: ReturnType<typeof createDuckDbDataSource>;
+const sqls: string[] = [];
 
 const query = (over: Partial<SpanQuery> = {}): SpanQuery => ({
   condition: null,
@@ -92,8 +94,15 @@ beforeAll(async () => {
   const six = await format6Fixture(f, [0, 1]);
   close = six.close;
   db = await openFixtureDb(six);
-  const ds = createDuckDbDataSource({
-    engine: mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db),
+  const recording = {
+    ...db.connector,
+    query: (q: Parameters<typeof db.connector.query>[0]) => {
+      sqls.push(String((q as { sql?: string }).sql ?? ''));
+      return db.connector.query(q);
+    },
+  };
+  ds = createDuckDbDataSource({
+    engine: mosaicQueryEngine(createCoordinator(recording as typeof db.connector, silentLogger), db),
     manifest: six.manifest,
   });
   rows = byId((await ds.querySpans(query())).rows);
@@ -155,6 +164,30 @@ describe('the trace list stored share', () => {
     const out = traceRows(table).rows;
     expect(out[0]?.share).toBeNull();
     expect(out[1]?.share).toEqual([{ service: 's', ns: 5n }]);
+  });
+});
+
+describe('serviceShare(traceId)', () => {
+  const plain = (r: readonly { service: string; ns: bigint }[]) =>
+    r.map(({ service, ns }) => ({ service, ns: Number(ns) }));
+
+  test('an exact stored share is returned from the traces files, with no spans query', async () => {
+    sqls.length = 0;
+    const got = await ds.serviceShare(t(1) as never);
+    expect(got).toEqual(plain(rows.get(t(1))?.share ?? []));
+    expect(got.length).toBeGreaterThan(0);
+    expect(sqls.length).toBeGreaterThan(0);
+    expect(sqls.filter((q) => /\bspans\b/i.test(q.replace(/"?traces"?/gi, '')))).toEqual([]);
+  });
+
+  test('a trace split over partitions, and a format-5 trace, fall back to the spans', async () => {
+    sqls.length = 0;
+    expect(await ds.serviceShare(t(2) as never)).toEqual([
+      { service: 'svc-a', ns: 30_000_000 },
+      { service: 'svc-b', ns: 20_000_000 },
+    ]);
+    expect(sqls.some((q) => /spans/i.test(q))).toBe(true);
+    expect(await ds.serviceShare(t(4) as never)).toEqual([{ service: 'svc-a', ns: 10_000_000 }]);
   });
 });
 
