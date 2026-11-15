@@ -96,7 +96,9 @@ async function run(
 ): Promise<unknown> {
   const o = await openedOf(layout, shift);
   const ctx: CatalogueContext = { window: windowed ? longWindow(o.epoch) : null, ids: IDS };
-  // a fresh data source per run: the trace and metric memos are per source
+  // one data source per layout and shift, shared by every case: its result cache is keyed by the SQL text on the same
+  // database, so a repeated statement returns what a fresh source would; the trace and metric memos do not serve these
+  // aggregate entries. Tests that count requests use `freshSource` instead.
   return plain(await entry.run(withCondition(o.ds, condition), ctx));
 }
 
