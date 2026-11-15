@@ -239,6 +239,17 @@ The seven delta bucket columns (`delta_bucket_counts`, `delta_scale`, `delta_zer
 temporality, monotonicity and, for an explicit histogram, its bounds), the resource, the scope and the point's attributes.
 A series whose histogram bounds change is a new series.
 
+## `service_share`
+
+The `traces` column `service_share` (format 6) is the trace's exclusive time per service. It is utf8 JSON,
+`[["svc","ns"],…]`: one pair per service, the service name and its exclusive nanoseconds as a decimal string, largest
+first and ties by service name. A trace with no spans stores `[]`. Null means "not known here", and a reader then
+computes the share from the spans.
+
+A stored share is exact only when the trace has spans in exactly one `traces` row across the report and that row's
+`service_share` is not null. A trace split over several partitions has a row in each, every one covering only its own
+spans, so none of them is the trace's share; a reader must not use one as the whole.
+
 ## Patterns
 
 - Cluster ids are unique within one Drain lineage.
@@ -277,10 +288,10 @@ The manifest is a script that registers its JSON payload. Its fields:
 
 | field | meaning |
 |---|---|
-| `formatVersion` | `4` or `5` |
+| `formatVersion` | `5` or `6` (this reader opens both; the writer produces 6) |
 | `otelHtmlVersion` | the version of otel-html that wrote the report |
 | `title` | the report title |
-| `epochUnixNano` | decimal nanoseconds of the report's epoch |
+| `epochUnixNano` | format 5 only: decimal nanoseconds of the report's epoch. A format-6 manifest stores none; a reader anchors on `range.start` (or `createdAt` when the report holds no data) and every stored time is absolute |
 | `createdAt` | ISO timestamp |
 | `updatedAt` | ISO timestamp |
 | `complete` | false while a writer holds the report open |
@@ -303,7 +314,7 @@ Each `partitions` entry is `{ n, source, files }`. `files` has an entry per tabl
 | `values` | maps each statistics key to its distinct values in the file, or to null when the file has more than the cap (or the table cannot answer the key) |
 | `timeEndMax` | format 5, `spans` and `traces` files only, optional: the largest end time, as int64 text, or null when there are no rows |
 | `rollup` | format 5, rollup tables only, required: `{ grainNs, dimensions, durationBuckets? }`, what the file groups by |
-| `serviceShare` | format 6, `traces` files only, optional: `true` when every row carries `service_share` |
+| `serviceShare` | format 6, `traces` files only, optional: `true` when the file has the `service_share` column, so its rows may carry a share (a row that does not, such as a trace compacted from a format-5 input, is null and a reader falls back to the spans; see [`service_share`](#service_share)) |
 
 ### `source`
 
@@ -312,6 +323,6 @@ Where a partition came from:
 - `flush:<n>`: the report's own flush partition number `n`.
 - `compact:<first>..<last>`: the result of compacting partitions `first` to `last`.
 - `merge:<input>#<n>`: a partition copied by merge. `<input>` is the input's index after the inputs are sorted by
-  epoch, oldest first; `<n>` is the partition's number in that input.
+  their time anchor (format 5: `epochUnixNano`; format 6: `range.start`), oldest first; `<n>` is the partition's number in that input.
 
 The `flush`, `compact` and `merge` forms are what this writer produces. The schema also accepts the reserved prefixes `job:` and `ci:` (e.g. `job:<id>#<n>`), which this writer does not produce; it checks only the prefix and the character set.
