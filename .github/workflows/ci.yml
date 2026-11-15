@@ -562,16 +562,9 @@ jobs:
       fail-fast: false
       matrix:
         # Pull requests build linux-x64 only; arm64 and Windows run on main, nightly and dispatch (the release builds
-        # all three, so a platform-only failure shows on main rather than after the tag).
-        target: ${{ fromJSON(github.event_name == 'pull_request' && '["linux-x64"]' || '["linux-x64","linux-arm64","windows-x64"]') }}
-        include:
-          - target: linux-x64
-            os: ubuntu-latest
-          - target: linux-arm64
-            os: ubuntu-24.04-arm
-          - target: windows-x64
-            os: windows-latest
-            ext: .exe
+        # all three, so a platform-only failure shows on main rather than after the tag). The whole include list is the
+        # expression: an include entry that matches no `target` would be added as a leg of its own.
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"target":"linux-x64","os":"ubuntu-latest"}]' || '[{"target":"linux-x64","os":"ubuntu-latest"},{"target":"linux-arm64","os":"ubuntu-24.04-arm"},{"target":"windows-x64","os":"windows-latest","ext":".exe"}]') }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
