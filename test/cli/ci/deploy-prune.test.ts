@@ -151,7 +151,7 @@ describe('pruneArtifacts', () => {
     const arts = [
       ...[55, 56, 57].flatMap((r) => [
         art(r * 10, 'github-pages-1', r, NOW),
-        art(r * 10 + 1, 'otel-html-site-state-' + r + '-1', r, NOW),
+        art(r * 10 + 1, `otel-html-site-state-${r}-1`, r, NOW),
       ]),
       ...artifacts,
     ];

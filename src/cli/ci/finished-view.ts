@@ -13,7 +13,8 @@ export function finishedView(
   excludePrefix: string,
 ): { run: ApiRun; jobs: ApiJob[] } {
   const kept = excludePrefix === '' ? [...jobs] : jobs.filter((j) => !j.name.startsWith(excludePrefix));
-  if (run.status === 'completed') return { run, jobs: kept };
+  // an empty prefix reports the run as it is
+  if (run.status === 'completed' || excludePrefix === '') return { run, jobs: kept };
   const conclusions = kept.map((j) => j.conclusion);
   const conclusion = conclusions.some((c) => c === 'failure' || c === 'timed_out' || c === 'startup_failure')
     ? 'failure'

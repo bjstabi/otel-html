@@ -106,6 +106,13 @@ describe('finishedView', () => {
     const jobs = [job(1, 'build', 'success')];
     expect(finishedView(inProgress, jobs, '').jobs).toEqual(jobs);
   });
+
+  test('an empty prefix reports an unfinished run as it is', () => {
+    const jobs = [job(1, 'build', 'success'), running(2, 'test')];
+    const v = finishedView(inProgress, jobs, '');
+    expect(v.run).toBe(inProgress);
+    expect(v.run.status).toBe('in_progress');
+  });
 });
 
 describe('runReport from inside the run', () => {
