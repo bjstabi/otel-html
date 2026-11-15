@@ -7,6 +7,7 @@ import type { uploadArtifact } from '../../../src/cli/ci/artifact-client.js';
 import { readLedger } from '../../../src/cli/ci/ledger.js';
 import {
   CI_SPANS_EVERY_MS,
+  jitterMs,
   type PusherCache,
   type PusherDeps,
   type PusherOptions,
@@ -209,6 +210,31 @@ describe('tick', () => {
       },
     );
 
+    test('a deployer run that started a moment ago counts as waiting; an old one does not', async () => {
+      const r = await openReport();
+      await flush(r, 1);
+      const startedAgo = (ms: number): string =>
+        new Date(Number(deps.clock.nowUnixNano() / 1_000_000n) - ms).toISOString();
+      const young: string[] = [];
+      const d = pdeps();
+      d.fetchFn = api(
+        () => json({ workflow_runs: [{ status: 'in_progress', run_started_at: startedAgo(20_000) }] }),
+        young,
+      );
+      await tick(opts(), d, null);
+      expect(posted(young)).toBe(false);
+      expect(log).toContain('deployer already waiting; not dispatched');
+
+      await flush(r, 2);
+      const old: string[] = [];
+      d.fetchFn = api(
+        () => json({ workflow_runs: [{ status: 'in_progress', run_started_at: startedAgo(300_000) }] }),
+        old,
+      );
+      await tick(opts(), d, null);
+      expect(posted(old)).toBe(true);
+    });
+
     test('only finished or in-progress deployer runs: dispatches', async () => {
       const r = await openReport();
       await flush(r, 1);
@@ -405,6 +431,29 @@ describe('runPusher', () => {
     expect(total).toBeGreaterThanOrEqual(6000);
     expect(sleeps.reduce((a, b) => a + b, 0)).toBe(total);
     expect(Math.max(...sleeps)).toBeLessThanOrEqual(1000);
+  });
+
+  test('jitterMs is deterministic, within [0, everyMs) and spreads jobs', () => {
+    expect(jitterMs('a', 60_000)).toBe(jitterMs('a', 60_000));
+    const offsets = Array.from({ length: 9 }, (_, i) => jitterMs(`1|build|job ${i}|runner ${i}`, 60_000));
+    expect(offsets.every((n) => n >= 0 && n < 60_000)).toBe(true);
+    expect(new Set(offsets).size).toBeGreaterThan(6);
+    expect(jitterMs('a', 0)).toBe(0);
+  });
+
+  test('startDelayMs delays the first tick, in one-second steps', async () => {
+    const o = opts({ everyMs: 60_000, startDelayMs: 2500 });
+    const r = await openReport();
+    await flush(r, 1);
+    const stop = join(o.publishDir, 'pusher.stop');
+    const d = pdeps();
+    d.sleep = async (ms) => {
+      sleeps.push(ms);
+      if (uploads.length > 0) writeFileSync(stop, '');
+    };
+    await runPusher(o, d, { on: () => () => undefined });
+    expect(sleeps.slice(0, 3)).toEqual([1000, 1000, 500]);
+    expect(uploads).toHaveLength(1);
   });
 
   test('everyMs below one second is clamped, so the loop waits', async () => {

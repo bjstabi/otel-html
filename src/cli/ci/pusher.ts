@@ -17,6 +17,23 @@ const STOP_POLL_MS = 1_000;
 /** The CI-spans lookup (2 API calls and a scratch report) runs at most this often; between lookups the last result is reused. */
 export const CI_SPANS_EVERY_MS = 300_000;
 const DEPLOYER_WAITING = new Set(['queued', 'pending', 'waiting', 'requested']);
+/**
+ * A deployer run that started (`in_progress`) less than this long ago has most likely not reached its `plan` job's
+ * listing of pending updates (checkout, setup, build and the listing take about a minute), so it counts as waiting. The
+ * age comes from `run_started_at` in the run list the check already fetches: no extra API call.
+ */
+const DEPLOYER_STARTING_MS = 120_000;
+
+/**
+ * Where in `[0, everyMs)` a pusher's first tick falls: a hash of the job's identity, so the pushers of one run, started
+ * within seconds of each other, do not tick (and dispatch) together. Deterministic: the same job always gets the same
+ * offset.
+ */
+export function jitterMs(identity: string, everyMs: number): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < identity.length; i++) h = Math.imul(h ^ identity.charCodeAt(i), 0x01000193) >>> 0;
+  return Math.floor((h / 0x1_0000_0000) * Math.max(0, everyMs));
+}
 
 export interface PusherDeps {
   fs: FileSystem;
@@ -33,6 +50,8 @@ export interface PusherOptions {
   report: string;
   publishDir: string;
   everyMs: number;
+  /** Wait this long before the first tick (see `jitterMs`); default 0. */
+  startDelayMs?: number;
   config?: string;
   env: Readonly<Record<string, string | undefined>>;
   deployerWorkflow: string;
@@ -195,21 +214,25 @@ export async function tick(
 }
 
 /**
- * True when a run of the deployer is already queued: it lists everything pending when it starts, so another dispatch adds
- * nothing. A failed check is false (dispatch anyway).
+ * True when a run of the deployer is already queued or only just started (`DEPLOYER_STARTING_MS`): it lists everything
+ * pending when its `plan` job runs, so another dispatch adds nothing. A failed check is false (dispatch anyway).
  */
 async function deployerWaiting(o: PusherOptions, d: PusherDeps, repository: string): Promise<boolean> {
   try {
     const token = ev(o, 'OTEL_HTML_DISPATCH_TOKEN') || ev(o, 'GITHUB_TOKEN');
     const api = ev(o, 'GITHUB_API_URL') ?? 'https://api.github.com';
     const url = `${api}/repos/${repository}/actions/workflows/${o.deployerWorkflow}/runs?per_page=20`;
-    const { body } = await getJson<{ workflow_runs: { status: string | null }[] }>(
-      url,
-      token,
-      15_000,
-      d.fetchFn,
-    );
-    return body.workflow_runs.some((r) => r.status !== null && DEPLOYER_WAITING.has(r.status));
+    const { body } = await getJson<{
+      workflow_runs: { status: string | null; run_started_at?: string | null }[];
+    }>(url, token, 15_000, d.fetchFn);
+    const now = nowMs(d.clock);
+    return body.workflow_runs.some((r) => {
+      if (r.status === null) return false;
+      if (DEPLOYER_WAITING.has(r.status)) return true;
+      if (r.status !== 'in_progress' || r.run_started_at == null) return false;
+      const age = now - Date.parse(r.run_started_at);
+      return age >= 0 && age < DEPLOYER_STARTING_MS;
+    });
   } catch {
     return false;
   }
@@ -264,6 +287,11 @@ export async function runPusher(o: PusherOptions, d: PusherDeps, signals: CliIo[
     await fs.mkdirp(o.publishDir);
     await fs.writeTextAtomic(pidFile, String(d.deps.process.pid));
     let last: string[] | null = null;
+    for (let waited = 0; waited < (o.startDelayMs ?? 0) && !(await shouldStop()); ) {
+      const step = Math.min(STOP_POLL_MS, (o.startDelayMs ?? 0) - waited);
+      await d.sleep(step);
+      waited += step;
+    }
     while (!(await shouldStop())) {
       const r = await tick(o, d, last, cache);
       last = r.listing;
