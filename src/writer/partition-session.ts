@@ -38,7 +38,7 @@ import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
 import { Drain } from '../rollups/drain.js';
 import { StreamNormalizer } from '../rollups/metric-streams.js';
 import { severityKey } from '../semconv/severity.js';
-import { pruneOwnAssets } from './assets-cleanup.js';
+import { assetsInside, pruneOwnAssets } from './assets-cleanup.js';
 import {
   at,
   loadPartitionCheckpoint,
@@ -119,6 +119,24 @@ export async function openPartitionSession(
   const { out } = options;
   let { config } = options;
   const { fs } = deps;
+  // The viewer files would be deleted and recreated through the link: its target is not this report's to rewrite.
+  if (config.writer.assetsBase === DEFAULT_ASSETS_BASE && !(await assetsInside(fs, out))) {
+    const recorded = folder.appending
+      ? await loadPartitionCheckpoint(fs, out, deps.version, config.writer.format).then(
+          (cp) => cp.manifest.engine.assetsBase,
+          () => DEFAULT_ASSETS_BASE,
+        )
+      : DEFAULT_ASSETS_BASE;
+    const target = await fs.realpath(at(out, 'assets')).catch(() => undefined);
+    const where = target === undefined ? '' : ` (it points at ${target})`;
+    const shared = recorded !== DEFAULT_ASSETS_BASE;
+    throw new OtelHtmlError('invalid-report', {
+      message: `${out}/assets links out of the report${where}, and writing the report's viewer files would rewrite the link's target`,
+      hint: shared
+        ? `the report already records the shared assets base ${recorded}: append with --assets-base ${recorded}`
+        : `replace the assets link with a real folder (a copy of its target), or start the report over with --replace and --assets-base, which discards its data`,
+    });
+  }
   await fs.mkdirp(at(out, STATE_DIR));
   const lock = await acquireLock(deps, at(out, LOCK_PATH));
   try {
@@ -242,7 +260,11 @@ class PartitionSession implements WriterSession {
   #lastFlushMs: number;
   #backoffUntilMs = 0;
   #closed: ReportSummary | null = null;
+  /** The finished report's summary, kept when the lock release after it failed, so a second close retries only that. */
+  #closeSummary: ReportSummary | null = null;
   #aborted = false;
+  /** The lock is gone after an abort: a rejected release leaves this false, and the next `abort()` retries it. */
+  #lockReleased = false;
   /** Set when close released the live state: only `close` (again) and `abort` remain. */
   #closing = false;
   #replacing: boolean;
@@ -494,6 +516,12 @@ class PartitionSession implements WriterSession {
     return this.#serial(async () => {
       if (this.#closed !== null) return this.#closed;
       if (this.#aborted) throw new Error(`session for ${this.#out} is closed`);
+      if (this.#closeSummary !== null) {
+        // The report is complete and only the lock release failed: retry just that.
+        await this.#lock.release();
+        this.#closed = this.#closeSummary;
+        return this.#closed;
+      }
       if (!this.#closing) this.#assertOpen();
       this.#disarmIdle();
       await this.#checkpoint(false);
@@ -503,19 +531,22 @@ class PartitionSession implements WriterSession {
       await this.#checkpoint(true);
       this.#warnIfLarge(); // after the compaction is committed: the total close leaves behind
       await this.#pruneCommitted();
-      this.#closed = this.#summary();
+      const summary = this.#summary();
+      this.#closeSummary = summary;
       await this.#lock.release();
-      return this.#closed;
+      this.#closed = summary;
+      return summary;
     });
   }
 
   abort(): Promise<void> {
     return this.#serial(async () => {
-      if (this.#closed !== null || this.#aborted) return;
+      if (this.#closed !== null || this.#lockReleased) return;
       this.#aborted = true;
       this.#disarmIdle();
       await this.#inflight;
       await this.#lock.release();
+      this.#lockReleased = true;
     });
   }
 

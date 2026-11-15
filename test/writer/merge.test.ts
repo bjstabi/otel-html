@@ -338,6 +338,37 @@ describe('mergeReports', () => {
     expect(w.fs.snapshot()).toEqual(before);
   });
 
+  test('merge into a report whose assets/ links out of it fails invalid-report; a real folder merges', async () => {
+    const w = createTestWriter();
+    await writeReport(w, 'a', [spansRequest(1)]);
+    await writeReport(w, 'out', [spansRequest(1, 0, 5)]);
+    const linkedOut = true;
+    const linked = {
+      ...w.fs,
+      realpath: async (p: string) => (linkedOut && p === 'out/assets' ? '/shared/assets' : w.fs.realpath(p)),
+    };
+    const before = w.fs.snapshot();
+    const e = await failure(
+      mergeReports({ ...w.deps, fs: linked }, ['a'], { out: 'out', config: testConfig(), mode: 'append' }),
+    );
+    expect(e.code).toBe('invalid-report');
+    expect(e.hint).toContain('replace the assets link with a real folder');
+    expect(e.hint).toContain('--replace');
+    expect(w.fs.snapshot()).toEqual(before);
+    // A shared base writes no viewer files beside the report: the link is not in the way (a new report).
+    const shared = testConfig({ writer: { assetsBase: '../assets/0.0.0/' } });
+    await mergeReports({ ...w.deps, fs: linked }, ['a'], { out: 'out', config: shared, mode: 'replace' });
+    expect(manifestOf(w, 'out').totals.spans).toBe(1);
+  });
+
+  test('merge appends into a report once its assets link is replaced by a real folder', async () => {
+    const w = createTestWriter();
+    await writeReport(w, 'a', [spansRequest(1)]);
+    await writeReport(w, 'out', [spansRequest(1, 0, 5)]);
+    await mergeReports(w.deps, ['a'], { out: 'out', config: testConfig(), mode: 'append' });
+    expect(manifestOf(w, 'out').totals.spans).toBe(2);
+  });
+
   test('sibling folders with a common name prefix are fine', async () => {
     const w = createTestWriter();
     await writeReport(w, 'a', [spansRequest(1)]);

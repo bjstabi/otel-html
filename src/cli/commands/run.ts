@@ -57,12 +57,21 @@ function propagates(e: unknown): boolean {
   return e instanceof CliExit || (e instanceof OtelHtmlError && e.code === 'usage');
 }
 
-/** The report could not be started: tell why, then run the command as it would have run, with its own exit code. */
+/** Whether the report at `-o` itself refused the run (another format version, a link out of it), not the environment. */
+function refusesReport(e: unknown): boolean {
+  return e instanceof OtelHtmlError && (e.code === 'version-mismatch' || e.code === 'invalid-report');
+}
+
+/**
+ * The report could not be started: tell why, then run the command as it would have run, with its own exit code.
+ * When the report itself refused the run (`refused`), a command that exited 0 makes `run` exit 1 instead.
+ */
 async function runWithoutReport(
   io: CliIo,
   executable: string,
   args: string[],
   cause: unknown,
+  refused: boolean,
 ): Promise<never> {
   io.stderr(`error: ${cause instanceof Error ? cause.message : String(cause)}\n`);
   io.stderr('warning: the report was not written; running the command without it\n');
@@ -86,7 +95,8 @@ async function runWithoutReport(
   } finally {
     forward();
   }
-  throw new CliExit(code);
+  // A report that exists and cannot take this run is a failed step even when the command succeeded.
+  throw new CliExit(refused && code === 0 ? 1 : code);
 }
 
 type RunFlags = ReceiveFlags & { traceparent?: string };
@@ -122,7 +132,7 @@ export function addRunCommand(program: Command, io: CliIo, deps: CliDeps): void 
         });
       } catch (e) {
         if (propagates(e)) throw e;
-        return runWithoutReport(io, executable, args, e);
+        return runWithoutReport(io, executable, args, e, refusesReport(e));
       }
       const { report, receiver } = opened;
       const abandon = async (e: unknown): Promise<never> => {
