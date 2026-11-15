@@ -2,6 +2,8 @@ import { describe, expect, test } from 'vitest';
 import {
   DELETION_GRACE_MS,
   emptyState,
+  pagesArtifactName,
+  parsePagesName,
   parseStateName,
   readSiteState,
   type SiteState,
@@ -17,7 +19,7 @@ const DIR = '/site/site-state';
 const full = (): SiteState => ({
   applied: {
     version: 1,
-    form: { kind: 'full', runId: 77 },
+    form: { kind: 'full', runId: 77, runAttempt: 1 },
     updates: {
       '11': { outcome: 'applied', createdAt: '2026-11-10T11:30:00Z', pass: 3 },
       '12': { outcome: 'rejected', createdAt: '2026-11-10T11:45:00Z', pass: 3 },
@@ -84,6 +86,25 @@ describe('site state files', () => {
     expect(state.files).toEqual(full().files);
   });
 
+  test('an applied.json written before attempts existed reads as attempt 1', async () => {
+    const fs = createMemoryFileSystem();
+    await fs.mkdirp(DIR);
+    await fs.writeTextAtomic(
+      `${DIR}/applied.json`,
+      JSON.stringify({
+        version: 1,
+        form: { kind: 'consumed', base: 5 },
+        updates: {},
+        floor: NOW,
+        writtenAt: NOW,
+      }),
+    );
+    const warnings: string[] = [];
+    const state = await readSiteState(fs, DIR, (m) => warnings.push(m));
+    expect(warnings).toEqual([]);
+    expect(state.applied.form).toEqual({ kind: 'consumed', base: 5, runAttempt: 1 });
+  });
+
   test('unparsable JSON warns too', async () => {
     const fs = createMemoryFileSystem();
     await fs.mkdirp(DIR);
@@ -144,14 +165,25 @@ describe('scanFiles', () => {
 });
 
 describe('state artifact names', () => {
-  test('both forms round-trip', () => {
-    expect(stateArtifactName({ kind: 'full', runId: 123 })).toBe('otel-html-site-state-123');
-    expect(stateArtifactName({ kind: 'consumed', base: 456 })).toBe('otel-html-site-state-base-456');
+  test('both forms round-trip with their attempt', () => {
+    expect(stateArtifactName({ kind: 'full', runId: 123, runAttempt: 2 })).toBe('otel-html-site-state-123-2');
+    expect(stateArtifactName({ kind: 'consumed', base: 456, runAttempt: 3 })).toBe(
+      'otel-html-site-state-base-456-3',
+    );
     for (const f of [
-      { kind: 'full', runId: 123 },
-      { kind: 'consumed', base: 456 },
+      { kind: 'full', runId: 123, runAttempt: 2 },
+      { kind: 'consumed', base: 456, runAttempt: 3 },
     ] as const)
       expect(parseStateName(stateArtifactName(f))).toEqual(f);
+  });
+
+  test('the legacy names read as attempt 1', () => {
+    expect(parseStateName('otel-html-site-state-123')).toEqual({ kind: 'full', runId: 123, runAttempt: 1 });
+    expect(parseStateName('otel-html-site-state-base-456')).toEqual({
+      kind: 'consumed',
+      base: 456,
+      runAttempt: 1,
+    });
   });
 
   test('other names do not parse', () => {
@@ -160,8 +192,16 @@ describe('state artifact names', () => {
       'otel-html-site-state-x',
       'otel-html-site-state-base-',
       'otel-html-update-5',
-      'otel-html-site-state-1-2',
+      'otel-html-site-state-1-2-3',
+      'otel-html-site-state-1-0',
     ])
       expect(parseStateName(n)).toBeUndefined();
+  });
+
+  test('the Pages artifact is named per attempt, the legacy name is attempt 1', () => {
+    expect(pagesArtifactName(2)).toBe('github-pages-2');
+    expect(parsePagesName('github-pages')).toBe(1);
+    expect(parsePagesName('github-pages-3')).toBe(3);
+    expect(parsePagesName('github-pages-x')).toBeUndefined();
   });
 });

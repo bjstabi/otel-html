@@ -68,6 +68,7 @@ interface DeployApplyFlags {
   prRetention: string;
   config?: string;
   passRunId?: string;
+  passRunAttempt?: string;
   trustUpdates?: boolean;
   channel?: string;
 }
@@ -432,6 +433,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .option('--pr-retention <n>', 'runs kept per workflow in each pull request channel', '10')
     .option('--config <file>', 'the dashboard config file for the rolling reports')
     .option('--pass-run-id <n>', 'this deployer run id (default: $GITHUB_RUN_ID)')
+    .option('--pass-run-attempt <n>', 'this deployer run attempt (default: $GITHUB_RUN_ATTEMPT, else 1)')
     .option('--trust-updates', 'TEST ONLY: apply every update folder under --updates without pending.json')
     .option('--channel <key>', 'TEST ONLY: with --trust-updates, the channel (branch/<slug> or pr/<n>)')
     .action(async (flags: DeployApplyFlags) => {
@@ -456,6 +458,10 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
           retention: parsePositive('--retention', flags.retention),
           prRetention: parsePositive('--pr-retention', flags.prRetention),
           passRunId: parsePositive('--pass-run-id', passRun),
+          passRunAttempt: parsePositive(
+            '--pass-run-attempt',
+            flags.passRunAttempt ?? envVar(io, 'GITHUB_RUN_ATTEMPT') ?? '1',
+          ),
           now: new Date().toISOString(),
           ...(flags.state === undefined ? {} : { state: flags.state }),
           ...(flags.pending === undefined ? {} : { pending: flags.pending }),

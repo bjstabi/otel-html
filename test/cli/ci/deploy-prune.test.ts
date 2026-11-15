@@ -42,7 +42,7 @@ function world(artifacts: unknown[], runs = [50, 40, 30, 20, 10]) {
 
 const applied = (passes: Record<string, number>) => ({
   version: 1 as const,
-  form: { kind: 'full' as const, runId: 50 },
+  form: { kind: 'full' as const, runId: 50, runAttempt: 1 },
   updates: Object.fromEntries(
     Object.entries(passes).map(([id, pass]) => [id, { outcome: 'applied' as const, createdAt: NOW, pass }]),
   ),
@@ -87,12 +87,32 @@ describe('pruneArtifacts', () => {
   test('a no-op deployer run and the current run are not counted as kept deployments', async () => {
     // 45 is a no-op deployer run (no artifacts), 60 the running pass (its deployment is already listed)
     const { fetchFn, deleted } = world(artifacts, [60, 50, 45, 40, 30, 20, 10]);
-    await pruneArtifacts({ ...base, currentRunId: 60, applied: applied({}) }, fetchFn, () => {});
+    await pruneArtifacts(
+      { ...base, current: { runId: 60, runAttempt: 1 }, applied: applied({}) },
+      fetchFn,
+      () => {},
+    );
     // kept = 50, 40, 30 (not 45): the artifacts of 30 stay, 25 and older go
     expect(deleted).not.toContain('4');
     expect(deleted).not.toContain('5');
     expect(deleted).toContain('6');
     expect(deleted).not.toContain('12');
+  });
+
+  test('the per-attempt names count as the site of a run and older runs go', async () => {
+    const arts = [
+      art(1, 'github-pages-1', 50),
+      art(2, 'otel-html-site-state-50-1', 50),
+      art(3, 'github-pages-1', 40),
+      art(4, 'github-pages-1', 30),
+      art(5, 'otel-html-site-state-30-1', 30),
+      art(6, 'github-pages-1', 20),
+      art(7, 'otel-html-site-state-20-1', 20),
+      art(8, 'otel-html-site-state-base-77-1', 10),
+    ];
+    const { fetchFn, deleted } = world(arts);
+    await pruneArtifacts({ ...base, applied: applied({}) }, fetchFn, () => {});
+    expect(deleted.sort()).toEqual(['6', '7', '8']);
   });
 
   test('a failed delete is a warning and the rest proceed', async () => {

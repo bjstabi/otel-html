@@ -17,9 +17,11 @@ import {
 import { type Channel, channelFor, type SiteRun, siteRunOf } from './site.js';
 import {
   DELETION_GRACE_MS,
+  pagesArtifactName,
   parseStateName,
   readSiteState,
   type SiteState,
+  STATE_PREFIX,
   type StateForm,
   stateArtifactName,
   writeSiteState,
@@ -52,8 +54,8 @@ export interface PlanOptions {
   pagesUrl: string;
   /** Where the chosen state's files are written. */
   stateOut: string;
-  /** The running deployer run (`GITHUB_RUN_ID`): its own environment deployment never counts. */
-  currentRunId?: number;
+  /** The running deploy job's run and attempt (`GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`): its own attempt's environment deployment never counts, an earlier attempt's does. */
+  current?: { runId: number; runAttempt: number };
   now: string;
 }
 type BaseKind = 'artifact' | 'live' | 'gh-pages' | 'empty' | 'wait';
@@ -61,7 +63,11 @@ interface BaseInfo {
   kind: BaseKind;
   deploymentId?: number;
   runId?: number;
+  /** The attempt of `runId` whose job deployed the base. */
+  runAttempt?: number;
   artifactId?: number;
+  /** The base tarball's artifact name (`github-pages-<attempt>`, or the legacy `github-pages`). */
+  artifactName?: string;
   /** The success status's `created_at`. */
   liveAt?: string;
 }
@@ -114,34 +120,70 @@ export const listDeployments = (
 ): Promise<ApiDeployment[]> =>
   get<ApiDeployment[]>(`${repo}/deployments?environment=github-pages&per_page=100`);
 
+/** The names a run attempt's Pages tarball may have: the attempt's own, and for attempt 1 the legacy one. */
+const pagesNames = (attempt: number): string[] =>
+  attempt === 1 ? [pagesArtifactName(1), 'github-pages'] : [pagesArtifactName(attempt)];
+/** The names a run attempt's full state may have: likewise. */
+const fullStateNames = (runId: number, attempt: number): string[] => [
+  stateArtifactName({ kind: 'full', runId, runAttempt: attempt }),
+  ...(attempt === 1 ? [`${STATE_PREFIX}${runId}`] : []),
+];
+
 /**
- * The deployments that went live, newest first, with the deployer run that made each (from its success status's log URL).
- * GitHub records a `github-pages` deployment for every job naming the environment, whether or not it deployed, so with
- * `filter` a deployment counts only when it is not the running pass's own and, while its run's artifacts cannot have
- * expired, that run uploaded the site (`hasSite`). One older than the retention counts (the live cold start copes).
+ * The deployments that went live, newest first, with the deploy job's run and attempt (from its success status's log
+ * URL: the run id and, for a job, the job id whose `run_attempt` the Jobs API gives; a legacy log URL without a job is
+ * attempt 1). GitHub records a `github-pages` deployment for every job naming the environment, whether or not it
+ * deployed, so with `filter` a deployment counts only when it is not the running attempt's own (an earlier attempt of the
+ * same run counts) and, while its run's artifacts cannot have expired, that attempt uploaded the site (`hasSite`). One
+ * older than the retention counts (the live cold start copes).
  */
 export async function* successfulDeployments(
   get: <T>(url: string) => Promise<T>,
   repo: string,
   deployments: ApiDeployment[],
-  filter?: { currentRunId?: number; nowMs: number; hasSite: (runId: number) => Promise<boolean> },
-): AsyncGenerator<{ id: number; runId: number; liveAt: string }> {
-  const runOf = (url: string | undefined): number | undefined => {
-    const id = /\/actions\/runs\/(\d+)\//.exec(url ?? '')?.[1];
-    return id === undefined ? undefined : Number(id);
+  filter?: {
+    current?: { runId: number; runAttempt: number };
+    nowMs: number;
+    hasSite: (runId: number, runAttempt: number) => Promise<boolean>;
+  },
+): AsyncGenerator<{ id: number; runId: number; runAttempt: number; liveAt: string }> {
+  const refOf = (url: string | undefined): { runId: number; jobId?: number } | undefined => {
+    const m = /\/actions\/runs\/(\d+)\/(?:job\/(\d+))?/.exec(url ?? '');
+    if (m?.[1] === undefined) return undefined;
+    return m[2] === undefined ? { runId: Number(m[1]) } : { runId: Number(m[1]), jobId: Number(m[2]) };
+  };
+  const attempts = new Map<number, Promise<number>>();
+  const attemptOf = (ref: { jobId?: number }): Promise<number> => {
+    const jobId = ref.jobId;
+    if (jobId === undefined) return Promise.resolve(1);
+    let p = attempts.get(jobId);
+    if (p === undefined) {
+      p = get<{ run_attempt: number }>(`${repo}/actions/jobs/${jobId}`).then((j) => j.run_attempt);
+      attempts.set(jobId, p);
+    }
+    return p;
   };
   for (const d of deployments) {
     const statuses = await get<ApiDeploymentStatus[]>(`${repo}/deployments/${d.id}/statuses?per_page=100`);
-    if (filter?.currentRunId !== undefined && statuses.some((s) => runOf(s.log_url) === filter.currentRunId))
-      continue;
+    const { current } = filter ?? {};
+    if (current !== undefined) {
+      let own = false;
+      for (const s of statuses) {
+        const ref = refOf(s.log_url);
+        if (ref?.runId === current.runId && (await attemptOf(ref)) === current.runAttempt) own = true;
+      }
+      if (own) continue;
+    }
     const ok = statuses.find((s) => s.state === 'success');
-    const runId = runOf(ok?.log_url);
-    if (ok === undefined || runId === undefined) continue;
+    const ref = refOf(ok?.log_url);
+    if (ok === undefined || ref === undefined) continue;
+    const runAttempt = await attemptOf(ref);
     if (filter !== undefined) {
       const liveMs = isoOrUndefined(ok.created_at) ?? -Infinity;
-      if (filter.nowMs - liveMs < ARTIFACT_RETENTION_MS && !(await filter.hasSite(runId))) continue;
+      if (filter.nowMs - liveMs < ARTIFACT_RETENTION_MS && !(await filter.hasSite(ref.runId, runAttempt)))
+        continue;
     }
-    yield { id: d.id, runId, liveAt: ok.created_at };
+    yield { id: d.id, runId: ref.runId, runAttempt, liveAt: ok.created_at };
   }
 }
 
@@ -174,21 +216,31 @@ export async function planDeploy(
 
   // (1) the last successful deployment
   const deployments = await listDeployments(get, repo);
-  const hasSite = async (runId: number): Promise<boolean> =>
-    (await runArtifacts(runId, 'github-pages')).length > 0 ||
-    (await runArtifacts(runId, stateArtifactName({ kind: 'full', runId }))).length > 0;
+  /** The first artifact of the run under any of `names` (the attempt's own name first, then the legacy one). */
+  const firstArtifact = async (runId: number, names: string[]): Promise<ApiArtifact | undefined> => {
+    for (const name of names) {
+      const found = (await runArtifacts(runId, name))[0];
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  };
+  const hasSite = async (runId: number, attempt: number): Promise<boolean> =>
+    (await firstArtifact(runId, pagesNames(attempt))) !== undefined ||
+    (await firstArtifact(runId, fullStateNames(runId, attempt))) !== undefined;
   let base: BaseInfo = { kind: 'live' };
   for await (const d of successfulDeployments(get, repo, deployments, {
-    ...(o.currentRunId === undefined ? {} : { currentRunId: o.currentRunId }),
+    ...(o.current === undefined ? {} : { current: o.current }),
     nowMs,
     hasSite,
   })) {
-    base = { kind: 'live', deploymentId: d.id, runId: d.runId, liveAt: d.liveAt };
+    base = { kind: 'live', deploymentId: d.id, runId: d.runId, runAttempt: d.runAttempt, liveAt: d.liveAt };
     break;
   }
   const baseRun = base.runId;
-  const tarball = baseRun === undefined ? undefined : (await runArtifacts(baseRun, 'github-pages'))[0];
-  if (tarball !== undefined) base = { ...base, kind: 'artifact', artifactId: tarball.id };
+  const baseAttempt = base.runAttempt ?? 1;
+  const tarball = baseRun === undefined ? undefined : await firstArtifact(baseRun, pagesNames(baseAttempt));
+  if (tarball !== undefined)
+    base = { ...base, kind: 'artifact', artifactId: tarball.id, artifactName: tarball.name };
   else {
     if (await live('site-state/files.json')) {
       const age = nowMs - (isoOrUndefined(base.liveAt) ?? -Infinity);
@@ -231,11 +283,10 @@ export async function planDeploy(
     }
   };
   let state: SiteState | undefined;
-  const fullName = baseRun === undefined ? undefined : stateArtifactName({ kind: 'full', runId: baseRun });
   const fullArtifact =
-    baseRun === undefined || fullName === undefined ? undefined : (await runArtifacts(baseRun, fullName))[0];
+    baseRun === undefined ? undefined : await firstArtifact(baseRun, fullStateNames(baseRun, baseAttempt));
   if (fullArtifact !== undefined && baseRun !== undefined)
-    state = await loadState(fullArtifact, { kind: 'full', runId: baseRun });
+    state = await loadState(fullArtifact, { kind: 'full', runId: baseRun, runAttempt: baseAttempt });
   let applied = state?.applied;
   if (applied === undefined) {
     const res = await live('site-state/applied.json');
@@ -316,10 +367,17 @@ export async function planDeploy(
   const reportPaths = o.reportWorkflows.map((w) => `.github/workflows/${w}`);
   const deployerPaths = o.deployerWorkflows.map((w) => `.github/workflows/${w}`);
   // a fork's pull_request run can upload artifacts here: only trusted ci runs and the legacy deployer's runs on the default branch count
-  const isDeployerRun = async (a: ApiArtifact): Promise<boolean> => {
+  // and only a state of a later (run, attempt) than the base's: the base's own and older passes' states are behind it
+  const isNewerPass = async (a: ApiArtifact, attempt: number): Promise<ApiRun | undefined> => {
     const id = a.workflow_run?.id;
     const run = id === undefined ? undefined : await getRun(id);
-    if (run === undefined || run.id <= (base.runId ?? 0)) return false;
+    if (run === undefined || attempt > run.run_attempt) return undefined;
+    if (run.id < (base.runId ?? 0) || (run.id === base.runId && attempt <= baseAttempt)) return undefined;
+    return run;
+  };
+  const isDeployerRun = async (a: ApiArtifact, attempt: number): Promise<boolean> => {
+    const run = await isNewerPass(a, attempt);
+    if (run === undefined) return false;
     if (ciPaths.includes(run.path)) return isTrustedRun(run, o.repository, await defaultBranchOf());
     return (
       deployerPaths.includes(run.path) &&
@@ -328,10 +386,20 @@ export async function planDeploy(
       DEPLOYER_EVENTS.includes(run.event)
     );
   };
-  for (const a of listed) {
-    const form = parseStateName(a.name);
-    if (form?.kind !== 'consumed' || form.base !== base.deploymentId) continue;
-    if (!(await isDeployerRun(a))) continue;
+  // the newest pass first: by (run id, attempt), the listing order (newest upload first) breaking ties
+  const candidates = listed
+    .map((a, i) => ({ a, i, form: parseStateName(a.name) }))
+    .flatMap((c) =>
+      c.form?.kind === 'consumed' && c.form.base === base.deploymentId ? [{ ...c, form: c.form }] : [],
+    )
+    .sort(
+      (x, y) =>
+        (y.a.workflow_run?.id ?? 0) - (x.a.workflow_run?.id ?? 0) ||
+        y.form.runAttempt - x.form.runAttempt ||
+        x.i - y.i,
+    );
+  for (const { a, form } of candidates) {
+    if (!(await isDeployerRun(a, form.runAttempt))) continue;
     let found: SiteState | undefined;
     try {
       found = await loadState(a, form);

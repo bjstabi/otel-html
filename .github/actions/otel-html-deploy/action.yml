@@ -44,6 +44,9 @@ inputs:
   keep-deployments:
     description: Successful deployments whose artifacts the prune step keeps.
     default: "3"
+  legacy-deployer-workflow:
+    description: The workflow file of a pre-in-graph deployer whose site states still count.
+    default: pages-deploy.yml
   update-retention-days:
     description: Days the pass keeps the `github-pages` artifact and the site-state artifact it uploads.
     default: "90"
@@ -83,7 +86,6 @@ runs:
       env:
         CMD: ${{ inputs.command }}
         CONFIG: ${{ inputs.config }}
-        WORKFLOW_REF: ${{ github.workflow_ref }}
       run: |
         # Each value becomes one GITHUB_OUTPUT line; a newline would inject another output.
         nl=$'\n'
@@ -91,14 +93,9 @@ runs:
           echo "::error::otel-html deploy: the command and config inputs must be a single line"
           exit 1
         fi
-        # The workflow file that runs this pass (`owner/repo/.github/workflows/<file>@<ref>`): its runs are the ones
-        # whose consumed-only state counts, so `plan` is told its name.
-        wf=${WORKFLOW_REF%%@*}
-        wf=${wf##*/}
         {
           echo "command=${CMD:-otel-html}"
           echo "config=$CONFIG"
-          echo "workflow=$wf"
           echo "dir=$RUNNER_TEMP/otel-html-deploy"
         } >>"$GITHUB_OUTPUT"
     - id: pages
@@ -112,7 +109,8 @@ runs:
       env:
         CMD: ${{ steps.resolve.outputs.command }}
         DIR: ${{ steps.resolve.outputs.dir }}
-        DEPLOYER: ${{ steps.resolve.outputs.workflow }}
+        DEPLOYER: ${{ inputs.legacy-deployer-workflow }}
+        GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         PAGES_URL: ${{ steps.pages.outputs.base_url }}
         CI_WORKFLOWS: ${{ inputs.ci-workflows }}
         REPORT_WORKFLOW: ${{ inputs.report-workflow }}
@@ -143,7 +141,7 @@ runs:
       if: steps.gate.outputs.go == 'true' && steps.plan.outputs.base_kind == 'artifact'
       uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
-        name: github-pages
+        name: ${{ steps.plan.outputs.base_artifact_name }}
         run-id: ${{ steps.plan.outputs.base_run_id }}
         github-token: ${{ inputs.token }}
         path: ${{ steps.resolve.outputs.dir }}/tarball
@@ -270,12 +268,13 @@ runs:
       uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
       with:
         path: ${{ steps.resolve.outputs.dir }}/base
+        name: github-pages-${{ github.run_attempt }}
         retention-days: ${{ inputs.update-retention-days }}
     - name: Upload the site state
       if: steps.gate.outputs.go == 'true' && steps.apply.outputs.deploy == 'true'
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
-        name: otel-html-site-state-${{ github.run_id }}
+        name: otel-html-site-state-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ steps.resolve.outputs.dir }}/base/site-state/
         retention-days: ${{ inputs.update-retention-days }}
         if-no-files-found: error
@@ -285,6 +284,7 @@ runs:
       uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
       with:
         token: ${{ inputs.token }}
+        artifact_name: github-pages-${{ github.run_attempt }}
     # The pass consumed updates without changing the site: the state alone, naming the deployment it was built on.
     - name: Upload the consumed-only site state
       if: >-
@@ -292,7 +292,7 @@ runs:
         && steps.plan.outputs.base_deployment_id != ''
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
-        name: otel-html-site-state-base-${{ steps.plan.outputs.base_deployment_id }}
+        name: otel-html-site-state-base-${{ steps.plan.outputs.base_deployment_id }}-${{ github.run_attempt }}
         path: ${{ steps.resolve.outputs.dir }}/base/site-state/
         retention-days: ${{ inputs.update-retention-days }}
         if-no-files-found: error

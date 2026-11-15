@@ -49,6 +49,8 @@ export interface ApplyOptions {
   config?: string;
   /** This deployer run's id: the `pass` of what it consumes and drops. */
   passRunId: number;
+  /** The attempt of the pass's run; 1 when omitted. */
+  passRunAttempt?: number;
   now: string;
   /** D63: apply every update folder under `updates` into this channel, without `pending.json` entries. */
   trust?: { channel: string };
@@ -548,9 +550,10 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
   if (!changed && consumed === 0)
     return { changed, consumed, deployed: false, previews, pendingJobs, rejected };
   const deployed = changed || noBase;
+  const runAttempt = o.passRunAttempt ?? 1;
   const form: StateForm = deployed
-    ? { kind: 'full', runId: o.passRunId }
-    : { kind: 'consumed', base: pending.base.deploymentId ?? 0 };
+    ? { kind: 'full', runId: o.passRunId, runAttempt }
+    : { kind: 'consumed', base: pending.base.deploymentId ?? 0, runAttempt };
   const oldest = Math.min(...left.map((t) => ms(t) ?? Number.POSITIVE_INFINITY));
   state.applied = {
     ...state.applied,

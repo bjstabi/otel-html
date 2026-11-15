@@ -2,7 +2,7 @@ import { OtelHtmlError } from '../../model/errors.js';
 import type { FileSystem } from '../../writer/ports.js';
 import { listDeployments, successfulDeployments } from './deploy-plan.js';
 import { deleteJson, type Fetch, fetchArtifacts, getJson, messageOf } from './github-api.js';
-import { type AppliedJson, FilesSchema, STATE_PREFIX, stateArtifactName } from './site-state.js';
+import { type AppliedJson, FilesSchema, parsePagesName, parseStateName, STATE_PREFIX } from './site-state.js';
 import { UPDATE_PREFIX } from './update.js';
 
 const API_TIMEOUT_MS = 15_000;
@@ -26,7 +26,7 @@ export async function pruneArtifacts(
     applied: AppliedJson;
     token?: string;
     now: string;
-    currentRunId?: number;
+    current?: { runId: number; runAttempt: number };
   },
   fetchFn: Fetch,
   warn: (m: string) => void,
@@ -44,17 +44,19 @@ export async function pruneArtifacts(
     fetchFn,
   );
   // a deployment counts only when its run uploaded the site (every job naming the environment has a deployment)
-  const siteRuns = new Set<number>();
+  const siteRuns = new Set<string>();
   for (const a of listed) {
     if (Date.parse(a.expires_at) <= nowMs || a.workflow_run?.id === undefined) continue;
-    if (a.name === 'github-pages' || a.name === stateArtifactName({ kind: 'full', runId: a.workflow_run.id }))
-      siteRuns.add(a.workflow_run.id);
+    const form = parseStateName(a.name);
+    const attempt =
+      form?.kind === 'full' && form.runId === a.workflow_run.id ? form.runAttempt : parsePagesName(a.name);
+    if (attempt !== undefined) siteRuns.add(`${a.workflow_run.id}/${attempt}`);
   }
   const kept: number[] = [];
   for await (const d of successfulDeployments(get, repo, await listDeployments(get, repo), {
-    ...(o.currentRunId === undefined ? {} : { currentRunId: o.currentRunId }),
+    ...(o.current === undefined ? {} : { current: o.current }),
     nowMs,
-    hasSite: async (run) => siteRuns.has(run),
+    hasSite: async (run, attempt) => siteRuns.has(`${run}/${attempt}`),
   })) {
     kept.push(d.runId);
     if (kept.length >= o.keep) break;
@@ -68,7 +70,7 @@ export async function pruneArtifacts(
     if (a.name.startsWith(UPDATE_PREFIX)) {
       const entry = o.applied.updates[String(a.id)];
       if (entry !== undefined && entry.pass <= oldest) doomed.push(a.id);
-    } else if (a.name === 'github-pages' || a.name.startsWith(STATE_PREFIX)) {
+    } else if (parsePagesName(a.name) !== undefined || a.name.startsWith(STATE_PREFIX)) {
       const run = a.workflow_run?.id;
       if (run !== undefined && run < oldest && !kept.includes(run)) doomed.push(a.id);
     }

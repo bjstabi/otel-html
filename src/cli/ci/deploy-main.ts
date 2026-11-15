@@ -38,11 +38,21 @@ export interface DeployApplyOptions {
   prRetention: number;
   config?: string;
   passRunId: number;
+  /** The attempt of the pass's run (`GITHUB_RUN_ATTEMPT`); 1 when omitted. */
+  passRunAttempt?: number;
   trust?: { channel: string };
   now: string;
 }
 
 const apiUrlOf = (io: CliIo): string => envVar(io, 'GITHUB_API_URL') ?? 'https://api.github.com';
+
+/** The running job's run and attempt from the environment; undefined outside Actions. A missing attempt is 1. */
+const currentPassOf = (io: Pick<CliIo, 'env'>): { runId: number; runAttempt: number } | undefined => {
+  const runId = Number(envVar(io, 'GITHUB_RUN_ID'));
+  if (!Number.isInteger(runId) || runId <= 0) return undefined;
+  const attempt = Number(envVar(io, 'GITHUB_RUN_ATTEMPT') ?? 1);
+  return { runId, runAttempt: Number.isInteger(attempt) && attempt > 0 ? attempt : 1 };
+};
 
 /** `ci deploy plan`: writes `pending.json` and the chosen state, prints the summary and sets the step outputs. */
 export async function runDeployPlan(
@@ -51,12 +61,12 @@ export async function runDeployPlan(
   deps: Pick<WriterDeps, 'fs'>,
   fetchFn: Fetch = fetch,
 ): Promise<PendingPlan> {
-  const runId = Number(envVar(io, 'GITHUB_RUN_ID'));
+  const current = currentPassOf(io);
   const plan = await planDeploy(
     {
       ...opts,
       apiUrl: apiUrlOf(io),
-      ...(Number.isInteger(runId) && runId > 0 ? { currentRunId: runId } : {}),
+      ...(current === undefined ? {} : { current }),
     },
     deps,
     envVar(io, 'GITHUB_TOKEN'),
@@ -65,7 +75,10 @@ export async function runDeployPlan(
   await deps.fs.mkdirp(opts.out.slice(0, Math.max(0, opts.out.lastIndexOf('/'))) || '.');
   await deps.fs.writeTextAtomic(opts.out, `${JSON.stringify(plan)}\n`);
   const accepted = plan.updates.filter((u) => u.accepted);
-  const base = plan.base.runId === undefined ? plan.base.kind : `${plan.base.kind} (run ${plan.base.runId})`;
+  const base =
+    plan.base.runId === undefined
+      ? plan.base.kind
+      : `${plan.base.kind} (run ${plan.base.runId} attempt ${plan.base.runAttempt ?? 1})`;
   say(
     io,
     `otel-html deploy plan: base ${base}; ${accepted.length} of ${plan.updates.length} updates accepted; ${plan.deletionsDue} deletions due`,
@@ -76,7 +89,9 @@ export async function runDeployPlan(
     pending: String(plan.updates.length > 0 || plan.deletionsDue > 0),
     base_kind: plan.base.kind,
     base_run_id: String(plan.base.runId ?? ''),
+    base_run_attempt: String(plan.base.runAttempt ?? ''),
     base_artifact_id: String(plan.base.artifactId ?? ''),
+    base_artifact_name: plan.base.artifactName ?? '',
     base_deployment_id: String(plan.base.deploymentId ?? ''),
     wait: String(plan.base.kind === 'wait'),
   });
@@ -186,10 +201,10 @@ export async function runDeployPrune(
     say(io, `::warning::otel-html deploy prune: ${m}`),
   );
   const token = envVar(io, 'GITHUB_TOKEN');
-  const runId = Number(envVar(io, 'GITHUB_RUN_ID'));
+  const current = currentPassOf(io);
   const { deleted } = await pruneArtifacts(
     {
-      ...(Number.isInteger(runId) && runId > 0 ? { currentRunId: runId } : {}),
+      ...(current === undefined ? {} : { current }),
       apiUrl: apiUrlOf(io),
       repository: opts.repository,
       keep: opts.keep,
