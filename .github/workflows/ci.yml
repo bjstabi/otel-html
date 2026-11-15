@@ -91,6 +91,12 @@ jobs:
             .mise/task-cache
           key: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ github.run_id }}
           restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}-
+      # The generated scaling reports, named by a hash of the writer: a hit is every report the job reads (per job: a unit shard saves only the shapes it read).
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
+        with:
+          path: .cache/scaling-reports
+          key: scaling-reports-${{ runner.os }}-${{ github.job }}-${{ hashFiles('pnpm-lock.yaml', 'src/**', 'test-support/**') }}
+          restore-keys: scaling-reports-${{ runner.os }}-${{ github.job }}-
       # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
       - name: Build otel-html
         shell: bash
@@ -142,6 +148,12 @@ jobs:
             .mise/task-cache
           key: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-${{ github.run_id }}
           restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-
+      # The generated scaling reports, named by a hash of the writer: a hit is every report the job reads (per job: a unit shard saves only the shapes it read).
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
+        with:
+          path: .cache/scaling-reports
+          key: scaling-reports-${{ runner.os }}-${{ github.job }}-${{ hashFiles('pnpm-lock.yaml', 'src/**', 'test-support/**') }}
+          restore-keys: scaling-reports-${{ runner.os }}-${{ github.job }}-
       # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
       - name: Build otel-html
         shell: bash
@@ -194,6 +206,12 @@ jobs:
             ~/AppData/Local/mise/state
           key: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-${{ github.run_id }}
           restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-
+      # The generated scaling reports, named by a hash of the writer: a hit is every report the job reads (per job: a unit shard saves only the shapes it read).
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
+        with:
+          path: .cache/scaling-reports
+          key: scaling-reports-${{ runner.os }}-${{ github.job }}-${{ hashFiles('pnpm-lock.yaml', 'src/**', 'test-support/**') }}
+          restore-keys: scaling-reports-${{ runner.os }}-${{ github.job }}-
       # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
       - name: Build otel-html
         shell: bash

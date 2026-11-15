@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, matchesGlob, relative, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { moveInto, PREBUILT_ENV } from '../../test-support/scaling/generator.js';
+import { BASE, CROSS, moveInto, PREBUILT_ENV, shapeKey } from '../../test-support/scaling/generator.js';
 import { setup } from '../../test-support/scaling/global-setup.js';
 import {
   CACHE_OFF_ENV,
@@ -11,6 +11,7 @@ import {
   REPORT_CACHE_SOURCES,
   reportCacheDir,
   reportCacheKey,
+  scalingShapes,
 } from '../../test-support/scaling/report-cache.js';
 
 const ROOT = resolve(import.meta.dirname, '../..');
@@ -153,5 +154,19 @@ describe('the scaling report cache', () => {
     expect((await readdir(cacheRoot)).filter((n) => n.includes('.part-'))).toEqual([]);
     expect(readFileSync(join(target, 'data', 'manifest.js'), 'utf8')).toBe('m');
     expect(existsSync(from)).toBe(false);
+  });
+
+  it('scalingShapes holds the class shapes plus the unit shapes, each once', () => {
+    const keys = scalingShapes().map(shapeKey);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        shapeKey(BASE),
+        shapeKey({ ...BASE, spacing: 'sparse' }),
+        shapeKey({ ...BASE, outside: 8, inside: 2 }),
+        shapeKey(CROSS),
+        shapeKey({ ...CROSS, spacing: 'sparse' }),
+      ]),
+    );
   });
 });

@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { globSync, readFileSync } from 'node:fs';
 import { readdir, readFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { type Axis, CATALOGUE } from '../../src/viewer/data/catalogue.js';
+import { BASE, CROSS, isMerged, type Shape, shapeKey, stepsOf } from './generator.js';
 
 /**
  * What the generated scaling reports depend on, as globs relative to the repo root: the lockfile, the writer and what it
@@ -93,4 +95,37 @@ export async function sweepStale(dir: string): Promise<void> {
       if (m !== null && !alive(Number(m[1]))) await rm(join(dir, name), { recursive: true, force: true });
     }
   }
+}
+
+const AXES: readonly Axis[] = ['retention', 'density', 'window'];
+
+/**
+ * Every shape the scaling measurement and the unit tests read, each once (by `shapeKey`): per catalogue entry and axis
+ * the steps `test:scaling` measures (`stepsOf` as `measure.ts` calls it; the window axis only for entries with a
+ * window), the compacted retention and window steps and the short-window steps `classes.test.ts` builds, `CROSS` in both
+ * spacings, and the unit
+ * tests' `BASE`, sparse `BASE` and the 8-partition one.
+ */
+export function scalingShapes(): Shape[] {
+  const byKey = new Map<string, Shape>();
+  const add = (shape: Shape): void => {
+    byKey.set(shapeKey(shape), shape);
+  };
+  for (const entry of CATALOGUE)
+    for (const axis of AXES) {
+      if (axis === 'window' && !entry.window) continue;
+      for (const shape of stepsOf(axis, entry.spacing, isMerged(entry))) add(shape);
+      // the compacted cases of classes.test.ts: the `.short` entries on retention and window
+      if (axis !== 'density' && entry.id.endsWith('.short'))
+        for (const shape of stepsOf(axis, entry.spacing, false, true)) add(shape);
+    }
+  for (const spacing of ['dense', 'sparse'] as const) {
+    add({ ...CROSS, spacing });
+    // classes.test.ts: a compacted report with one inside partition (a window under LONG_WINDOW_NS), 3, 5 and 9 partitions
+    for (const outside of [3, 5, 9]) add({ outside, inside: 1, rowGroups: 2, spacing, compacted: true });
+  }
+  add(BASE);
+  add({ ...BASE, spacing: 'sparse' });
+  add({ ...BASE, outside: 8, inside: 2 });
+  return [...byKey.values()];
 }

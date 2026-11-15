@@ -1030,10 +1030,21 @@ the page fits, the one-engine table, and per page and per shape (rolling = test-
 --dir dist/predict-queries --after 4
 
 
+- Depends: scaling:reports
+
 - **Usage:** `predict:queries [args]…`
 
 ### Arguments
 - **`[args]…`**
+
+## `scaling:reports`
+
+- **Usage:** `scaling:reports`
+
+Build the scaling reports into .cache/scaling-reports/&lt;key> (skipped while up to date)
+&lt;key> hashes the files the generator imports (test-support/scaling/report-cache.ts), so a report is never older than
+the writer; test:scaling and predict:queries depend on it, and the unit tests read it through the scaling global setup
+(building a missing shape into it). Older key folders are removed. OTEL_HTML_SCALING_CACHE=off bypasses the cache.
 
 ## `setup`
 
@@ -1138,7 +1149,7 @@ the Traces and Logs landings with e2e/load.spec.ts.
 
 ## `test:scaling`
 
-- Depends: engine:assets
+- Depends: engine:assets, scaling:reports
 
 - **Usage:** `test:scaling`
 
@@ -1147,7 +1158,7 @@ Builds the reports of test-support/scaling/generator.ts (retention, density and 
 runs each entry of src/viewer/data/catalogue.ts cold through the counting engine and asserts the class it declares
 (test/scaling/classes-&lt;axis>-&lt;spacing>.test.ts: one file per axis and spacing plus the cross shape, so vitest runs them in
 parallel workers; test/scaling/classes.test.ts holds the cheap declared-rules tests and checks the split covers every entry
-and axis). About 50 seconds on 4 cores; the workers share the generated reports and the cold runs through a folder in the temp directory; cached by the content of its inputs, so an unchanged tree replays it.
+and axis). About 50 seconds on 4 cores; the workers share the generated reports the reports come from the scaling:reports cache and the cold runs through a folder in the temp directory (per run); cached by the content of its inputs, so an unchanged tree replays it.
 `check` depends on it and CI's `check` job runs it; the unit tasks skip the measurement (OTEL_HTML_SCALING unset).
 OTEL_HTML_SCALING_PRINT=1 prints the entry x axis x class table to stderr (only on an uncached run).
 

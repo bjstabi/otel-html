@@ -254,14 +254,28 @@ cache = { enabled = true, env = ["CI", "OTEL_HTML_LOAD", "OTEL_HTML_BINARY"] }
 env = { OTEL_HTML_PERF_PASS = "0" }
 run = "pnpm exec vitest run"
 
+[tasks."scaling:reports"]
+description = """Build the scaling reports into .cache/scaling-reports/<key> (skipped while up to date)
+<key> hashes the files the generator imports (test-support/scaling/report-cache.ts), so a report is never older than
+the writer; test:scaling and predict:queries depend on it, and the unit tests read it through the scaling global setup
+(building a missing shape into it). Older key folders are removed. OTEL_HTML_SCALING_CACHE=off bypasses the cache."""
+sources = [
+  "@group:deps",
+  "src/**",
+  "test-support/**",
+  "scripts/scaling-reports.ts",
+]
+outputs = [".cache/scaling-reports/**"]
+run = "bun scripts/scaling-reports.ts"
+
 [tasks."test:scaling"]
-depends = ["engine:assets"]
+depends = ["engine:assets", "scaling:reports"]
 description = """The scaling measurement: every catalogue entry cold on the generated reports, classified and compared with the declared classes
 Builds the reports of test-support/scaling/generator.ts (retention, density and window at 2, 4 and 8, dense and sparse),
 runs each entry of src/viewer/data/catalogue.ts cold through the counting engine and asserts the class it declares
 (test/scaling/classes-<axis>-<spacing>.test.ts: one file per axis and spacing plus the cross shape, so vitest runs them in
 parallel workers; test/scaling/classes.test.ts holds the cheap declared-rules tests and checks the split covers every entry
-and axis). About 50 seconds on 4 cores; the workers share the generated reports and the cold runs through a folder in the temp directory; cached by the content of its inputs, so an unchanged tree replays it.
+and axis). About 50 seconds on 4 cores; the workers share the generated reports the reports come from the scaling:reports cache and the cold runs through a folder in the temp directory (per run); cached by the content of its inputs, so an unchanged tree replays it.
 `check` depends on it and CI's `check` job runs it; the unit tasks skip the measurement (OTEL_HTML_SCALING unset).
 OTEL_HTML_SCALING_PRINT=1 prints the entry x axis x class table to stderr (only on an uncached run)."""
 sources = [
@@ -730,6 +744,7 @@ bun scripts/bench-metrics.ts "$@"
 """
 
 [tasks."predict:queries"]
+depends = ["scaling:reports"]
 description = """Print the requests, megabytes and modelled milliseconds the viewer's pages cost on named report shapes
 An estimate: it prints the prediction and asserts nothing about it, but exits non-zero when the one-engine check misses
 (the fit without the cross against a page rendered whole, within 25 % or 2 requests). Measures every catalogue entry cold

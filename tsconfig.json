@@ -16,6 +16,7 @@
     "test/viewer-data/**",
     "test-support/scripted-loader.ts",
     "test-support/scaling/**",
+    "scripts/scaling-reports.ts",
     "test/scaling/**"
   ]
 }
