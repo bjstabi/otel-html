@@ -165,6 +165,7 @@
     "test/semconv/semconv.test.ts": 0.1,
     "test/semconv/severity.test.ts": 0.1,
     "test/severity-tokens.test.ts": 0.1,
+    "test/test-support/duckdb-node.test.ts": 1.9,
     "test/test-support/otel-sdk-clock.test.ts": 0.2,
     "test/test-support/otel-sdk.test.ts": 0.9,
     "test/test-support/otlp-builders.test.ts": 1.3,
