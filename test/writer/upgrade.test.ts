@@ -191,6 +191,18 @@ describe('upgradeReport', () => {
   );
 
   test.skipIf(process.platform === 'win32')(
+    'a site base outside the report is not checked: it is deployed beside the report, not on this disk',
+    async () => {
+      const dir = await formatFourReport();
+      const w = createTestWriter();
+      await upgradeReport({ ...w.deps, fs: createNodeFileSystem() }, dir, {
+        assetsBase: '../../assets/9.9.9/',
+      });
+      expect(w.logs.filter((l) => l.level === 'warn')).toEqual([]);
+    },
+  );
+
+  test.skipIf(process.platform === 'win32')(
     'the no-base hint of a shared report with a linked assets folder does not offer a copy into assets/',
     async () => {
       const dir = await formatFourReport();

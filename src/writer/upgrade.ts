@@ -132,8 +132,12 @@ async function assertSharedBaseNamed(
   });
 }
 
-/** A base that resolves on this disk but lacks this version's viewer entry loads nothing; a site base may be deployed later, so only a warning. */
+/**
+ * Warns when a base inside the report (reached through its `assets/` link, say) holds no viewer entry: the report
+ * would not open. A base outside the report (`../…`) is a site's, deployed beside the report, so it is not checked.
+ */
 async function warnIfBaseLacksViewer(deps: WriterDeps, dir: string, assetsBase: string): Promise<void> {
+  if (assetsBase.startsWith('../')) return;
   const entry = deps.viewerAssets.entry().script;
   const name = entry.slice(entry.lastIndexOf('/') + 1);
   const base = assetsBase.endsWith('/') ? assetsBase : `${assetsBase}/`;
