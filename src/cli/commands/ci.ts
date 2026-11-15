@@ -32,6 +32,7 @@ interface ReportFlags {
   out: string;
   config?: string;
   summary: boolean;
+  excludeJobs?: string;
 }
 
 const parseRunId = (text: string): number => parsePositive('--run-id', text);
@@ -118,6 +119,10 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .requiredOption('--out <dir>', 'merged report folder')
     .option('--config <file>', 'config file for the written reports')
     .option('--no-summary', 'do not write the job summary (`ci link` writes the one with the report link)')
+    .option(
+      '--exclude-jobs <prefix>',
+      "report the run as finished without the jobs whose name starts with this prefix (a report built from one of the run's own jobs)",
+    )
     .action(async (flags: ReportFlags) => {
       const opts = {
         runId: parseRunId(flags.runId),
@@ -126,6 +131,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
         out: flags.out,
         stepSummary: flags.summary,
         ...(flags.config === undefined ? {} : { config: flags.config }),
+        ...(flags.excludeJobs === undefined ? {} : { excludeJobs: flags.excludeJobs }),
       };
       try {
         await runReport(opts, io, await resolveDeps(deps));

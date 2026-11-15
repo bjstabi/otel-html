@@ -6,6 +6,7 @@ import { createReportWith } from '../../api/report.js';
 import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
 import {
+  type ApiJob,
   type ApiRun,
   envVar,
   type Fetch,
@@ -34,6 +35,8 @@ export type ReportOptions = {
   token?: string;
   /** Append the summary table to $GITHUB_STEP_SUMMARY (default true); off when `ci link` writes the linked one. */
   stepSummary?: boolean;
+  /** Report the run as finished without the jobs whose name starts with this prefix (the report's own jobs). */
+  excludeJobs?: string;
 };
 
 const LOG_CONCURRENCY = 4;
@@ -77,6 +80,37 @@ async function discoverArtifacts(dir: string): Promise<Artifact[]> {
 }
 
 /**
+ * The run as it will look once the jobs named by `excludePrefix` (the ones doing this report) are gone: those jobs
+ * dropped and, when the run is not yet `completed`, the run completed at its latest remaining job's end with the
+ * conclusion GitHub gives it (`failure` over `cancelled` over `success`; a skipped job counts as success). The caller
+ * runs after every other job finished, so no remaining job is unfinished.
+ */
+export function finishedView(
+  run: ApiRun,
+  jobs: readonly ApiJob[],
+  excludePrefix: string,
+): { run: ApiRun; jobs: ApiJob[] } {
+  const kept = excludePrefix === '' ? [...jobs] : jobs.filter((j) => !j.name.startsWith(excludePrefix));
+  if (run.status === 'completed') return { run, jobs: kept };
+  const conclusions = kept.map((j) => j.conclusion);
+  const conclusion = conclusions.some((c) => c === 'failure' || c === 'timed_out')
+    ? 'failure'
+    : conclusions.includes('cancelled')
+      ? 'cancelled'
+      : 'success';
+  let updated_at = run.updated_at;
+  let latest = Number.NEGATIVE_INFINITY;
+  for (const j of kept) {
+    const end = j.completed_at === null ? Number.NaN : Date.parse(j.completed_at);
+    if (end > latest) {
+      latest = end;
+      updated_at = j.completed_at ?? updated_at;
+    }
+  }
+  return { run: { ...run, status: 'completed', conclusion, updated_at }, jobs: kept };
+}
+
+/**
  * Publisher: after the `ci` workflow completes, builds the workflow-trace report from the Actions API, merges it with
  * every job's report artifact and prints a per-job summary. Reads only public run, job, step and log fields. Throws
  * when the run itself cannot be read or merged.
@@ -93,7 +127,7 @@ export async function runReport(
   const token = opts.token ?? env('GITHUB_TOKEN');
   const config = opts.config === undefined ? {} : { config: opts.config };
 
-  const run = (
+  const fetched = (
     await getJson<ApiRun>(
       `${API}/repos/${opts.repository}/actions/runs/${opts.runId}`,
       token,
@@ -101,11 +135,20 @@ export async function runReport(
       fetchFn,
     )
   ).body;
-  const jobs = await fetchJobs(
-    { apiUrl: API, repository: opts.repository, runId: run.id, runAttempt: run.run_attempt },
-    token,
-    API_TIMEOUT_MS,
-    fetchFn,
+  const { run, jobs } = finishedView(
+    fetched,
+    await fetchJobs(
+      {
+        apiUrl: API,
+        repository: opts.repository,
+        runId: fetched.id,
+        runAttempt: fetched.run_attempt,
+      },
+      token,
+      API_TIMEOUT_MS,
+      fetchFn,
+    ),
+    opts.excludeJobs ?? '',
   );
   const artifacts = await discoverArtifacts(opts.artifacts).catch((e: unknown) => {
     warn(`cannot read ${opts.artifacts}: ${messageOf(e)}`);

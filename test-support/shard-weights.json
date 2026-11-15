@@ -28,6 +28,7 @@
     "test/cli/ci/publish.test.ts": 0.1,
     "test/cli/ci/pusher-main.test.ts": 0.5,
     "test/cli/ci/pusher.test.ts": 1,
+    "test/cli/ci/report-main.test.ts": 0.3,
     "test/cli/ci/run-report.test.ts": 0.4,
     "test/cli/ci/site-io.test.ts": 0.2,
     "test/cli/ci/site-main.test.ts": 4,
