@@ -1,6 +1,7 @@
 // Builds the scaling reports into .cache/scaling-reports/<key> (test-support/scaling/report-cache.ts): every shape of
 // `scalingShapes()` that is not there yet, in child processes of this script, then removes the folders of other keys.
 //   bun scripts/scaling-reports.ts [--jobs N]        (N children, at most the cores; default 6)
+//   bun scripts/scaling-reports.ts --print-key       (prints the content key and stops: CI names its caches by it)
 //   bun scripts/scaling-reports.ts --part i/N        (what a child does: shapes i, i+N, i+2N, ... of the missing ones)
 // The children share the folder safely: a shape is built by whoever takes its `.lock` folder and moved into place with
 // one rename (see `ensurePrebuilt`), so overlapping runs of this script do not build a shape twice or read half of one.
@@ -12,6 +13,7 @@ import { join } from 'node:path';
 import { buildScalingReport, PREBUILT_ENV, type Shape, shapeKey } from '../test-support/scaling/generator.js';
 import {
   reportCacheDir,
+  reportCacheKey,
   reportCacheRoot,
   scalingShapes,
   sweepStale,
@@ -22,6 +24,11 @@ const flag = (name: string): string | undefined => {
   const i = args.indexOf(name);
   return i < 0 ? undefined : args[i + 1];
 };
+
+if (args.includes('--print-key')) {
+  process.stdout.write(`${reportCacheKey()}\n`);
+  process.exit(0);
+}
 
 const dir = reportCacheDir();
 const shapes = scalingShapes();

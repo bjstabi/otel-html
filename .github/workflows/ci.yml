@@ -91,13 +91,16 @@ jobs:
             .mise/task-cache
           key: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ github.run_id }}
           restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}-
-      # The generated scaling reports, named by a hash of the writer and the OS. Only this job (it builds the full set
-      # in scaling:reports, which also removes the folders of other keys) saves; `unit` only restores it.
+      # The generated scaling reports, named by the generator's own content key (scripts/scaling-reports.ts --print-key), so
+      # a save happens only when the reports change. Only this job (it builds the full set in scaling:reports, which also
+      # removes the folders of other keys) saves; `unit` only restores it.
+      - id: scaling-key
+        shell: bash
+        run: echo "key=$(bun scripts/scaling-reports.ts --print-key)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
         with:
           path: .cache/scaling-reports
-          key: scaling-reports-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'src/**', 'test-support/**') }}
-          restore-keys: scaling-reports-${{ runner.os }}-
+          key: scaling-reports-${{ runner.os }}-${{ steps.scaling-key.outputs.key }}
       # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
       - name: Build otel-html
         shell: bash
@@ -156,14 +159,15 @@ jobs:
             .mise/task-cache
           key: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-${{ github.run_id }}
           restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-
-      # The reports `check` saved (a missing shape is built in the job). Restore only: a shard holds a partial set and the
-      # two shards share the key. restore-keys takes the latest save even when this exact key is new: the folder inside
-      # is named by the generator's own content key, so it is a hit whenever the generator did not change.
+      # The reports `check` saved under the generator's content key (a missing shape is built in the job). Restore only: a
+      # shard holds a partial set and the two shards share the key.
+      - id: scaling-key
+        shell: bash
+        run: echo "key=$(bun scripts/scaling-reports.ts --print-key)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
         with:
           path: .cache/scaling-reports
-          key: scaling-reports-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'src/**', 'test-support/**') }}
-          restore-keys: scaling-reports-${{ runner.os }}-
+          key: scaling-reports-${{ runner.os }}-${{ steps.scaling-key.outputs.key }}
       # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
       - name: Build otel-html
         shell: bash
@@ -215,7 +219,7 @@ jobs:
       # The @perf budgets scale by (calibration ÷ this), never below 1: GitHub's runners come as AMD EPYC 9V45
       # (~85 ms, budgets as written) and EPYC 7763 (~150 ms, about 1.5×). See test-support/calibrate.ts.
       OTEL_HTML_PERF_REFERENCE_MS: "100"
-      # Windows needs neither the git hooks, nor the developer tools; bun stays (engine:assets and scaling:reports run under it).
+      # Windows needs neither the git hooks, nor the developer tools; bun stays (engine:assets and the scaling key run under it).
       MISE_DISABLE_TOOLS: claude,watchexec,lefthook,actionlint,shellcheck
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -231,18 +235,15 @@ jobs:
             ~/AppData/Local/mise/state
           key: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-${{ github.run_id }}
           restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-
-      # Windows bytes may differ from Linux's, so this job keeps its own full set: built on a miss, saved by the first
-      # shard to finish (the other shard's save finds the key taken).
+      # Windows bytes may differ from Linux's, so this job keeps its own reports, one cache per shard: the weighted split is
+      # deterministic, so what a shard built is what its next run reads. No up-front build: the tests build the shapes they read.
+      - id: scaling-key
+        shell: bash
+        run: echo "key=$(bun scripts/scaling-reports.ts --print-key)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
-        id: scaling-reports
         with:
           path: .cache/scaling-reports
-          key: scaling-reports-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'src/**', 'test-support/**') }}
-          restore-keys: scaling-reports-${{ runner.os }}-
-      # A no-op when the restored folder already matches the generator; otherwise builds the full set and drops other keys.
-      - if: steps.scaling-reports.outputs.cache-hit != 'true'
-        shell: bash
-        run: mise run scaling:reports
+          key: scaling-reports-${{ runner.os }}-${{ steps.scaling-key.outputs.key }}-${{ matrix.shard }}of2
       # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
       - name: Build otel-html
         shell: bash
@@ -386,7 +387,9 @@ jobs:
           restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-
       # The two large scale reports (e2e/build-scale-fixtures.ts), named by a hash of what builds them. mise stays the
       # judge: the freshness of `e2e:fixtures:scale:data` (restored with the state dir above) reruns it when dist/ differs.
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
+      # Every event restores; only a push to main saves, so pull requests do not add ~1 GB entries each.
+      - id: scale-reports
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
         with:
           path: e2e/.reports-scale
           key: e2e-reports-scale-${{ hashFiles('pnpm-lock.yaml', 'src/**', 'tsdown.config.ts', 'tsconfig.base.json', 'tsconfig.json', 'e2e/build-scale-fixtures.ts', 'e2e/fixture.ts', 'test-support/fixture-ids.ts', 'test-support/otlp-builders.ts', 'test-support/scale-logs.ts', 'test-support/scale-metrics.ts') }}
@@ -409,6 +412,12 @@ jobs:
       - run: mise run --skip-deps e2e:fixtures
       # `--pass perf`: the chromium `-perf-file` and `-perf-http` projects, one test at a time; `--shard i/2` is Playwright's, by count.
       - run: mise run --skip-deps test:e2e --browser chromium --pass perf --shard ${{ matrix.shard }}/2
+      # The reports are built by the steps above when the restore missed; main alone saves them.
+      - if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.scale-reports.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
+        with:
+          path: e2e/.reports-scale
+          key: e2e-reports-scale-${{ hashFiles('pnpm-lock.yaml', 'src/**', 'tsdown.config.ts', 'tsconfig.base.json', 'tsconfig.json', 'e2e/build-scale-fixtures.ts', 'e2e/fixture.ts', 'test-support/fixture-ids.ts', 'test-support/otlp-builders.ts', 'test-support/scale-logs.ts', 'test-support/scale-metrics.ts') }}
       # The reporter is `list`, so failure traces and screenshots land in test-results/.
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
