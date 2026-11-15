@@ -3,7 +3,7 @@
 **Status: approved 2026-11-15.** Written 2026-11-15 after the CI jobs slowed down again. The maintainer asked for every
 test and check to be investigated for speed, not only the longest job, because the same tasks run locally for
 verification. Four read-only investigations (Sonnet 5.5) measured unit, scaling and viewer tests, e2e, and the check
-and CI pipeline; their reports are the evidence below. The maintainer approved the four PRs of §4, decided the points of
+and CI pipeline; their reports are the evidence below. The maintainer approved the work of §4 as one PR (four phases), decided the points of
 §5, and chose the **unattended** process (`docs/agents/process-unattended.md`).
 
 ## 1. Why
@@ -30,7 +30,7 @@ Static checks (lint, `tsc` per project under 1 s, knip) are already fast; they a
 ## 2. Goals
 
 1. The same tests assert the same things, faster. No assertion is dropped to save time (the one exception is a test
-   that only waited, §4 PR 1).
+   that only waited, §4 phase 1).
 2. Fixtures that do not depend on the test are built once and reused: per run where they are cheap, across runs (a
    mise-cached task with declared outputs) where they are not.
 3. Shards balance on measured weights, and a test fails when a test file has no weight or its weight is stale.
@@ -48,9 +48,9 @@ Static checks (lint, `tsc` per project under 1 s, knip) are already fast; they a
 - Caching belongs in local tools first (mise task cache, declared outputs); CI caches the same outputs only where a
   local cache cannot reach.
 
-## 4. The work, as four PRs
+## 4. The work: one PR, four phases
 
-### PR 1: quick wins
+### Phase 1: quick wins
 - Refresh `test-support/shard-weights.json` (`mise run shard-weights`); a unit test fails when a test file matched by a
   sharded project has no weight. (The 2x drift check needs CI timings, so it lives in `shard-weights` as a warning, not in
   a unit test.)
@@ -63,7 +63,7 @@ Static checks (lint, `tsc` per project under 1 s, knip) are already fast; they a
 - Pre-push runs `check:static` and the unit tests changed since the merge base with `origin/main`; AGENTS.md's loop
   table says so. `verify` before a PR stays the rule.
 
-### PR 2: build fixtures once
+### Phase 2: build fixtures once
 - A `scaling:reports` mise task builds the scaling reports into `.cache/scaling-reports/` (declared outputs), keyed by
   the generator's sources. `test:scaling`, the unit tests that read these shapes, and `predict:queries` read from it;
   CI caches the directory. The determinism test still builds fresh.
@@ -71,24 +71,24 @@ Static checks (lint, `tsc` per project under 1 s, knip) are already fast; they a
 - `rollup-equivalence.test.ts` reuses its opened layouts, with a fresh data source per case.
 - Host tests (`host/server`, `engine-limits`, `engine-policy`) share one host per `describe` where the tests only read.
 
-### PR 3: a DuckDB instance pool
+### Phase 3: a DuckDB instance pool
 - One DuckDB-WASM instance per test worker, reset between uses, with registered file names made unique per open so no
   state keyed by file name survives a reset. Prototype: rollup-equivalence 46.8 → 15.1 s, node project 98 → 68 s at 4
   workers.
 
-### PR 4: CI structure (workflow files; approved)
+### Phase 4: CI structure (workflow files; approved)
 - Coverage is collected inside the unit jobs on main and merged, instead of a serial rerun (or the coverage job is
   sharded, if merging proves unreliable).
 - e2e-perf caches `e2e/.reports-scale`.
 - Fewer jobs per run: fold `build` into `check`; fewer binary legs on pull requests.
 - The windows job skips `lefthook install` and tools it does not use.
 
-Each PR measures before and after on the jobs and local tasks it touches and records the numbers in its body.
+Each phase measures before and after on the jobs and local tasks it touches; the PR body records all the numbers.
 
 ## 5. Decisions (maintainer, 2026-11-15)
 
 1. Pre-push hook: static checks plus changed tests. Yes.
-2. Merged scaling shapes: keep them; the PR 2 cache removes most of their cost. Trim later only if `test:scaling`
+2. Merged scaling shapes: keep them; the phase 2 cache removes most of their cost. Trim later only if `test:scaling`
    is still slow.
 3. #286 (page reuse in e2e): deferred.
 
