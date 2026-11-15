@@ -904,7 +904,25 @@ lint, typecheck and knip (the part of `check` without tests)
 
 - **Usage:** `coverage`
 
-Unit coverage from the suite without @perf, per vitest project, into coverage/unit-&lt;project>/ (lcov, summary); never cached
+Unit coverage from the suite without @perf, per vitest project, into coverage/unit-&lt;project>/ (lcov, summary); never cached. Local use; CI runs coverage:shard in the unit shards and coverage:merge
+
+## `coverage:merge`
+
+- **Usage:** `coverage:merge`
+
+Merge the .vitest-reports/&lt;project> blobs into coverage/unit-&lt;project>/ (lcov, summary), as `coverage` writes them, and print the summary
+
+## `coverage:shard`
+
+One unit shard (`<i/n>`) with coverage into .vitest-reports/<project>/blob-<i>-<n>.json; merge them with coverage:merge
+
+
+- Depends: engine:assets
+
+- **Usage:** `coverage:shard <shard>`
+
+### Arguments
+- **`<shard>`** — the shard, i/n
 
 ## `demo`
 
