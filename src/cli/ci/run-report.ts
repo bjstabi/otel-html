@@ -315,6 +315,7 @@ export async function readRunManifest(fs: FileSystem, dir: string): Promise<Mani
   const path = `${dir}/${MANIFEST_PATH}`;
   if (!(await fs.exists(path))) return null;
   const m = parseAnyManifest(reviveDataJson(unwrapDataFile(await fs.readText(path), MANIFEST_KEY)));
-  if (!isPartitioned(m)) throw new OtelHtmlError('invalid-report', { path, expected: 'a format 5 manifest' });
+  if (!isPartitioned(m))
+    throw new OtelHtmlError('invalid-report', { path, expected: 'a format 5 or 6 manifest' });
   return m;
 }
