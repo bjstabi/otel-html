@@ -523,6 +523,31 @@ sources = [
 outputs = ["e2e/.reports-scale/**"]
 run = "bun e2e/build-scale-fixtures.ts"
 
+# Only e2e/calibration.spec.ts reads `rowgroups`, so a selection that names it and not scale.spec.ts builds just this one.
+[tasks."e2e:fixtures:rowgroups:data"]
+description = "Write the e2e `rowgroups` report alone (site format) into e2e/.reports-scale/rowgroups (skipped while up to date); the other scale reports are left as they are"
+depends = ["build"]
+sources = [
+  "@group:deps",
+  "dist/cli/**",
+  "dist/receiver-*.js",
+  "dist/index.d.ts",
+  "dist/index.js",
+  "e2e/build-scale-fixtures.ts",
+  "e2e/fixture.ts",
+  "test-support/fixture-ids.ts",
+  "test-support/otlp-builders.ts",
+  "test-support/scale-logs.ts",
+  "test-support/scale-metrics.ts",
+]
+outputs = ["e2e/.reports-scale/rowgroups/**"]
+run = "bun e2e/build-scale-fixtures.ts --only rowgroups"
+
+[tasks."e2e:fixtures:rowgroups"]
+description = "The e2e `rowgroups` report with the current viewer (only e2e/calibration.spec.ts reads it); `otel-html upgrade` swaps in dist/viewer"
+depends = ["e2e:fixtures:rowgroups:data"]
+run = "node dist/cli/main.js upgrade e2e/.reports-scale/rowgroups"
+
 [tasks."e2e:fixtures:scale"]
 description = """The e2e `scale`, `many` and `rowgroups` reports with the current viewer (only e2e/scale.spec.ts and e2e/calibration.spec.ts read them)
 Depends on e2e:fixtures:scale:data; `otel-html upgrade` then swaps in the current dist/viewer (~0.3 s, every run: a
@@ -544,7 +569,8 @@ Sharding: `--shard 1/2` runs half of each pass. The main pass splits the spec fi
 Playwright's own `-- --shard=1/2` still works, but splits both passes by count.
 The perf pass is skipped for a browser without a `-perf-file` project. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
-The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only when the selection includes e2e/scale.spec.ts or e2e/calibration.spec.ts, decided
+The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only when the selection includes e2e/scale.spec.ts or the perf pass includes
+e2e/calibration.spec.ts; a main pass that includes only e2e/calibration.spec.ts builds just the `rowgroups` report (e2e:fixtures:rowgroups). Decided
 by `playwright test --list` with the same args; a direct `playwright test e2e/scale.spec.ts` needs that task run first.
 Browsers are installed first unless OTEL_HTML_SKIP_BROWSER_INSTALL is set (CI's Playwright image has them).
 The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (CI runs it in its own Chromium job): it writes a
@@ -616,15 +642,31 @@ case "$usage_browser" in chromium | '*') has_perf=1 ;; *) has_perf=0 ;; esac
 # and the shard it runs with (`env` carries the main pass's OTEL_HTML_E2E_SHARD), so the listing selects the same tests
 # as the pass; a listing that fails builds them too, and the passes below report its error. --skip-deps: dist/ is
 # already built (and in CI it must not be rebuilt under the job shell).
+# Prints what a listing needs: `all` (scale.spec.ts, or calibration.spec.ts in the perf pass, which reads scale too),
+# `rowgroups` (calibration.spec.ts in the main pass), `none`; a listing that fails needs `all`.
 needs_scale() {
-  local listed
-  listed=$(env "$@" --list 2>&1) || return 0
-  grep -qE '(scale|calibration)[.]spec[.]ts' <<<"$listed"
+  local listed pass=$1
+  shift
+  listed=$(env "$@" --list 2>&1) || { echo all; return 0; }
+  if grep -qE 'scale[.]spec[.]ts' <<<"$listed"; then echo all
+  elif grep -qE 'calibration[.]spec[.]ts' <<<"$listed"; then
+    if [ "$pass" = perf ]; then echo all; else echo rowgroups; fi
+  else echo none; fi
 }
-if { [ "$usage_pass" != perf ] && needs_scale "${main_env[@]}" pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "$http" --grep-invert @perf; } ||
-  { [ "$has_perf" = 1 ] && needs_scale pnpm exec playwright test "$@" "${perf_shard[@]}" --project "$perf"; }; then
+need=none
+if [ "$usage_pass" != perf ]; then
+  need=$(needs_scale main "${main_env[@]}" pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "$http" --grep-invert @perf)
+fi
+if [ "$need" != all ] && [ "$has_perf" = 1 ]; then
+  perf_need=$(needs_scale perf pnpm exec playwright test "$@" "${perf_shard[@]}" --project "$perf")
+  if [ "$perf_need" = all ]; then need=all; elif [ "$perf_need" = rowgroups ]; then need=rowgroups; fi
+fi
+if [ "$need" = all ]; then
   echo "test:e2e: the selection needs the scale reports (e2e:fixtures:scale)"
   mise run --skip-deps e2e:fixtures:scale:data && mise run --skip-deps e2e:fixtures:scale || exit 1
+elif [ "$need" = rowgroups ]; then
+  echo "test:e2e: the selection needs the rowgroups report (e2e:fixtures:rowgroups)"
+  mise run --skip-deps e2e:fixtures:rowgroups:data && mise run --skip-deps e2e:fixtures:rowgroups || exit 1
 else
   echo "test:e2e: the selection does not need the scale reports"
 fi

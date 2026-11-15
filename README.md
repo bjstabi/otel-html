@@ -927,6 +927,22 @@ refuses to run in CI.
 Build the e2e fixture reports into e2e/.reports/ and their site copies into e2e/.reports-site/ (skipped while up to date)
 All but `scale`, `many` and `rowgroups`, which e2e:fixtures:scale builds; about a second after `build`.
 
+## `e2e:fixtures:rowgroups`
+
+- Depends: e2e:fixtures:rowgroups:data
+
+- **Usage:** `e2e:fixtures:rowgroups`
+
+The e2e `rowgroups` report with the current viewer (only e2e/calibration.spec.ts reads it); `otel-html upgrade` swaps in dist/viewer
+
+## `e2e:fixtures:rowgroups:data`
+
+- Depends: build
+
+- **Usage:** `e2e:fixtures:rowgroups:data`
+
+Write the e2e `rowgroups` report alone (site format) into e2e/.reports-scale/rowgroups (skipped while up to date); the other scale reports are left as they are
+
 ## `e2e:fixtures:scale`
 
 - Depends: e2e:fixtures:scale:data
@@ -1038,6 +1054,7 @@ the table weighs the median. Unit files get the seconds a worker spends on them 
 Playwright spec files the sum of their tests' durations (Chromium's `-file` and `-http` projects together). Failing
 tests still record their durations, and the task then exits non-zero. `-- unit chromium` rewrites only those parts of the table
 (parts: unit, chromium, firefox, webkit); a browser run that hangs is killed after 20 minutes and its part is kept.
+A file whose seconds moved more than 2x since the last table prints a "weight drifted" warning on stderr (never a failure).
 
 ## `test:e2e`
 
@@ -1050,7 +1067,8 @@ Sharding: `--shard 1/2` runs half of each pass. The main pass splits the spec fi
 Playwright's own `-- --shard=1/2` still works, but splits both passes by count.
 The perf pass is skipped for a browser without a `-perf-file` project. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
-The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only when the selection includes e2e/scale.spec.ts or e2e/calibration.spec.ts, decided
+The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only when the selection includes e2e/scale.spec.ts or the perf pass includes
+e2e/calibration.spec.ts; a main pass that includes only e2e/calibration.spec.ts builds just the `rowgroups` report (e2e:fixtures:rowgroups). Decided
 by `playwright test --list` with the same args; a direct `playwright test e2e/scale.spec.ts` needs that task run first.
 Browsers are installed first unless OTEL_HTML_SKIP_BROWSER_INSTALL is set (CI's Playwright image has them).
 The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (CI runs it in its own Chromium job): it writes a
