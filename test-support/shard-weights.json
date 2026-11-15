@@ -21,6 +21,7 @@
     "test/cli/ci/github-api.test.ts": 0.1,
     "test/cli/ci/ids.test.ts": 0.1,
     "test/cli/ci/job-logs.test.ts": 0.1,
+    "test/cli/ci/link-main.test.ts": 0.2,
     "test/cli/ci/link.test.ts": 0.1,
     "test/cli/ci/metrics.test.ts": 0.1,
     "test/cli/ci/publish-e2e.test.ts": 0.4,

@@ -3,8 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { createReportWith, resolveDeps } from '../../../src/api/report.js';
+import { finishedView } from '../../../src/cli/ci/finished-view.js';
 import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
-import { finishedView, runReport } from '../../../src/cli/ci/report-main.js';
+import { runKey } from '../../../src/cli/ci/ids.js';
+import { runReport } from '../../../src/cli/ci/report-main.js';
+import { workflowTraceRequest } from '../../../src/cli/ci/workflow-trace.js';
 import type { CliIo } from '../../../src/cli/io.js';
 import type { WriterDeps } from '../../../src/writer/session.js';
 import { fakeViewerAssets } from '../../../test-support/writer-deps.js';
@@ -71,6 +74,24 @@ describe('finishedView', () => {
     const v = view(jobs);
     expect(v.jobs.map((j) => j.name)).toEqual(['build', 'test']);
     expect(v.run.updated_at).toBe('2026-01-01T00:00:12Z');
+  });
+
+  test('the workflow-trace spans equal those of the completed run: result, end time, jobs, no provisional spans', () => {
+    const done = [job(1, 'build', 'failure'), job(2, 'lint', 'skipped')];
+    const inRun = [
+      ...done,
+      running(8, 'site / report'),
+      { ...job(9, 'site / deploy', null), status: 'queued' },
+    ];
+    const completed = run({ conclusion: 'failure', updated_at: '2026-01-01T00:00:12Z' });
+    const key = runKey({ repository: 'o/r', runId: 42, runAttempt: 1 });
+    const v = view(inRun);
+    const spans = workflowTraceRequest(key, v.run, v.jobs, new Map());
+    expect(spans).toEqual(workflowTraceRequest(key, completed, done, new Map()));
+    const text = JSON.stringify(spans);
+    expect(text).toContain('failure');
+    expect(text).not.toContain('otel_html.ci.provisional');
+    expect(text).not.toContain('site / ');
   });
 
   test('a completed run passes through unchanged', () => {

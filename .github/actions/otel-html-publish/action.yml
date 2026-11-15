@@ -312,11 +312,13 @@ runs:
         BASE_URL: ${{ steps.pages.outputs.base_url }}
         COMMENT: ${{ inputs.comment }}
         CHECK: ${{ inputs.check }}
+        EXCLUDE_JOBS: ${{ inputs.exclude-jobs }}
         GITHUB_TOKEN: ${{ inputs.token }}
       run: |
         args=()
         if [ "$COMMENT" != true ]; then args+=(--no-comment); fi
         if [ "$CHECK" != true ]; then args+=(--no-check); fi
+        if [ -n "$EXCLUDE_JOBS" ]; then args+=(--exclude-jobs "$EXCLUDE_JOBS"); fi
         # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
         # shellcheck disable=SC2086
         $CMD ci link --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --url "$REPORT_URL" \

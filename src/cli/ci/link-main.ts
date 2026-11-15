@@ -1,5 +1,6 @@
 import { appendFileSync } from 'node:fs';
 import type { CliIo } from '../io.js';
+import { finishedView } from './finished-view.js';
 import {
   type ApiJob,
   type ApiPull,
@@ -32,6 +33,8 @@ export type LinkOptions = {
   indexUrl: string;
   comment: boolean;
   check: boolean;
+  /** Link the run as finished without the jobs whose name starts with this prefix (as `ci report --exclude-jobs`). */
+  excludeJobs?: string;
 };
 
 const API_TIMEOUT_MS = 15_000;
@@ -54,6 +57,7 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
     return;
   }
   let jobs: ApiJob[] = [];
+  let jobsRead = false;
   try {
     jobs = await fetchJobs(
       { apiUrl: api, repository: opts.repository, runId: run.id, runAttempt: run.run_attempt },
@@ -61,9 +65,12 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
       API_TIMEOUT_MS,
       fetchFn,
     );
+    jobsRead = true;
   } catch (e) {
     warn(`cannot read the jobs of run ${opts.runId}, so the table is empty: ${messageOf(e)}`);
   }
+  // Without the jobs there is nothing to finish the run from: it is linked as the API has it.
+  if (jobsRead) ({ run, jobs } = finishedView(run, jobs, opts.excludeJobs ?? ''));
   // A default-branch run is published to the branch's channel, so no pull request gets its comment; the channel is still found.
   let pulls: ApiPull[] = [];
   let placed: ReturnType<typeof channelFor>;

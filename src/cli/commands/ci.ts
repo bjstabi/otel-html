@@ -57,6 +57,7 @@ interface LinkFlags {
   indexUrl: string;
   comment: boolean;
   check: boolean;
+  excludeJobs?: string;
 }
 
 interface DeployApplyFlags {
@@ -153,6 +154,10 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     )
     .option('--no-comment', 'do not comment on pull requests')
     .option('--no-check', 'do not create a check run')
+    .option(
+      '--exclude-jobs <prefix>',
+      "link the run as finished without the jobs whose name starts with this prefix (a link made from one of the run's own jobs)",
+    )
     .action(async (flags: LinkFlags) => {
       await runLink(
         {
@@ -162,6 +167,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
           indexUrl: flags.indexUrl,
           comment: flags.comment,
           check: flags.check,
+          ...(flags.excludeJobs === undefined ? {} : { excludeJobs: flags.excludeJobs }),
         },
         io,
       );

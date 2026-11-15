@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { createReportWith } from '../../api/report.js';
 import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
+import { finishedView } from './finished-view.js';
 import {
-  type ApiJob,
   type ApiRun,
   envVar,
   type Fetch,
@@ -77,37 +77,6 @@ async function discoverArtifacts(dir: string): Promise<Artifact[]> {
     found.push({ report, context: parseJobContext(text) });
   }
   return found;
-}
-
-/**
- * The run as it will look once the jobs named by `excludePrefix` (the ones doing this report) are gone: those jobs
- * dropped and, when the run is not yet `completed`, the run completed at its latest remaining job's end with the
- * conclusion GitHub gives it (`failure` over `cancelled` over `success`; a skipped job counts as success). The caller
- * runs after every other job finished, so no remaining job is unfinished.
- */
-export function finishedView(
-  run: ApiRun,
-  jobs: readonly ApiJob[],
-  excludePrefix: string,
-): { run: ApiRun; jobs: ApiJob[] } {
-  const kept = excludePrefix === '' ? [...jobs] : jobs.filter((j) => !j.name.startsWith(excludePrefix));
-  if (run.status === 'completed') return { run, jobs: kept };
-  const conclusions = kept.map((j) => j.conclusion);
-  const conclusion = conclusions.some((c) => c === 'failure' || c === 'timed_out')
-    ? 'failure'
-    : conclusions.includes('cancelled')
-      ? 'cancelled'
-      : 'success';
-  let updated_at = run.updated_at;
-  let latest = Number.NEGATIVE_INFINITY;
-  for (const j of kept) {
-    const end = j.completed_at === null ? Number.NaN : Date.parse(j.completed_at);
-    if (end > latest) {
-      latest = end;
-      updated_at = j.completed_at ?? updated_at;
-    }
-  }
-  return { run: { ...run, status: 'completed', conclusion, updated_at }, jobs: kept };
 }
 
 /**
