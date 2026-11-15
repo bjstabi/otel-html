@@ -38,6 +38,10 @@ export interface UpdateJson {
   partitions?: UpdatePartition[];
   ci?: UpdatePartition;
   pr?: number;
+  /** run: the run's conclusion as `finishedView` derives it, recorded while the API run is still unfinished. */
+  conclusion?: string;
+  /** run: when that finished run ended (ISO); recorded with `conclusion`. */
+  completedAt?: string;
 }
 
 const nonNegInt = z.number().int().nonnegative();
@@ -72,7 +76,16 @@ const REQUIRED: Record<UpdateKind, readonly (keyof UpdateJson)[]> = {
   'remove-pr': ['pr'],
   'reopen-pr': ['pr'],
 };
-const OPTIONAL_FIELDS = ['jobId', 'jobName', 'sequence', 'partitions', 'ci', 'pr'] as const;
+const OPTIONAL_FIELDS = [
+  'jobId',
+  'jobName',
+  'sequence',
+  'partitions',
+  'ci',
+  'pr',
+  'conclusion',
+  'completedAt',
+] as const;
 
 export const UpdateJsonSchema: z.ZodType<UpdateJson> = z
   .strictObject({
@@ -87,9 +100,15 @@ export const UpdateJsonSchema: z.ZodType<UpdateJson> = z
     partitions: z.exactOptional(z.array(UpdatePartitionSchema)),
     ci: z.exactOptional(CiPartitionSchema),
     pr: z.exactOptional(nonNegInt),
+    conclusion: z.exactOptional(z.string().min(1)),
+    completedAt: z.exactOptional(z.iso.datetime()),
   })
   .superRefine((u, ctx) => {
-    const allowed = new Set<string>([...REQUIRED[u.kind], ...(u.kind === 'push' ? ['ci'] : [])]);
+    const allowed = new Set<string>([
+      ...REQUIRED[u.kind],
+      ...(u.kind === 'push' ? ['ci'] : []),
+      ...(u.kind === 'run' ? ['conclusion', 'completedAt'] : []),
+    ]);
     for (const f of OPTIONAL_FIELDS) {
       const present = u[f] !== undefined;
       if (present && !allowed.has(f))

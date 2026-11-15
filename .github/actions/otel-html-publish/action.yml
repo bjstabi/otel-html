@@ -194,11 +194,12 @@ runs:
         RUN_ID: ${{ inputs.run-id }}
         BASE_URL: ${{ steps.pages.outputs.base_url }}
         GITHUB_TOKEN: ${{ inputs.token }}
+        EXCLUDE_JOBS: ${{ inputs.exclude-jobs }}
       run: |
         # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
         # shellcheck disable=SC2086
         $CMD ci update run --report "$REPORT" --out "$UPDATES" --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" \
-          --base-url "$BASE_URL" --config "$CONFIG"
+          --base-url "$BASE_URL" --config "$CONFIG" ${EXCLUDE_JOBS:+--exclude-jobs "$EXCLUDE_JOBS"}
     # A closed pull request's folder (`pr/<number>/`) and index entry leave the site when the deployer applies this
     # update; a reopened pull request's removal is lifted the same way.
     - name: Write the pull request update

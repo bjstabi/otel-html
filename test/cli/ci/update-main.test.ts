@@ -454,6 +454,37 @@ describe('runUpdateRun', () => {
     for (const f of listed) expect(existsSync(join(folder, f)), f).toBe(true);
   });
 
+  test("--exclude-jobs records the finished run's conclusion and end for a run still in progress", async () => {
+    const report = await runReportDir();
+    const endedAt = ago(5);
+    const jobs = [
+      { ...apiJob, name: 'test', status: 'completed', conclusion: 'failure', completed_at: endedAt },
+      { ...apiJob, id: 778, name: 'lint', status: 'completed', conclusion: 'skipped', completed_at: ago(7) },
+      { ...apiJob, id: 779, name: 'site / report', conclusion: null, completed_at: null },
+    ];
+    const withSite = async (url: string): Promise<Response> =>
+      /\/actions\/runs\/42\/attempts\/1\/jobs/.test(url) ? Response.json({ jobs }) : api(url);
+    await runUpdateRun({ ...runOpts(report), excludeJobs: 'site / ' }, ioOf(), deps, withSite);
+    const u = await readUpdate(deps.fs, join(dir, 'u', outputs().name ?? ''));
+    expect(u.conclusion).toBe('failure');
+    expect(u.completedAt).toBe(endedAt);
+  });
+
+  test('without --exclude-jobs, or for a completed run, nothing is recorded', async () => {
+    const report = await runReportDir();
+    await runUpdateRun(runOpts(report), ioOf(), deps, api);
+    const u = await readUpdate(deps.fs, join(dir, 'u', outputs().name ?? ''));
+    expect(u.conclusion).toBeUndefined();
+    expect(u.completedAt).toBeUndefined();
+    const done = async (url: string): Promise<Response> =>
+      /\/actions\/runs\/42$/.test(url)
+        ? Response.json({ ...apiRun, status: 'completed', conclusion: 'success' })
+        : api(url);
+    await runUpdateRun({ ...runOpts(report), excludeJobs: 'site / ' }, ioOf(), deps, done);
+    const v = await readUpdate(deps.fs, join(dir, 'u', outputs().name ?? ''));
+    expect(v.conclusion).toBeUndefined();
+  });
+
   test('a run with no channel publishes nothing', async () => {
     const report = await runReportDir();
     const noPulls = async (url: string): Promise<Response> =>

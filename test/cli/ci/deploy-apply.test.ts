@@ -218,6 +218,8 @@ function addRun(
   edit: (m: ManifestV4) => ManifestV4 = (m) => m,
   channel = MAIN_CHANNEL,
   fx: Format4Fixture = closed,
+  recorded: Partial<UpdateJson> = {},
+  planRun: Partial<SiteRun> = {},
 ): PendingUpdate {
   const manifest = edit({ ...fx.manifest, complete: true });
   const files: Record<string, Uint8Array | string> = {
@@ -227,8 +229,16 @@ function addRun(
   };
   for (const p of manifest.partitions)
     for (const f of Object.values(p.files)) files[`report/${f.path}`] = bytesOf(fx, f.path);
-  const u: UpdateJson = { version: 1, kind: 'run', runId, runAttempt: attempt, createdAt: minutesBefore(2) };
-  return add(u, files, {}, channel);
+  const u: UpdateJson = {
+    version: 1,
+    kind: 'run',
+    runId,
+    runAttempt: attempt,
+    createdAt: minutesBefore(2),
+    ...recorded,
+  };
+  const pending = add(u, files, {}, channel);
+  return pending.run === null ? pending : { ...pending, run: { ...pending.run, ...planRun } };
 }
 
 const pendingOf = (
@@ -503,6 +513,29 @@ describe('run', () => {
       }),
     ]);
   };
+
+  describe('a run update of a run that was unfinished when planned', () => {
+    const endedAt = minutesBefore(3);
+    const recorded = { conclusion: 'failure', completedAt: endedAt };
+    const entry = () => indexOf().channels[MAIN]?.runs.find((r) => r.runId === 42);
+
+    test("the recorded conclusion and end stand in for the API run's unknown", async () => {
+      await apply([addRun(42, 1, (m) => m, MAIN_CHANNEL, closed, recorded, { conclusion: 'unknown' })]);
+      expect(entry()).toMatchObject({ conclusion: 'failure', completedAt: endedAt });
+      expect(readJson<{ message: string }>(join(site, MAIN, 'badge-ci.json')).message).not.toMatch(/^✓/);
+    });
+
+    test("a completed API run's own values win", async () => {
+      await apply([addRun(42, 1, (m) => m, MAIN_CHANNEL, closed, recorded, { conclusion: 'success' })]);
+      expect(entry()).toMatchObject({ conclusion: 'success' });
+      expect(entry()?.completedAt).not.toBe(endedAt);
+    });
+
+    test("an update without the fields keeps the plan's values", async () => {
+      await apply([addRun(42, 1, (m) => m, MAIN_CHANNEL, closed, {}, { conclusion: 'unknown' })]);
+      expect(entry()).toMatchObject({ conclusion: 'unknown' });
+    });
+  });
 
   test('replaces provisional partitions by renumbered ones and defers the deletion of the old files', async () => {
     await provisional();

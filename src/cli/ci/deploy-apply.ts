@@ -312,6 +312,11 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
         if (plan.channel === null || plan.run === null) return refuse('no channel');
         channel = plan.channel;
         run = { ...stripEvent(plan.run), reportPath: reportPathOf(channel.key, u.runId) };
+        // the plan saw the API run unfinished (`unknown`): the update records what the finished run will be
+        if (u.kind === 'run' && run.conclusion === 'unknown' && u.conclusion !== undefined) {
+          run.conclusion = u.conclusion;
+          if (u.completedAt !== undefined) run.completedAt = u.completedAt;
+        }
       }
       if (u.kind === 'run') await checkRunReport(fs, `${c.dir}/report`);
       placedUpdates.push({ ...c, u, channel, run });
