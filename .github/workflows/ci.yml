@@ -149,12 +149,14 @@ jobs:
             .mise/task-cache
           key: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-${{ github.run_id }}
           restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-
-      # The reports `check` saved under this key (a miss builds the shapes the shard reads, in the job). Restore only: a
-      # shard holds a partial set and the two shards share the key.
+      # The reports `check` saved (a missing shape is built in the job). Restore only: a shard holds a partial set and the
+      # two shards share the key. restore-keys takes the latest save even when this exact key is new: the folder inside
+      # is named by the generator's own content key, so it is a hit whenever the generator did not change.
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
         with:
           path: .cache/scaling-reports
           key: scaling-reports-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'src/**', 'test-support/**') }}
+          restore-keys: scaling-reports-${{ runner.os }}-
       # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
       - name: Build otel-html
         shell: bash
@@ -214,6 +216,8 @@ jobs:
         with:
           path: .cache/scaling-reports
           key: scaling-reports-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'src/**', 'test-support/**') }}
+          restore-keys: scaling-reports-${{ runner.os }}-
+      # A no-op when the restored folder already matches the generator; otherwise builds the full set and drops other keys.
       - if: steps.scaling-reports.outputs.cache-hit != 'true'
         shell: bash
         run: mise run scaling:reports
