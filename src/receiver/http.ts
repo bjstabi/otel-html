@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import type { AddressInfo, Socket } from 'node:net';
 import { createGunzip } from 'node:zlib';
 import { create, type DescMessage, type Message, toBinary, toJsonString } from '@bufbuild/protobuf';
 import { StatusSchema } from '../model/gen/google/rpc/status_pb.js';
@@ -25,6 +25,8 @@ const DEFAULT_ALLOWED_HEADERS = 'Content-Type, Content-Encoding';
 const PREFLIGHT_MAX_AGE_SECONDS = 600;
 /** The status `code` of an outcome with no gRPC code (INVALID_ARGUMENT, as for a malformed request). */
 const FALLBACK_STATUS_CODE = 3;
+/** How long a refused upload may keep sending before the connection is destroyed (see `lingerClose`). */
+const LINGER_MS = 1000;
 
 const CONTENT_TYPE: Readonly<Record<string, BodyEncoding>> = {
   'application/x-protobuf': 'protobuf',
@@ -235,7 +237,7 @@ export function createHttpHandler(
       );
     }
     const declared = Number(header(req, 'content-length'));
-    const closeRequest = () => req.destroy();
+    const closeRequest = () => lingerClose(req);
     if (declared > options.maxBodyBytes) {
       return refuse(
         req,
@@ -307,6 +309,22 @@ export function createHttpHandler(
       else res.destroy();
     });
   };
+}
+
+/**
+ * Ends a connection whose request body was refused unread, after the response is out. Destroying it at once resets the
+ * connection when the client is still sending (or sends its next chunk a moment later), and a reset can discard the
+ * response the client has not read yet, so it sees ECONNRESET instead of the status (RFC 9112 section 9.6; Windows
+ * does it readily). So: send FIN, discard what still arrives, and destroy when the client closes or after LINGER_MS.
+ */
+function lingerClose(req: IncomingMessage): void {
+  const socket: Socket | null = req.socket;
+  if (socket === null || socket.destroyed) return;
+  req.resume();
+  socket.end();
+  const timer = setTimeout(() => socket.destroy(), LINGER_MS);
+  timer.unref();
+  socket.once('close', () => clearTimeout(timer));
 }
 
 /** The client went away mid-upload (as opposed to sending a body that cannot be read). */

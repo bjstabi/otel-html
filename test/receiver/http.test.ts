@@ -1,4 +1,5 @@
 import { type ClientRequest, type IncomingMessage, request } from 'node:http';
+import { connect } from 'node:net';
 import { gzipSync } from 'node:zlib';
 import { create, fromBinary, fromJson, type JsonValue, toBinary } from '@bufbuild/protobuf';
 import { afterEach, describe, expect, test } from 'vitest';
@@ -355,6 +356,36 @@ describe('OTLP/HTTP transport', () => {
       setTimeout(() => req.end(body.subarray(head)), 100);
     });
     expect(status).toBe(413);
+    expect(receiver.stats().refused['too-large']).toBe(1);
+  });
+
+  test('a client still sending when the 413 goes out reads it, not a reset', async () => {
+    const { receiver, base } = await realServer({ maxBodyBytes: 100_000 });
+    const body = gzipSync(Buffer.alloc(80_000_000));
+    const head = Math.floor(body.length / 2);
+    const chunk = (b: Buffer): Buffer =>
+      Buffer.concat([Buffer.from(`${b.length.toString(16)}\r\n`), b, Buffer.from('\r\n')]);
+    const url = new URL(base);
+    const socket = connect(Number(url.port), url.hostname);
+    const received: Buffer[] = [];
+    socket.pause(); // the response sits unread while the rest of the body is still being sent
+    const closed = new Promise<Error | undefined>((resolve) => {
+      socket.on('data', (d: Buffer) => received.push(d));
+      socket.once('error', resolve);
+      socket.once('close', () => resolve(undefined));
+    });
+    socket.write(
+      'POST /v1/traces HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n',
+    );
+    socket.write(chunk(body.subarray(0, head)));
+    await new Promise((r) => setTimeout(r, 200)); // the server has refused by now
+    socket.write(chunk(body.subarray(head, head + 100_000)));
+    await new Promise((r) => setTimeout(r, 200));
+    socket.write(chunk(body.subarray(head + 100_000)));
+    socket.end('0\r\n\r\n');
+    socket.resume();
+    expect(await closed).toBeUndefined();
+    expect(Buffer.concat(received).toString('latin1')).toMatch(/^HTTP\/1\.1 413 /);
     expect(receiver.stats().refused['too-large']).toBe(1);
   });
 

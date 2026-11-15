@@ -362,16 +362,22 @@ describe('the restart', () => {
       if (opened > 1) return db;
       return {
         ...db,
-        startPendingQuery: async () => null,
-        pollPendingQuery: () => new Promise<never>(() => {}),
+        // Never answers, not even to start: only the hung-worker guard can end this statement. A start that
+        // returned `null` would let the statement's own deadline win whenever `prepare` ran past it on a slow machine
+        // (a 504 with no restart).
+        startPendingQuery: () => new Promise<never>(() => {}),
       };
     };
-    const e = await started({ timeoutMs: 50, graceMs: 100, open });
+    // The limit is for every statement, the fresh real worker's first one included, so it is generous: only the
+    // hung worker's guard (timeout plus grace) has to fire, and it does not depend on how fast the machine is.
+    const timeoutMs = 1500;
+    const graceMs = 100;
+    const e = await started({ timeoutMs, graceMs, open });
     const t0 = performance.now();
     const error = await rejection(e.query('SELECT 1'));
     const total = performance.now() - t0;
     process.stdout.write(
-      `real restart: ${(total - 150).toFixed(0)} ms to a fresh worker (504 after ${total.toFixed(0)} ms)\n`,
+      `real restart: ${(total - timeoutMs - graceMs).toFixed(0)} ms to a fresh worker (504 after ${total.toFixed(0)} ms)\n`,
     );
     expect((error as HostError).status).toBe(504);
     expect(e.restarts).toBe(1);
