@@ -352,6 +352,7 @@ describe('mergeReports', () => {
       mergeReports({ ...w.deps, fs: linked }, ['a'], { out: 'out', config: testConfig(), mode: 'append' }),
     );
     expect(e.code).toBe('invalid-report');
+    expect(e.hint).toContain('upgrade out --assets-base <shared base>');
     expect(e.hint).toContain('replace the assets link with a real folder');
     expect(e.hint).toContain('--replace');
     expect(w.fs.snapshot()).toEqual(before);

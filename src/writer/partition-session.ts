@@ -38,7 +38,7 @@ import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
 import { Drain } from '../rollups/drain.js';
 import { StreamNormalizer } from '../rollups/metric-streams.js';
 import { severityKey } from '../semconv/severity.js';
-import { assetsInside, pruneOwnAssets } from './assets-cleanup.js';
+import { assetsInside, linkedAssetsHint, pruneOwnAssets } from './assets-cleanup.js';
 import {
   at,
   loadPartitionCheckpoint,
@@ -134,7 +134,7 @@ export async function openPartitionSession(
       message: `${out}/assets links out of the report${where}, and writing the report's viewer files would rewrite the link's target`,
       hint: shared
         ? `the report already records the shared assets base ${recorded}: append with --assets-base ${recorded}`
-        : `replace the assets link with a real folder (a copy of its target), or start the report over with --replace and --assets-base, which discards its data`,
+        : linkedAssetsHint(out),
     });
   }
   await fs.mkdirp(at(out, STATE_DIR));

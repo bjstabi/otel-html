@@ -132,8 +132,52 @@ describe('upgradeReport', () => {
       const before = hashTree(dir);
       const e = await failure(upgradeReport(deps(), dir));
       expect(e.code).toBe('invalid-report');
+      expect(e.hint).toContain(`upgrade ${dir} --assets-base <shared base>`);
+      expect(e.hint).toContain('replace the assets link with a real folder');
       expect(readdirSync(outside)).toEqual([]);
       expect(hashTree(dir)).toEqual(before);
+    },
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'a shared --assets-base upgrades a report whose assets folder links out, writing nothing through the link',
+    async () => {
+      const dir = await formatFourReport();
+      const outside = mkdtempSync(join(tmpdir(), 'upgrade-outside-'));
+      cpSync(join(dir, 'assets'), outside, { recursive: true });
+      writeFileSync(join(outside, 'viewer.old.js'), 'old');
+      rmSync(join(dir, 'assets'), { recursive: true });
+      symlinkSync(outside, join(dir, 'assets'));
+      const targetBefore = hashTree(outside);
+      const base = '../assets/0.0.0/';
+      expect(await upgradeReport(deps(), dir, { assetsBase: base })).toMatchObject({ formatVersion: 6 });
+      expect(hashTree(outside)).toEqual(targetBefore);
+      expect(readlinkSync(join(dir, 'assets'))).toBe(outside);
+      expect((readManifest(dir) as { engine: { assetsBase: string } }).engine.assetsBase).toBe(base);
+      expect(readFileSync(join(dir, 'index.html'), 'utf8')).toContain(base);
+      // An append on the same base writes nothing through the link either.
+      const w = createTestWriter();
+      const s = await openSession(
+        { ...w.deps, fs: createNodeFileSystem() },
+        { out: dir, config: testConfig({ writer: { format: 'site', assetsBase: base } }), mode: 'append' },
+      );
+      await s.add(otlp(spansRequest(1, 0, 50)), 'more.json');
+      await s.close();
+      expect(hashTree(outside)).toEqual(targetBefore);
+      expect(readlinkSync(join(dir, 'assets'))).toBe(outside);
+    },
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'a default-base upgrade of a report whose assets folder links out is still refused',
+    async () => {
+      const dir = await formatFourReport();
+      const outside = mkdtempSync(join(tmpdir(), 'upgrade-outside-'));
+      rmSync(join(dir, 'assets'), { recursive: true });
+      symlinkSync(outside, join(dir, 'assets'));
+      const e = await failure(upgradeReport(deps(), dir, { assetsBase: 'assets/' }));
+      expect(e.code).toBe('invalid-report');
+      expect(readdirSync(outside)).toEqual([]);
     },
   );
 

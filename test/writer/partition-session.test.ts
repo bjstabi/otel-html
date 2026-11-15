@@ -223,6 +223,10 @@ describe('PartitionSession', () => {
     expect(e.code).toBe('invalid-report');
     expect(e.message).toContain('/shared/assets');
     // --assets-base alone would loop (the report carries its own assets/): the hint names the real remedies.
+    expect(e.hint?.indexOf(`upgrade ${OUT} --assets-base <shared base>`)).toBeLessThan(
+      e.hint?.indexOf('replace the assets link') ?? -1,
+    );
+    expect(e.hint).toContain(`upgrade ${OUT} --assets-base <shared base>`);
     expect(e.hint).toContain('replace the assets link with a real folder');
     expect(e.hint).toContain('--replace');
     expect(e.hint).not.toMatch(/append with --assets-base/);

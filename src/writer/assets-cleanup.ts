@@ -20,6 +20,11 @@ export async function assetsInside(fs: FileSystem, dir: string): Promise<boolean
   return dirname(real) === (await fs.realpath(dir)) && basename(real).toLowerCase() === 'assets';
 }
 
+/** What to do about an `assets/` that links out of `out`: the remedy that keeps the report's data comes first. */
+export function linkedAssetsHint(out: string): string {
+  return `run \`otel-html upgrade ${out} --assets-base <shared base>\` to keep the data and load the viewer files from the shared base (then append with the same --assets-base), or replace the assets link with a real folder (a copy of its target), or start the report over with --replace and --assets-base, which discards its data`;
+}
+
 /**
  * Removes dead files from the report's own `assets/` after a session wrote it (or chose not to):
  *

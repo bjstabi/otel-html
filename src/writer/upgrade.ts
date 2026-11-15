@@ -11,7 +11,7 @@ import {
 } from '../format/paths.js';
 import { oldFormatMessage, PARTITION_FORMAT_VERSION } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
-import { assetsInside, pruneOwnAssets } from './assets-cleanup.js';
+import { assetsInside, linkedAssetsHint, pruneOwnAssets } from './assets-cleanup.js';
 import { at, writeManifest } from './checkpoint.js';
 import { renderIndexHtml } from './html.js';
 import { acquireLock } from './lock.js';
@@ -31,7 +31,10 @@ export interface UpgradeOptions {
   localWarnBytes?: number;
 }
 
-/** Refuses an `assets` folder that is a link out of the report: the viewer files would land wherever it points. */
+/**
+ * Refuses an `assets` folder that is a link out of the report: the viewer files would land wherever it points.
+ * Not called when the upgrade ends on a shared base: nothing is then written to or removed from `assets/`.
+ */
 async function assertAssetsInside(fs: WriterDeps['fs'], dir: string): Promise<void> {
   if (await assetsInside(fs, dir)) return;
   const assets = at(dir, 'assets');
@@ -39,6 +42,7 @@ async function assertAssetsInside(fs: WriterDeps['fs'], dir: string): Promise<vo
     path: assets,
     expected: 'a folder inside the report',
     actual: await fs.realpath(assets),
+    hint: linkedAssetsHint(dir),
   });
 }
 
@@ -80,7 +84,10 @@ export async function upgradeReport(
     });
   }
   assertSharedBaseNamed(report, opts);
-  await assertAssetsInside(fs, report.dir);
+  // A shared base writes and prunes nothing in the report's own `assets/`, so a link there is left as it is.
+  if ((opts.assetsBase ?? report.manifest.engine.assetsBase) === DEFAULT_ASSETS_BASE) {
+    await assertAssetsInside(fs, report.dir);
+  }
   // Holding the writer lock for the rewrite also keeps a writer from starting underneath it.
   const lock = await acquireLock(deps, at(report.dir, LOCK_PATH)).catch((e: unknown) => {
     if (e instanceof OtelHtmlError && e.code === 'report-locked') {
