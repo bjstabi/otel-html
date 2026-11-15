@@ -55,6 +55,9 @@ async function start(bindHost = '127.0.0.1') {
     port: 0,
     logger: w.deps.logger,
     tracer: w.deps.tracer,
+  }).catch(async (error: unknown) => {
+    for (const c of stops.splice(0).reverse()) await c();
+    throw error;
   });
   stops.push(() => listener.close());
   return {

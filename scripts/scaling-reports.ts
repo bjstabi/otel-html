@@ -12,6 +12,7 @@ import { availableParallelism } from 'node:os';
 import { join } from 'node:path';
 import { buildScalingReport, PREBUILT_ENV, type Shape, shapeKey } from '../test-support/scaling/generator.js';
 import {
+  CACHE_OFF_ENV,
   reportCacheDir,
   reportCacheKey,
   reportCacheRoot,
@@ -27,6 +28,11 @@ const flag = (name: string): string | undefined => {
 
 if (args.includes('--print-key')) {
   process.stdout.write(`${reportCacheKey()}\n`);
+  process.exit(0);
+}
+
+if (process.env[CACHE_OFF_ENV] === 'off') {
+  process.stdout.write(`scaling reports: ${CACHE_OFF_ENV}=off, nothing is generated or pruned\n`);
   process.exit(0);
 }
 

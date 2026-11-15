@@ -146,9 +146,9 @@ describe('the scaling report cache', () => {
     await writeFile(join(from, 'data', 'manifest.js'), 'm');
     await writeFile(join(from, 'meta.json'), '{}');
     // the cache lives under the repo, the source in the temp directory: another filesystem on most machines
-    const cacheRoot = join(ROOT, '.cache', 'scaling-reports-test');
+    await mkdir(join(ROOT, '.cache'), { recursive: true });
+    const cacheRoot = await mkdtemp(join(ROOT, '.cache', 'scaling-reports-test-'));
     dirs.push(cacheRoot);
-    await mkdir(cacheRoot, { recursive: true });
     const target = join(cacheRoot, `shape-${process.pid}`);
     await moveInto(from, target);
     expect((await readdir(cacheRoot)).filter((n) => n.includes('.part-'))).toEqual([]);

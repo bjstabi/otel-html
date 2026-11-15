@@ -149,6 +149,10 @@ describe('hostEngineFiles', () => {
 
   it('with no dirs, a checkout without a viewer build finds the engine files mise run engine:assets wrote', async () => {
     const cache = new URL('../../.cache/engine-assets/', import.meta.url);
+    // precondition, not a skip: the folder comes from `mise run engine:assets`
+    await access(cache).catch(() => {
+      throw new Error(`${fileURLToPath(cache)} is missing: run \`mise run engine:assets\` first`);
+    });
     const files = await hostEngineFiles({ dirs: [pathToFileURL('/nonexistent/'), cache] });
     expect(files.bindings).toBe(fileURLToPath(new URL(n.bindings, cache)));
     expect(await readFile(files.bindings, 'utf8')).not.toContain('require("apache-arrow")');
