@@ -1,0 +1,101 @@
+name: site
+
+# The last jobs of a ci or load run (`site / report`, `site / deploy`): build the run's report, upload it as the run's
+# update, link it from the run's pull request, then apply every pending update to the last deployed site and deploy the
+# result. The only writer of the GitHub Pages site. The caller (ci.yml, load.yml) runs it only for a trusted run: a
+# push or schedule on the default branch, or a pull request from this repository started by a person.
+#
+# The run's own commit supplies the code: a trusted run's code is already trusted to run with this token.
+on:
+  workflow_call:
+
+# Each job asks for what it needs.
+permissions: {}
+
+env:
+  # `claude` in mise.toml is a developer tool; CI never needs it.
+  MISE_DISABLE_TOOLS: claude
+
+jobs:
+  # The run's report, without the `site / ` jobs, which are still running.
+  report:
+    runs-on: ubuntu-latest
+    permissions:
+      # Downloading the run's artifacts, uploading the update.
+      actions: write
+      # The checkout.
+      contents: read
+      # configure-pages reads the site's base URL.
+      pages: read
+      # `ci link`: the sticky PR comment and the check run.
+      pull-requests: write
+      checks: write
+    timeout-minutes: 15
+    steps:
+      # The run's own commit (a job in a run checks out the run's ref by default).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      # Report.create serves the viewer from dist/, which a fresh checkout does not have.
+      - run: mise run build
+      # A branch from before the repo had its own config has no such file to read: no output, so the action's default.
+      - id: config
+        run: |
+          if [ -f .github/otel-html-ci.yaml ]; then
+            echo "config=.github/otel-html-ci.yaml" >> "$GITHUB_OUTPUT"
+          fi
+      # Builds the run report, uploads it as the run's update and links the report.
+      - id: publish
+        uses: ./.github/actions/otel-html-publish
+        with:
+          command: node dist/cli/main.js
+          run-id: ${{ github.run_id }}
+          config: ${{ steps.config.outputs.config }}
+          exclude-jobs: "site / "
+
+  # Runs even when the report job failed or a test job did: the updates the other runs uploaded still deserve a pass. One
+  # pass at a time, queued rather than cancelled, so no pass is dropped. A pass lists everything pending, the updates of
+  # the passes before it included.
+  deploy:
+    needs: report
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+      queue: max
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      # The checkout, and the migration's gh-pages read.
+      contents: read
+      # Downloading update artifacts, pruning artifacts.
+      actions: write
+      # Finding the last successful deployment.
+      deployments: read
+      pages: write
+      id-token: write
+    steps:
+      # The default branch's code applies the updates, whichever branch the run is on.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: mise run build
+      - id: config
+        run: |
+          if [ -f .github/otel-html-ci.yaml ]; then
+            echo "config=.github/otel-html-ci.yaml" >> "$GITHUB_OUTPUT"
+          fi
+      - id: deploy
+        uses: ./.github/actions/otel-html-deploy
+        with:
+          command: node dist/cli/main.js
+          config: ${{ steps.config.outputs.config }}
+          preview: true
+          ci-workflows: ci.yml,load.yml
+          report-workflow: ci-report.yml,pr-cleanup.yml

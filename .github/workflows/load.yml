@@ -57,8 +57,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # The job uploads its partitions as a site update and wakes the Pages deployer (otel-html-collect, publish).
-      actions: write
+      # Read-only: the job uploads its partitions as artifacts of this run (the runtime token); the `site` job reports and deploys.
+      actions: read
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -70,10 +70,7 @@ jobs:
       - uses: ./.github/actions/otel-html-setup
         with:
           command: node dist/cli/main.js
-          push-every: 60s
           config: .github/otel-html-ci.yaml
-          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
-          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
       - run: lscpu | grep -E 'Model name|^CPU\(s\)'; free -m
       # The explicit build above is the 1M-log test's built library; `--skip-deps` keeps the task from rebuilding
       # `dist/` under the running job shell.
@@ -81,9 +78,6 @@ jobs:
       - if: always()
         uses: ./.github/actions/otel-html-collect
         with:
-          publish: true
-          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
-          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
           command: node dist/cli/main.js
           name: otel-html-${{ github.job }}
 
@@ -98,8 +92,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # The job uploads its partitions as a site update and wakes the Pages deployer (otel-html-collect, publish).
-      actions: write
+      # Read-only: the job uploads its partitions as artifacts of this run (the runtime token); the `site` job reports and deploys.
+      actions: read
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -111,10 +105,7 @@ jobs:
       - uses: ./.github/actions/otel-html-setup
         with:
           command: node dist/cli/main.js
-          push-every: 60s
           config: .github/otel-html-ci.yaml
-          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
-          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
       - run: lscpu | grep -E 'Model name|^CPU\(s\)'; free -m
       - run: mise run --skip-deps test:load:receiver
       - run: pnpm exec playwright install --with-deps chromium
@@ -131,8 +122,21 @@ jobs:
       - if: always()
         uses: ./.github/actions/otel-html-collect
         with:
-          publish: true
-          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
-          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
           command: node dist/cli/main.js
           name: otel-html-${{ github.job }}
+
+  # The run's report and the Pages deploy (site.yml), as the run's last jobs. `if:` is the trust rule: a default-branch
+  # run that is not a pull request, or a pull request from this repository that a person started.
+  site:
+    needs: [changed, load, receiver]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || github.event.pull_request.head.repo.full_name == github.repository && github.event.sender.type == 'User') }}
+    uses: ./.github/workflows/site.yml
+    permissions:
+      # Reading and pruning the run's artifacts; the report's update upload.
+      actions: write
+      contents: read
+      pages: write
+      id-token: write
+      deployments: read
+      pull-requests: write
+      checks: write

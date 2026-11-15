@@ -1,0 +1,39 @@
+name: pr-cleanup
+
+# Uploads the update that removes a pull request's reports from the site when it closes, and the one that lifts the
+# removal when it reopens. The next `site / deploy` (of any ci or load run) applies it.
+#
+# `_target`, not `pull_request`: a fork PR's `pull_request` token cannot upload artifacts to the base repository. The job
+# runs with a write token, so it checks out the default branch only and never the PR's code.
+on:
+  pull_request_target:
+    types: [closed, reopened]
+
+permissions: {}
+
+env:
+  # `claude` in mise.toml is a developer tool; CI never needs it.
+  MISE_DISABLE_TOOLS: claude
+
+jobs:
+  # A closed or merged PR's folder (pr/<number>/) and index entry leave the site when the deployer applies the update;
+  # a reopened PR's removal is lifted.
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # The update artifact.
+      actions: write
+    steps:
+      # The default branch, never the PR's head: this job holds a write token.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: mise run build
+      - uses: ./.github/actions/otel-html-publish
+        with:
+          command: node dist/cli/main.js
+          cleanup-pr: ${{ github.event.action == 'closed' && github.event.pull_request.number || '' }}
+          reopen-pr: ${{ github.event.action == 'reopened' && github.event.pull_request.number || '' }}
