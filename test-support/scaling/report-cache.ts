@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { globSync, readFileSync } from 'node:fs';
-import { readdir, readFile, rm } from 'node:fs/promises';
+import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { type Axis, CATALOGUE } from '../../src/viewer/data/catalogue.js';
 import { BASE, CROSS, isMerged, type Shape, shapeKey, stepsOf } from './generator.js';
@@ -67,6 +67,9 @@ export function reportCacheRoot(root: string = REPO_ROOT): string {
   return join(root, '.cache', 'scaling-reports');
 }
 
+/** No build takes this long: a lock older than it is abandoned, whatever process its pid names now. */
+const STALE_LOCK_MS = 30 * 60_000;
+
 function alive(pid: number): boolean {
   if (pid === process.pid) return true;
   try {
@@ -80,19 +83,24 @@ function alive(pid: number): boolean {
 /**
  * Removes what a builder that died left in a persistent report folder: `*.lock` folders whose holder process is gone
  * (nobody would ever release them) and `*.part-*` folders (a half-copied report: a finished one is renamed to its
- * final name in one step, so a report folder is whole or absent). A lock without a holder file yet is kept: its owner
- * is between `mkdir` and `writeFile`. A `.part-<pid>` folder of a live process is kept.
+ * final name in one step, so a report folder is whole or absent). A lock without a holder file is kept for a minute (its owner is between `mkdir` and `writeFile`), then swept, and any lock
+ * older than 30 minutes is swept. A `.part-<pid>` folder of a live process is kept.
  */
-export async function sweepStale(dir: string): Promise<void> {
+export async function sweepStale(dir: string, now: number = Date.now()): Promise<void> {
   const names = await readdir(dir).catch(() => [] as string[]);
   for (const name of names) {
+    const path = join(dir, name);
     if (name.endsWith('.lock')) {
-      const holder = await readFile(join(dir, name, 'holder'), 'utf8').catch(() => undefined);
+      const holder = await readFile(join(path, 'holder'), 'utf8').catch(() => undefined);
+      const age = now - ((await stat(path).catch(() => undefined))?.mtimeMs ?? now);
       const pid = holder === undefined ? 0 : Number(holder.split(':')[0]);
-      if (pid > 0 && !alive(pid)) await rm(join(dir, name), { recursive: true, force: true });
+      // dead holder; or no holder file for a minute (a crash between `mkdir` and the write); or older than any build
+      // (30 min: a reused pid must not keep a lock alive forever)
+      if ((pid > 0 && !alive(pid)) || (holder === undefined && age > 60_000) || age > STALE_LOCK_MS)
+        await rm(path, { recursive: true, force: true });
     } else {
       const m = /\.part-(\d+)(?:-\d+)?$/.exec(name);
-      if (m !== null && !alive(Number(m[1]))) await rm(join(dir, name), { recursive: true, force: true });
+      if (m !== null && !alive(Number(m[1]))) await rm(path, { recursive: true, force: true });
     }
   }
 }

@@ -169,4 +169,16 @@ describe('the scaling report cache', () => {
       ]),
     );
   });
+
+  it('sweeps a lock without a holder file after a minute and any lock after 30 minutes, but keeps a young live one', async () => {
+    const { sweepStale } = await import('../../test-support/scaling/report-cache.js');
+    const dir = await tmp();
+    for (const n of ['bare.lock', 'old.lock', 'young.lock']) await mkdir(join(dir, n), { recursive: true });
+    await writeFile(join(dir, 'old.lock', 'holder'), `${process.pid}:0`);
+    await writeFile(join(dir, 'young.lock', 'holder'), `${process.pid}:0`);
+    await sweepStale(dir, Date.now() + 2 * 60_000);
+    expect((await readdir(dir)).sort()).toEqual(['old.lock', 'young.lock']);
+    await sweepStale(dir, Date.now() + 31 * 60_000);
+    expect(await readdir(dir)).toEqual([]);
+  });
 });

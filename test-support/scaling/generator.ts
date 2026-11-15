@@ -314,7 +314,8 @@ function partitionJson(shape: Shape, n: number): Record<string, unknown>[] {
   ];
 }
 
-async function build(shape: Shape): Promise<ScalingReport> {
+/** Builds the report of `shape` in this process into a new temp folder (`close()` removes it): never the shared cache. */
+export async function buildFreshReport(shape: Shape): Promise<ScalingReport> {
   const w = createTestWriter();
   w.deps.rowGroupRows = rowsPerGroup(shape);
   const config = testConfig({
@@ -490,7 +491,7 @@ async function ensurePrebuilt(root: string, shape: Shape): Promise<string> {
     make: async () => {
       // a report of production-size row groups holds up to a million spans: building it takes minutes, not a step's bound
       const ms = buildBound(shape);
-      const building = build(shape);
+      const building = buildFreshReport(shape);
       const r = await bounded(building, `building the report ${shapeKey(shape)}`, ms).catch(
         async (e: unknown) => {
           // the abandoned build goes on: when it ends it closes its report, which removes its temp folder
@@ -535,7 +536,7 @@ export function buildScalingReport(shape: Shape): Promise<ScalingReport> {
   const prebuilt = process.env[PREBUILT_ENV];
   const made =
     prebuilt === undefined
-      ? build(shape).then((r) => ({
+      ? buildFreshReport(shape).then((r) => ({
           ...r,
           close: async (): Promise<void> => {
             cache.delete(key);

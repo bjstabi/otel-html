@@ -10,6 +10,7 @@ import { ROW_GROUP_ROWS } from '../../test-support/scaling/cost.js';
 import { HARNESS_SMALL_FILE_BYTES, openCountingEngine } from '../../test-support/scaling/counting-engine.js';
 import {
   BASE,
+  buildFreshReport,
   buildScalingReport,
   CROSS,
   type ScalingReport,
@@ -69,11 +70,13 @@ describe('the scaling report generator', { timeout: 120_000 }, () => {
 
   test('the same shape gives byte-identical files', async () => {
     const shape = stepsOf('density', 'dense')[0] ?? BASE;
-    const a = await buildScalingReport(shape);
+    // two builds in this process, never the shared cache: the cached folder would be compared with itself
+    const a = await buildFreshReport(shape);
+    opened.push(a);
     const first = await hashes(a.dir);
-    await a.close();
-    const b = await buildScalingReport(shape);
+    const b = await buildFreshReport(shape);
     opened.push(b);
+    expect(b.dir).not.toBe(a.dir);
     expect(await hashes(b.dir)).toEqual(first);
     expect(first.size).toBeGreaterThan(3);
   });
