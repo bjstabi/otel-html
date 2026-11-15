@@ -24,6 +24,7 @@ import {
   stateArtifactName,
   writeSiteState,
 } from './site-state.js';
+import { isTrustedRun } from './trust.js';
 import { MAX_UPDATE_BYTES, type ParsedName, parseUpdateName, UPDATE_PREFIX } from './update.js';
 
 /** §5.3 step 1 and D59/D65: the base, the newest site state and the pending updates, authenticated by their runs and names. */
@@ -44,9 +45,10 @@ export interface PlanOptions {
   apiUrl: string;
   repository: string;
   ciWorkflows: string[];
-  reportWorkflow: string;
-  /** The deployer workflow file: only its runs on the default branch may upload a consumed state. */
-  deployerWorkflow: string;
+  /** Legacy report workflow files (`ci-report.yml`): their runs on the default branch may upload run updates, and any of their runs the PR removals and reopenings. */
+  reportWorkflows: string[];
+  /** Legacy deployer workflow files (`pages-deploy.yml`): their runs on the default branch may upload a site state. Trusted runs of a `ciWorkflows` file need no entry. */
+  deployerWorkflows: string[];
   pagesUrl: string;
   /** Where the chosen state's files are written. */
   stateOut: string;
@@ -310,18 +312,21 @@ export async function planDeploy(
       fetchFn,
     )
   ).filter(unexpired);
-  const deployerPath = `.github/workflows/${o.deployerWorkflow}`;
-  // a fork's pull_request run can upload artifacts here: only the deployer's own runs on the default branch count
+  const ciPaths = o.ciWorkflows.map((w) => `.github/workflows/${w}`);
+  const reportPaths = o.reportWorkflows.map((w) => `.github/workflows/${w}`);
+  const deployerPaths = o.deployerWorkflows.map((w) => `.github/workflows/${w}`);
+  // a fork's pull_request run can upload artifacts here: only trusted ci runs and the legacy deployer's runs on the default branch count
   const isDeployerRun = async (a: ApiArtifact): Promise<boolean> => {
     const id = a.workflow_run?.id;
     const run = id === undefined ? undefined : await getRun(id);
+    if (run === undefined || run.id <= (base.runId ?? 0)) return false;
+    const branch = await defaultBranchOf();
+    if (ciPaths.includes(run.path)) return isTrustedRun(run, o.repository, branch);
     return (
-      run !== undefined &&
-      run.path === deployerPath &&
+      deployerPaths.includes(run.path) &&
       run.head_repository?.full_name === o.repository &&
-      run.head_branch === (await defaultBranchOf()) &&
-      DEPLOYER_EVENTS.includes(run.event) &&
-      run.id > (base.runId ?? 0)
+      run.head_branch === branch &&
+      DEPLOYER_EVENTS.includes(run.event)
     );
   };
   for (const a of listed) {
@@ -343,8 +348,6 @@ export async function planDeploy(
   }
 
   // (4) the candidates, authenticated
-  const ciPaths = o.ciWorkflows.map((w) => `.github/workflows/${w}`);
-  const reportPath = `.github/workflows/${o.reportWorkflow}`;
   const channelOf = async (run: ApiRun): Promise<NonNullable<PendingUpdate['channel']>> =>
     channelFor(run, await pullsOf(run), await defaultBranchOf()) ?? refuse('no channel');
 
@@ -364,8 +367,15 @@ export async function planDeploy(
       if (!ciPaths.includes(uploader.path)) refuse('not a ci workflow');
       if (!PUSH_EVENTS.includes(uploader.event))
         refuse(`event ${uploader.event} is not allowed for push updates`);
+    } else if (parsed.kind === 'run' && ciPaths.includes(uploader.path)) {
+      // a trusted ci run uploads the update for its own run
+      if (!isTrustedRun(uploader, o.repository, await defaultBranchOf())) refuse('not trusted');
+      if (parsed.runId !== uploader.id)
+        refuse(`named for run ${parsed.runId}, uploaded by run ${uploader.id}`);
+      if (!PUSH_EVENTS.includes(uploader.event))
+        refuse(`event ${uploader.event} is not allowed for run updates`);
     } else {
-      if (uploader.path !== reportPath) refuse('not the report workflow');
+      if (!reportPaths.includes(uploader.path)) refuse('not the report workflow');
       const events = parsed.kind === 'run' ? RUN_EVENTS : ['pull_request_target'];
       if (!events.includes(uploader.event))
         refuse(`event ${uploader.event} is not allowed for ${parsed.kind} updates`);

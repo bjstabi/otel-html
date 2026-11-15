@@ -75,6 +75,13 @@ interface DeployApplyFlags {
 /** A channel key as `channelFor` builds it: `branch/<slug>` (slug: lower-case alphanumerics and dashes) or `pr/<n>`. */
 const CHANNEL_KEY_RE = /^(branch\/[a-z0-9-]+|pr\/[1-9][0-9]*)$/;
 
+/** A comma list of workflow files. */
+const names = (list: string): string[] =>
+  list
+    .split(',')
+    .map((w) => w.trim())
+    .filter((w) => w !== '');
+
 interface DeployPlanFlags {
   repository?: string;
   out: string;
@@ -368,10 +375,14 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .requiredOption('--state-out <dir>', "where the chosen state's files are written")
     .requiredOption('--pages-url <url>', "the site's public URL")
     .option('--ci-workflows <files>', 'comma-separated workflow files whose runs publish', 'ci.yml')
-    .option('--report-workflow <file>', 'the workflow file that uploads run and PR updates', 'ci-report.yml')
     .option(
-      '--deployer-workflow <file>',
-      'the workflow file whose runs may upload the consumed site state',
+      '--report-workflow <files>',
+      'comma-separated legacy workflow files that upload run and PR updates',
+      'ci-report.yml',
+    )
+    .option(
+      '--deployer-workflow <files>',
+      'comma-separated legacy workflow files whose runs on the default branch may upload a site state',
       'pages-deploy.yml',
     )
     .action(async (flags: DeployPlanFlags) => {
@@ -380,12 +391,9 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
         out: flags.out,
         stateOut: flags.stateOut,
         pagesUrl: flags.pagesUrl,
-        ciWorkflows: flags.ciWorkflows
-          .split(',')
-          .map((w) => w.trim())
-          .filter((w) => w !== ''),
-        reportWorkflow: flags.reportWorkflow,
-        deployerWorkflow: flags.deployerWorkflow,
+        ciWorkflows: names(flags.ciWorkflows),
+        reportWorkflows: names(flags.reportWorkflow),
+        deployerWorkflows: names(flags.deployerWorkflow),
         now: new Date().toISOString(),
       };
       try {
