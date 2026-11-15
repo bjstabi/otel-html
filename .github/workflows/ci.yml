@@ -40,7 +40,7 @@ env:
 
 jobs:
   # Decides whether the change touches only documentation (`docs/**` and `*.md`). The browser, OS, binary and coverage jobs
-  # skip then; `check` (lint, typecheck, knip, gen:check, which covers README.md), `unit` and `build` always run. Any doubt
+  # skip then; `check` (lint, typecheck, knip, gen:check, which covers README.md, check:package) and `unit` always run. Any doubt
   # (another event, a failed fetch, an all-zero `before` on a new branch, an empty diff) runs everything.
   changes:
     runs-on: ubuntu-latest
@@ -111,6 +111,13 @@ jobs:
           dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
       - run: mise run gen:check
       - run: mise run check:static
+      # `check:package` (publint + attw) depends on `build`; --skip-deps keeps it from cleaning dist/ under the running job shell.
+      - run: mise run --skip-deps check:package
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
       # The scaling measurement: every catalogue entry cold on generated reports, its class compared with the declared one.
       - run: mise run test:scaling
       - if: always()
@@ -208,9 +215,13 @@ jobs:
       # The @perf budgets scale by (calibration ÷ this), never below 1: GitHub's runners come as AMD EPYC 9V45
       # (~85 ms, budgets as written) and EPYC 7763 (~150 ms, about 1.5×). See test-support/calibrate.ts.
       OTEL_HTML_PERF_REFERENCE_MS: "100"
+      # Windows needs neither the git hooks, nor the developer tools; bun stays (engine:assets and scaling:reports run under it).
+      MISE_DISABLE_TOOLS: claude,watchexec,lefthook,actionlint,shellcheck
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
+        with:
+          install-hooks: "false"
       # As the other jobs; the third path is mise's Windows state dir, UNVERIFIED (no Windows run yet): a missing directory only makes actions/cache warn.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
         with:
@@ -253,42 +264,6 @@ jobs:
           dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
           command: node dist/cli/main.js
           name: otel-html-${{ github.job }}${{ matrix.os && format('-{0}', matrix.os) || '' }}-${{ matrix.shard }}of2
-
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      # The job uploads its partitions as a site update and wakes the Pages deployer (otel-html-collect, publish).
-      actions: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/setup
-      # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
-      - name: Build otel-html
-        shell: bash
-        run: mise run build
-      - uses: ./.github/actions/otel-html-setup
-        with:
-          command: node dist/cli/main.js
-          push-every: 60s
-          config: .github/otel-html-ci.yaml
-          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
-          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
-      # `check:package` (publint + attw) depends on `build`; --skip-deps keeps it from cleaning dist/ under the running job shell.
-      - run: mise run --skip-deps check:package
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: dist
-          path: dist/
-          if-no-files-found: error
-      - if: always()
-        uses: ./.github/actions/otel-html-collect
-        with:
-          publish: true
-          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
-          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
-          command: node dist/cli/main.js
-          name: otel-html-${{ github.job }}
 
   e2e:
     needs: changes
@@ -409,6 +384,12 @@ jobs:
             .mise/task-cache
           key: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-${{ github.run_id }}
           restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-
+      # The two large scale reports (e2e/build-scale-fixtures.ts), named by a hash of what builds them. mise stays the
+      # judge: the freshness of `e2e:fixtures:scale:data` (restored with the state dir above) reruns it when dist/ differs.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
+        with:
+          path: e2e/.reports-scale
+          key: e2e-reports-scale-${{ hashFiles('pnpm-lock.yaml', 'src/**', 'tsdown.config.ts', 'tsconfig.base.json', 'tsconfig.json', 'e2e/build-scale-fixtures.ts', 'e2e/fixture.ts', 'test-support/fixture-ids.ts', 'test-support/otlp-builders.ts', 'test-support/scale-logs.ts', 'test-support/scale-metrics.ts') }}
       # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
       - name: Build otel-html
         shell: bash
@@ -572,7 +553,7 @@ jobs:
           command: node dist/cli/main.js
           name: otel-html-${{ github.job }}
 
-  # The standalone Bun binaries, built and smoke-tested on every PR (convert, serve over HTTP and gRPC, host, ci context,
+  # The standalone Bun binaries, built and smoke-tested (linux-x64 on every PR, all three targets on main) (convert, serve over HTTP and gRPC, host, ci context,
   # run, SIGINT, bad port; then convert, compaction and host run from outside the checkout). The release workflow keeps its own smoke step, which tests the artefact it uploads.
   binary:
     needs: changes
@@ -580,14 +561,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Pull requests build linux-x64 only; arm64 and Windows run on main, nightly and dispatch (the release builds
+        # all three, so a platform-only failure shows on main rather than after the tag).
+        target: ${{ fromJSON(github.event_name == 'pull_request' && '["linux-x64"]' || '["linux-x64","linux-arm64","windows-x64"]') }}
         include:
-          - os: ubuntu-latest
-            target: linux-x64
-          - os: ubuntu-24.04-arm
-            target: linux-arm64
-          # Windows here as in the release, so a Windows-only failure shows on the PR rather than after the tag.
-          - os: windows-latest
-            target: windows-x64
+          - target: linux-x64
+            os: ubuntu-latest
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+          - target: windows-x64
+            os: windows-latest
             ext: .exe
     runs-on: ${{ matrix.os }}
     permissions:

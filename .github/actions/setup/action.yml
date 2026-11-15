@@ -1,6 +1,11 @@
 name: setup
 description: Installs the mise tools, restores the pnpm store cache, and runs `mise run setup`.
 
+inputs:
+  install-hooks:
+    description: '"false" runs `pnpm install --frozen-lockfile` instead of `mise run setup` (no git hooks, no browsers), for jobs that only run tests'
+    default: "true"
+
 runs:
   using: composite
   steps:
@@ -18,5 +23,9 @@ runs:
         path: ${{ steps.store.outputs.path }}
         key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
         restore-keys: pnpm-store-${{ runner.os }}-${{ runner.arch }}-
-    - run: mise run setup
+    - if: ${{ inputs.install-hooks != 'false' }}
+      run: mise run setup
+      shell: bash
+    - if: ${{ inputs.install-hooks == 'false' }}
+      run: pnpm install --frozen-lockfile
       shell: bash
