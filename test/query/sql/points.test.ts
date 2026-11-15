@@ -700,6 +700,21 @@ describe('metric cells, exemplars and runs', () => {
             host('h2'),
           ),
         ),
+        summary(
+          'nfq',
+          pointsAt(
+            [0, 10].map(sec),
+            (i) => ({
+              count: '1',
+              sum: 1,
+              quantileValues: [
+                { quantile: 0.5, value: nfs(i, 1, 'NaN') },
+                { quantile: 0.9, value: nfs(i, 2, 9) },
+              ],
+            }),
+            host('h3'),
+          ),
+        ),
       ],
       resA,
     ) as never,
@@ -900,6 +915,8 @@ describe('metric cells, exemplars and runs', () => {
     expect(String(h('h1')?.quantiles)).toContain('7');
     expect(h('h2')?.sum).toBeNull();
     expect(h('h2')?.quantiles).toBeNull();
+    // a newer point with one non-finite quantile keeps its finite one, not the older point's
+    expect(String(h('h3')?.quantiles)).toBe('[{"quantile":0.9,"value":{"$d":"9"}}]');
   });
 
   test('exemplars come oldest first with the limit and relative times', () => {
