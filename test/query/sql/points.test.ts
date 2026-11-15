@@ -605,11 +605,111 @@ describe('metric cells, exemplars and runs', () => {
     ) as never,
   );
 
+  // Histogram and summary fields that hold a non-finite double: one point's field is dropped, the other point's stays.
+  const nfs = (i: number, ...vals: (number | string)[]) => vals[i] as never;
+  const NONFINITE_FIELDS = otlp(
+    metricsRequest(
+      [
+        histogram(
+          'nfh',
+          pointsAt(
+            [0, 10].map(sec),
+            (i) => ({
+              count: '1',
+              sum: 1,
+              min: nfs(i, 'NaN', 2),
+              max: nfs(i, 'Infinity', 9),
+              explicitBounds: [1],
+              bucketCounts: ['1', '0'],
+            }),
+            host('h1'),
+          ),
+          { temporality: 'delta' },
+        ),
+        histogram(
+          'nfh',
+          pointsAt(
+            [0, 10].map(sec),
+            (i) => ({
+              count: '1',
+              sum: 1,
+              min: nfs(i, 'NaN', '-Infinity'),
+              max: nfs(i, '-Infinity', 'NaN'),
+              explicitBounds: [1],
+              bucketCounts: ['1', '0'],
+            }),
+            host('h2'),
+          ),
+          { temporality: 'delta' },
+        ),
+        expHistogram(
+          'nfe',
+          pointsAt(
+            [0, 10].map(sec),
+            (i) => ({
+              scale: 0,
+              zeroCount: '0',
+              count: '1',
+              sum: 1,
+              min: nfs(i, 'NaN', 2),
+              max: nfs(i, 'Infinity', 9),
+              positive: { offset: 0, bucketCounts: ['1'] },
+            }),
+            host('h1'),
+          ),
+          { temporality: 'delta' },
+        ),
+        expHistogram(
+          'nfe',
+          pointsAt(
+            [0, 10].map(sec),
+            (i) => ({
+              scale: 0,
+              zeroCount: '0',
+              count: '1',
+              sum: 1,
+              min: nfs(i, 'NaN', '-Infinity'),
+              max: nfs(i, '-Infinity', 'NaN'),
+              positive: { offset: 0, bucketCounts: ['1'] },
+            }),
+            host('h2'),
+          ),
+          { temporality: 'delta' },
+        ),
+        summary(
+          'nfq',
+          pointsAt(
+            [0, 10].map(sec),
+            (i) => ({
+              count: '1',
+              sum: nfs(i, 4, 'Infinity'),
+              quantileValues: [{ quantile: 0.5, value: nfs(i, 7, 'NaN') }],
+            }),
+            host('h1'),
+          ),
+        ),
+        summary(
+          'nfq',
+          pointsAt(
+            [0, 10].map(sec),
+            (i) => ({
+              count: '1',
+              sum: nfs(i, 'NaN', '-Infinity'),
+              quantileValues: [{ quantile: 0.5, value: nfs(i, 'NaN', 'Infinity') }],
+            }),
+            host('h2'),
+          ),
+        ),
+      ],
+      resA,
+    ) as never,
+  );
+
   let cf: Format4Fixture;
   let cdb: TestDb;
   const rowsOf = (query: string): Row[] => cdb.rows(query);
   beforeAll(async () => {
-    cf = await buildFormat4Report([MAIN, EXEM, RUNS1, RUNS2, NONFINITE], { close: false });
+    cf = await buildFormat4Report([MAIN, EXEM, RUNS1, RUNS2, NONFINITE, NONFINITE_FIELDS], { close: false });
     cdb = await openFixtureDb(cf);
   });
   const all = { files: ['all-files'], all: true, total: 1 } as const;
@@ -778,6 +878,28 @@ describe('metric cells, exemplars and runs', () => {
     expect(String(h('h1')?.quantiles)).toContain('2');
     expect([num(h('h2')?.count), num(h('h2')?.points)]).toEqual([1, 1]);
     expect(Object.keys(rows[0] ?? {})).toContain('series_id');
+  });
+
+  test('a non-finite histogram or exp min and max is dropped per field', () => {
+    for (const [name, kind] of [
+      ['nfh', 'hist'],
+      ['nfe', 'exp'],
+    ] as const) {
+      const [r] = cells(name, kind, { by: [] });
+      expect([name, num(r?.min), num(r?.max)]).toEqual([name, 2, 9]);
+      const rows = cells(name, kind);
+      const all = rows.find((x) => x.g0 === '"h2"');
+      expect([name, all?.min, all?.max]).toEqual([name, null, null]);
+    }
+  });
+
+  test('a non-finite summary sum or quantile is dropped per field', () => {
+    const rows = cells('nfq', 'summary');
+    const h = (v: string) => rows.find((r) => r.g0 === `"${v}"`);
+    expect(num(h('h1')?.sum)).toBe(4);
+    expect(String(h('h1')?.quantiles)).toContain('7');
+    expect(h('h2')?.sum).toBeNull();
+    expect(h('h2')?.quantiles).toBeNull();
   });
 
   test('exemplars come oldest first with the limit and relative times', () => {

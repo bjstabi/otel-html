@@ -377,8 +377,8 @@ export function metricCellsQuery(opts: CellsOptions): Query {
           cell: col('cell'),
           series_id: col('sid'),
           count: sql`arg_max(count, time_unix_nano)`,
-          sum: sql`arg_max(sum, time_unix_nano)`,
-          quantiles: sql`arg_max(quantiles, time_unix_nano)`,
+          sum: sql`arg_max(sum, time_unix_nano) FILTER (WHERE isfinite(sum))`,
+          quantiles: sql`arg_max(${verbatim(FINITE_QUANTILES)}, time_unix_nano) FILTER (WHERE ${verbatim(FINITE_QUANTILES)} IS NOT NULL)`,
           points: sql`count(*)`,
         })
         .groupby(...keys, col('sid'))
@@ -387,6 +387,17 @@ export function metricCellsQuery(opts: CellsOptions): Query {
       return assertNever(opts.kind, 'metric kind');
   }
 }
+
+/** A double column as the cell aggregates see it: a non-finite value (NaN, ±Infinity) counts as no value. */
+function finiteOrNull(name: string): ExprNode {
+  return sql`CASE WHEN isfinite(${col(name)}) THEN ${col(name)} END`;
+}
+
+/**
+ * A summary point's `quantiles` JSON without the entries whose value is a non-finite double (stored as the strings
+ * "NaN", "Infinity" and "-Infinity"); null when none is left.
+ */
+const FINITE_QUANTILES = `nullif(CAST(to_json(list_filter(from_json(quantiles, '["JSON"]'), e -> coalesce(json_extract_string(e, '$.value'), '') NOT IN ('NaN', 'Infinity', '-Infinity'))) AS VARCHAR), '[]')`;
 
 /**
  * Histogram cells (D25): every point contributes one entry per bucket (`idx` from 0) and one `x` row with its scalars;
@@ -431,8 +442,8 @@ function histCells(opts: CellsOptions, pts: (extra: Record<string, ExprNode>) =>
     cnt: sql`CAST(NULL AS BIGINT)`,
     dc: col('delta_count'),
     sm: col('delta_value'),
-    mn: col('min'),
-    mx: col('max'),
+    mn: finiteOrNull('min'),
+    mx: finiteOrNull('max'),
   });
   const merged = Query.from({ e: Query.unionAll(entries, scalars) })
     .select({
@@ -536,8 +547,8 @@ function expCells(opts: CellsOptions, pts: (extra: Record<string, ExprNode>) => 
     cnt: sql`CAST(NULL AS BIGINT)`,
     dc: col('delta_count'),
     sm: col('delta_value'),
-    mn: col('min'),
-    mx: col('max'),
+    mn: finiteOrNull('min'),
+    mx: finiteOrNull('max'),
     zc: col('delta_zero_count'),
     zt: col('zero_threshold'),
     sc: sql`coalesce(ms, delta_scale)`,
