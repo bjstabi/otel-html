@@ -13,7 +13,8 @@ pre-push:
     check-static:
       run: mise run check:static
     # The tests changed since the merge base with origin/main (else main); with no merge base at all, every unit test.
-    # `mise run verify` before a PR stays the rule (AGENTS.md).
+    # It skips the @perf tests and the scaling measurement, which `mise run check` and CI still run; `mise run verify`
+    # before a PR stays the rule (AGENTS.md).
     unit-changed:
       run: |
         base=$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main 2>/dev/null)

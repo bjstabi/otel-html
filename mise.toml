@@ -520,7 +520,13 @@ sources = [
   "test-support/scale-logs.ts",
   "test-support/scale-metrics.ts",
 ]
-outputs = ["e2e/.reports-scale/**"]
+# Not `**`: rowgroups has a task of its own (e2e:fixtures:rowgroups:data), and overlapping outputs would make this one skip
+# after a rowgroups-only build. This task wipes the folder, so that one then reruns.
+outputs = [
+  "e2e/.reports-scale/many/**",
+  "e2e/.reports-scale/scale/**",
+  "e2e/.reports-scale/writer.sha256",
+]
 run = "bun e2e/build-scale-fixtures.ts"
 
 # Only e2e/calibration.spec.ts reads `rowgroups`, so a selection that names it and not scale.spec.ts builds just this one.
