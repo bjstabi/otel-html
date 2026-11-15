@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   cpSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -132,8 +133,104 @@ describe('upgradeReport', () => {
       const before = hashTree(dir);
       const e = await failure(upgradeReport(deps(), dir));
       expect(e.code).toBe('invalid-report');
+      expect(e.hint).toContain(`upgrade ${dir} --assets-base <shared base>`);
+      expect(e.hint).toContain('replace the assets link with a real folder');
+      expect(e.hint).toContain("this version's viewer files");
+      expect(e.hint).toContain('flat folder');
       expect(readdirSync(outside)).toEqual([]);
       expect(hashTree(dir)).toEqual(before);
+    },
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'a shared --assets-base upgrades a report whose assets folder links out, writing nothing through the link',
+    async () => {
+      const dir = await formatFourReport();
+      const outside = mkdtempSync(join(tmpdir(), 'upgrade-outside-'));
+      // Content the writer would not produce: a write of the viewer file through the link changes the hash,
+      // and so does a new file. The base is a folder of the link's target, reached through the report's link.
+      writeFileSync(join(outside, 'viewer.abc123.js'), 'the publisher copy, not ours');
+      writeFileSync(join(outside, 'viewer.old.js'), 'old');
+      mkdirSync(join(outside, '0.0.0'));
+      writeFileSync(join(outside, '0.0.0/viewer.abc123.js'), 'shared viewer');
+      rmSync(join(dir, 'assets'), { recursive: true });
+      symlinkSync(outside, join(dir, 'assets'));
+      const targetBefore = hashTree(outside);
+      const base = 'assets/0.0.0/';
+      const w = createTestWriter();
+      const r = await upgradeReport({ ...w.deps, fs: createNodeFileSystem() }, dir, { assetsBase: base });
+      expect(r).toMatchObject({ formatVersion: 6 });
+      expect(w.logs.filter((l) => l.level === 'warn')).toEqual([]);
+      expect(hashTree(outside)).toEqual(targetBefore);
+      expect(readlinkSync(join(dir, 'assets'))).toBe(outside);
+      expect((readManifest(dir) as { engine: { assetsBase: string } }).engine.assetsBase).toBe(base);
+      expect(readFileSync(join(dir, 'index.html'), 'utf8')).toContain(base);
+      // An append on the same base writes nothing through the link either.
+      const s = await openSession(
+        { ...createTestWriter().deps, fs: createNodeFileSystem() },
+        { out: dir, config: testConfig({ writer: { format: 'site', assetsBase: base } }), mode: 'append' },
+      );
+      await s.add(otlp(spansRequest(1, 0, 50)), 'more.json');
+      await s.close();
+      expect(hashTree(outside)).toEqual(targetBefore);
+      expect(readlinkSync(join(dir, 'assets'))).toBe(outside);
+    },
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'a shared base that holds no viewer files on this disk is a warning, not a refusal',
+    async () => {
+      const dir = await formatFourReport();
+      const w = createTestWriter();
+      await upgradeReport({ ...w.deps, fs: createNodeFileSystem() }, dir, { assetsBase: 'assets/9.9.9/' });
+      const warns = w.logs.filter((l) => l.level === 'warn');
+      expect(warns).toHaveLength(1);
+      expect(warns[0]?.msg).toContain('assets/9.9.9/');
+      expect(warns[0]?.msg).toContain('viewer.abc123.js');
+    },
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'a site base outside the report is not checked: it is deployed beside the report, not on this disk',
+    async () => {
+      const dir = await formatFourReport();
+      const w = createTestWriter();
+      await upgradeReport({ ...w.deps, fs: createNodeFileSystem() }, dir, {
+        assetsBase: '../../assets/9.9.9/',
+      });
+      expect(w.logs.filter((l) => l.level === 'warn')).toEqual([]);
+    },
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'the no-base hint of a shared report with a linked assets folder does not offer a copy into assets/',
+    async () => {
+      const dir = await formatFourReport();
+      await upgradeReport(deps(), dir, { assetsBase: 'assets/9.9.9/' });
+      const outside = mkdtempSync(join(tmpdir(), 'upgrade-outside-'));
+      rmSync(join(dir, 'assets'), { recursive: true });
+      symlinkSync(outside, join(dir, 'assets'));
+      const none = await failure(upgradeReport(deps(), dir));
+      expect(none.code).toBe('usage');
+      expect(none.hint).not.toContain('--assets-base assets/ to copy');
+      // Asking for the default base on a report that records a shared one points at the recorded base.
+      const back = await failure(upgradeReport(deps(), dir, { assetsBase: 'assets/' }));
+      expect(back.code).toBe('invalid-report');
+      expect(back.hint).toContain('assets/9.9.9/');
+      expect(back.hint).not.toContain('upgrade ');
+    },
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'a default-base upgrade of a report whose assets folder links out is still refused',
+    async () => {
+      const dir = await formatFourReport();
+      const outside = mkdtempSync(join(tmpdir(), 'upgrade-outside-'));
+      rmSync(join(dir, 'assets'), { recursive: true });
+      symlinkSync(outside, join(dir, 'assets'));
+      const e = await failure(upgradeReport(deps(), dir, { assetsBase: 'assets/' }));
+      expect(e.code).toBe('invalid-report');
+      expect(readdirSync(outside)).toEqual([]);
     },
   );
 
