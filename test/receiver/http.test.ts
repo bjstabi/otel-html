@@ -378,15 +378,20 @@ describe('OTLP/HTTP transport', () => {
       'POST /v1/traces HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n',
     );
     socket.write(chunk(body.subarray(0, head)));
-    await new Promise((r) => setTimeout(r, 200)); // the server has refused by now
-    socket.write(chunk(body.subarray(head, head + 100_000)));
-    await new Promise((r) => setTimeout(r, 200));
-    socket.write(chunk(body.subarray(head + 100_000)));
-    socket.end('0\r\n\r\n');
-    socket.resume();
-    expect(await closed).toBeUndefined();
-    expect(Buffer.concat(received).toString('latin1')).toMatch(/^HTTP\/1\.1 413 /);
-    expect(receiver.stats().refused['too-large']).toBe(1);
+    try {
+      // The server has refused by now; the rest is sent well inside its 1 s linger.
+      await new Promise((r) => setTimeout(r, 150));
+      socket.write(chunk(body.subarray(head, head + 100_000)));
+      await new Promise((r) => setTimeout(r, 50));
+      socket.write(chunk(body.subarray(head + 100_000)));
+      socket.end('0\r\n\r\n');
+      socket.resume();
+      expect(await closed).toBeUndefined();
+      expect(Buffer.concat(received).toString('latin1')).toMatch(/^HTTP\/1\.1 413 /);
+      expect(receiver.stats().refused['too-large']).toBe(1);
+    } finally {
+      socket.destroy();
+    }
   });
 
   test('a plain body streamed past the limit without Content-Length is 413', async () => {

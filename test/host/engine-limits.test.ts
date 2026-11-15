@@ -368,8 +368,9 @@ describe('the restart', () => {
         startPendingQuery: () => new Promise<never>(() => {}),
       };
     };
-    // The limit is for every statement, the fresh real worker's first one included, so it is generous: only the
-    // hung worker's guard (timeout plus grace) has to fire, and it does not depend on how fast the machine is.
+    // The limit is for every statement, the fresh real worker's first one included, so it is generous. The hung
+    // worker's end does not depend on the machine's speed (only its guard can end it); the fresh worker's first
+    // `SELECT 1` still has to finish inside 1.5 s, about ten times what a loaded Windows runner took.
     const timeoutMs = 1500;
     const graceMs = 100;
     const e = await started({ timeoutMs, graceMs, open });
