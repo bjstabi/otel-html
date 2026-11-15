@@ -525,8 +525,15 @@ describe('run', () => {
       expect(readJson<{ message: string }>(join(site, MAIN, 'badge-ci.json')).message).not.toMatch(/^✓/);
     });
 
-    test("a completed API run's own values win", async () => {
-      await apply([addRun(42, 1, (m) => m, MAIN_CHANNEL, closed, recorded, { conclusion: 'success' })]);
+    test("recorded values win over a completed API run, and the attempt is the update's", async () => {
+      await apply([
+        addRun(42, 2, (m) => m, MAIN_CHANNEL, closed, recorded, { conclusion: 'success', attempt: 3 }),
+      ]);
+      expect(entry()).toMatchObject({ conclusion: 'failure', completedAt: endedAt, attempt: 2 });
+    });
+
+    test("without recorded fields a completed API run's values stand", async () => {
+      await apply([addRun(42, 1, (m) => m, MAIN_CHANNEL, closed, {}, { conclusion: 'success' })]);
       expect(entry()).toMatchObject({ conclusion: 'success' });
       expect(entry()?.completedAt).not.toBe(endedAt);
     });

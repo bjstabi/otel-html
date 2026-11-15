@@ -312,9 +312,10 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
         if (plan.channel === null || plan.run === null) return refuse('no channel');
         channel = plan.channel;
         run = { ...stripEvent(plan.run), reportPath: reportPathOf(channel.key, u.runId) };
-        // the plan saw the API run unfinished (`unknown`): the update records what the finished run will be
-        if (u.kind === 'run' && run.conclusion === 'unknown' && u.conclusion !== undefined) {
+        // recorded values are the run without its in-graph jobs (what the report shows): they win over the API's
+        if (u.kind === 'run' && u.conclusion !== undefined) {
           run.conclusion = u.conclusion;
+          run.attempt = u.runAttempt;
           if (u.completedAt !== undefined) run.completedAt = u.completedAt;
         }
       }

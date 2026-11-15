@@ -304,16 +304,24 @@ export async function runUpdateRun(
   };
   // an in-graph run uploads this while it is still running: record the conclusion the finished run will have
   if (o.excludeJobs !== undefined && o.excludeJobs !== '' && run.status !== 'completed') {
-    const jobs = await fetchJobs(
-      { apiUrl: api, repository: o.repository, runId: run.id, runAttempt: run.run_attempt },
-      token,
-      API_TIMEOUT_MS,
-      fetchFn,
-    );
-    const finished = finishedView(run, jobs, o.excludeJobs).run;
-    if (finished.conclusion !== null) {
-      update.conclusion = finished.conclusion;
-      update.completedAt = new Date(Date.parse(finished.updated_at)).toISOString();
+    try {
+      const jobs = await fetchJobs(
+        { apiUrl: api, repository: o.repository, runId: run.id, runAttempt: run.run_attempt },
+        token,
+        API_TIMEOUT_MS,
+        fetchFn,
+      );
+      const finished = finishedView(run, jobs, o.excludeJobs).run;
+      if (
+        finished.conclusion === 'success' ||
+        finished.conclusion === 'failure' ||
+        finished.conclusion === 'cancelled'
+      ) {
+        update.conclusion = finished.conclusion;
+        update.completedAt = new Date(Date.parse(finished.updated_at)).toISOString();
+      }
+    } catch (e) {
+      warning(io, 'update run', `no conclusion recorded: ${messageOf(e)}`);
     }
   }
   const name = updateName(update);

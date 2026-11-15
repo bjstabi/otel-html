@@ -114,6 +114,7 @@ describe('UpdateJsonSchema', () => {
     const rec = { ...run, conclusion: 'failure', completedAt: '2026-11-15T00:01:00.000Z' };
     expect(UpdateJsonSchema.safeParse(rec).success).toBe(true);
     expect(UpdateJsonSchema.safeParse({ ...rec, completedAt: 'soon' }).success).toBe(false);
+    expect(UpdateJsonSchema.safeParse({ ...rec, conclusion: 'in_progress' }).success).toBe(false);
     expect(UpdateJsonSchema.safeParse({ ...rec, kind: 'remove-pr', pr: 1 }).success).toBe(false);
   });
 

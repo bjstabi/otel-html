@@ -21,7 +21,7 @@ inputs:
     default: ""
   exclude-jobs:
     description: >-
-      Report the run as finished without the jobs whose name starts with this prefix (`ci report --exclude-jobs`), for a
+      Report the run as finished without the jobs whose name starts with this prefix (`ci report`, `ci link` and `ci update run` take it as `--exclude-jobs`), for a
       job that runs inside the run being reported, such as `site / `. Empty reports the run as it is.
     default: ""
   target:

@@ -100,7 +100,7 @@ export const UpdateJsonSchema: z.ZodType<UpdateJson> = z
     partitions: z.exactOptional(z.array(UpdatePartitionSchema)),
     ci: z.exactOptional(CiPartitionSchema),
     pr: z.exactOptional(nonNegInt),
-    conclusion: z.exactOptional(z.string().min(1)),
+    conclusion: z.exactOptional(z.enum(['success', 'failure', 'cancelled'])),
     completedAt: z.exactOptional(z.iso.datetime()),
   })
   .superRefine((u, ctx) => {

@@ -470,6 +470,17 @@ describe('runUpdateRun', () => {
     expect(u.completedAt).toBe(endedAt);
   });
 
+  test('a failed jobs lookup is a warning and the update has no recorded fields', async () => {
+    const report = await runReportDir();
+    const noJobs = async (url: string): Promise<Response> =>
+      /\/actions\/runs\/42\/attempts\/1\/jobs/.test(url) ? new Response('no', { status: 500 }) : api(url);
+    await runUpdateRun({ ...runOpts(report), excludeJobs: 'site / ' }, ioOf(), deps, noJobs);
+    expect(out.join('')).toMatch(/warning.*no conclusion recorded/);
+    const u = await readUpdate(deps.fs, join(dir, 'u', outputs().name ?? ''));
+    expect(u.conclusion).toBeUndefined();
+    expect(outputs().published).toBe('true');
+  });
+
   test('without --exclude-jobs, or for a completed run, nothing is recorded', async () => {
     const report = await runReportDir();
     await runUpdateRun(runOpts(report), ioOf(), deps, api);
