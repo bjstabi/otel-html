@@ -21,6 +21,7 @@
       "!coverage",
       "!.mise",
       "!e2e/.cache",
+      "!.cache",
       "!test-results",
       "!.superpowers",
       "!docs",

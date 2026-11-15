@@ -716,7 +716,8 @@ files across shards by these recorded seconds, so every shard computes the same 
 the table weighs the median. Unit files get the seconds a worker spends on them (environment, setup, import and tests);
 Playwright spec files the sum of their tests' durations (Chromium's `-file` and `-http` projects together). Failing
 tests still record their durations, and the task then exits non-zero. `-- unit chromium` rewrites only those parts of the table
-(parts: unit, chromium, firefox, webkit); a browser run that hangs is killed after 20 minutes and its part is kept."""
+(parts: unit, chromium, firefox, webkit); a browser run that hangs is killed after 20 minutes and its part is kept.
+A file whose seconds moved more than 2x since the last table prints a "weight drifted" warning on stderr (never a failure)."""
 depends = ["e2e:fixtures"]
 run = "bun scripts/shard-weights.ts"
 
