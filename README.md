@@ -900,6 +900,8 @@ lint, typecheck and knip (the part of `check` without tests)
 
 ## `coverage`
 
+- Depends: engine:assets
+
 - **Usage:** `coverage`
 
 Unit coverage from the suite without @perf, per vitest project, into coverage/unit-&lt;project>/ (lcov, summary); never cached
@@ -950,6 +952,14 @@ not the viewer's: a viewer change only reruns e2e:fixtures:scale.
 - **Usage:** `e2e:otel-recorder`
 
 Bundle the e2e in-page span recorder into e2e/.cache/otel-recorder.js (skipped while up to date)
+
+## `engine:assets`
+
+- **Usage:** `engine:assets`
+
+The DuckDB engine files for the host and the unit tests into .cache/engine-assets (skipped while up to date)
+The same files build:viewer copies into dist/viewer/assets (scripts/engine-assets.ts), outside dist/ so the unit,
+scaling and coverage tasks can depend on them without a build; the extensions are downloaded once into .cache/duckdb-extensions.
 
 ## `fixtures`
 
@@ -1110,6 +1120,8 @@ the Traces and Logs landings with e2e/load.spec.ts.
 
 ## `test:scaling`
 
+- Depends: engine:assets
+
 - **Usage:** `test:scaling`
 
 The scaling measurement: every catalogue entry cold on the generated reports, classified and compared with the declared classes
@@ -1132,6 +1144,8 @@ Unit tests: the parallel pass, then the @perf pass
 Unit tests whose import graph reaches a file changed since `ref` (default main)
 
 
+- Depends: engine:assets
+
 - **Usage:** `test:unit:changed [ref]`
 
 ### Arguments
@@ -1140,6 +1154,8 @@ Unit tests whose import graph reaches a file changed since `ref` (default main)
   **Default:** `main`
 
 ## `test:unit:main`
+
+- Depends: engine:assets
 
 - **Usage:** `test:unit:main`
 

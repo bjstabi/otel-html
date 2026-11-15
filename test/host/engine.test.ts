@@ -1,13 +1,13 @@
 import { access, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tableFromIPC } from 'apache-arrow';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { engineAssetNames, engineExtensionName, engineNodeAssetNames } from '../../src/format/engine.js';
 import { TABLE_COLUMNS } from '../../src/format/parquet/columns.js';
 import { startHostEngine } from '../../src/host/engine.js';
-import { hostEngineFiles } from '../../src/host/engine-files.js';
+import { DEFAULT_DIRS, hostEngineFiles } from '../../src/host/engine-files.js';
 import { WORKER_SHIM } from '../../src/host/node-duckdb.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
@@ -145,6 +145,19 @@ describe('hostEngineFiles', () => {
   it('the worker shim bridges parentPort and onmessage', () => {
     expect(WORKER_SHIM).toContain('parentPort');
     expect(WORKER_SHIM).toContain('onmessage');
+  });
+
+  it('with no dirs, a checkout without a viewer build finds the engine files mise run engine:assets wrote', async () => {
+    const cache = new URL('../../.cache/engine-assets/', import.meta.url);
+    const files = await hostEngineFiles({ dirs: [pathToFileURL('/nonexistent/'), cache] });
+    expect(files.bindings).toBe(fileURLToPath(new URL(n.bindings, cache)));
+    expect(await readFile(files.bindings, 'utf8')).not.toContain('require("apache-arrow")');
+  });
+
+  it('the default dirs end with the engine:assets folder of a development checkout', () => {
+    expect(DEFAULT_DIRS.at(-1)?.href).toBe(
+      new URL('../../.cache/engine-assets/', pathToFileURL(resolve('src/host/engine-files.ts'))).href,
+    );
   });
 
   it('with no dirs resolves the engine files that exist: the WASM as the package has it, the Node files bundled, both extensions', async () => {

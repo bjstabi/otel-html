@@ -230,6 +230,7 @@ description = "Unit tests: the parallel pass, then the @perf pass"
 run = [{ task = "test:unit:main" }, { task = "test:unit:perf" }]
 
 [tasks."test:unit:main"]
+depends = ["engine:assets"]
 description = "vitest, everything but @perf, in parallel (args after `--` go to vitest: `-- --shard=1/2` splits the files by the seconds in test-support/shard-weights.json)"
 # Beyond the code: what tests read from disk (fixtures/reports, the committed JSON schema, the shipped CI dashboard
 # config, .github/actions scripts, scripts/load-receiver-plan, the e2e helpers they import (e2e/*.ts and e2e/otel-page/,
@@ -254,6 +255,7 @@ env = { OTEL_HTML_PERF_PASS = "0" }
 run = "pnpm exec vitest run"
 
 [tasks."test:scaling"]
+depends = ["engine:assets"]
 description = """The scaling measurement: every catalogue entry cold on the generated reports, classified and compared with the declared classes
 Builds the reports of test-support/scaling/generator.ts (retention, density and window at 2, 4 and 8, dense and sparse),
 runs each entry of src/viewer/data/catalogue.ts cold through the counting engine and asserts the class it declares
@@ -386,6 +388,7 @@ depends = ["check"]
 run = { task = "test:e2e:chromium" }
 
 [tasks.coverage]
+depends = ["engine:assets"]
 # No sources and no cache, on purpose: with neither, mise always runs it, so a restored task cache can never replay it
 # and leave coverage/ empty. Coverage is only meaningful from the whole suite, never from the subset the cached
 # test:unit:main would skip or `vitest --changed` would pick. Pinned like test:unit:main: an inherited
@@ -401,6 +404,7 @@ run = [
 ]
 
 [tasks."test:unit:changed"]
+depends = ["engine:assets"]
 description = "Unit tests whose import graph reaches a file changed since `ref` (default main)"
 usage = 'arg "[ref]" default="main"'
 run = "pnpm exec vitest run --changed $usage_ref"
@@ -449,6 +453,19 @@ sources = [
 # in .cache/duckdb-extensions, so only the first build needs the network (OTEL_HTML_DUCKDB_EXTENSIONS_DIR: offline).
 outputs = ["dist/viewer/**"]
 run = ["pnpm exec vite build", "bun scripts/engine-assets.ts"]
+
+[tasks."engine:assets"]
+description = """The DuckDB engine files for the host and the unit tests into .cache/engine-assets (skipped while up to date)
+The same files build:viewer copies into dist/viewer/assets (scripts/engine-assets.ts), outside dist/ so the unit,
+scaling and coverage tasks can depend on them without a build; the extensions are downloaded once into .cache/duckdb-extensions."""
+sources = [
+  "@group:deps",
+  "scripts/duckdb-extensions.json",
+  "scripts/engine-assets.ts",
+  "src/format/engine.ts",
+]
+outputs = [".cache/duckdb-extensions/**", ".cache/engine-assets/**"]
+run = "bun scripts/engine-assets.ts --out .cache/engine-assets"
 
 [tasks.build]
 description = "Build the library, then the viewer, into dist/"
