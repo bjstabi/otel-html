@@ -23,6 +23,11 @@ The e2e suite before a PR is a rule, not a hook, so a failure that reaches CI is
 which `test:e2e` builds only when the selection includes it). The tasks document themselves: `mise tasks ls` for the list, `mise tasks info
 <task>` for the full description (the slow ones, `test:load*` and `bench:metrics`, say what they cost).
 
+Waiting on a long command: run it in the foreground with a timeout (`timeout 900 mise run verify`), or as one
+background command whose completion your harness reports. Never poll for it with a loop such as
+`until ! pgrep -f "mise run check"; do sleep 5; done`: `pgrep -f` matches the loop's own command line, so the loop
+never ends (the same goes for `pkill -f`, which kills its own shell). Leave nothing running when you hand back.
+
 ## Conventions
 
 [docs/agents/conventions.md](docs/agents/conventions.md): branches, commits and PR titles (squash-merge; the title
