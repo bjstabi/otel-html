@@ -175,5 +175,6 @@ describe.each([
       await stored.close();
       await scanned.close();
     }
-  });
+    // Two real engines and a written report: about 3 s here, past vitest's 5 s default on a loaded Windows runner.
+  }, 60_000);
 });
