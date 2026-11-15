@@ -11,7 +11,6 @@ import {
   runDeployPrune,
   runDeployScan,
 } from '../ci/deploy-main.js';
-import { runDispatch } from '../ci/dispatch.js';
 import { envVar, messageOf, say } from '../ci/github-api.js';
 import { runLink } from '../ci/link-main.js';
 import { runPusherCommand } from '../ci/pusher-main.js';
@@ -312,29 +311,19 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
       'time between ticks: 60s, 2m, 500ms (the loop never ticks faster than 1000ms)',
     )
     .option('--config <file>', 'config file for the CI spans report')
-    .option('--deployer-workflow <file>', 'the deployer workflow file to wake', 'pages-deploy.yml')
     .option('--detached', 'INTERNAL: run the loop in this process instead of re-spawning')
-    .action(
-      async (flags: {
-        report: string;
-        every: string;
-        config?: string;
-        deployerWorkflow: string;
-        detached?: boolean;
-      }) => {
-        await runPusherCommand(
-          {
-            report: flags.report,
-            every: flags.every,
-            deployerWorkflow: flags.deployerWorkflow,
-            detached: flags.detached === true,
-            ...(flags.config === undefined ? {} : { config: flags.config }),
-          },
-          io,
-          await resolveDeps(deps),
-        );
-      },
-    );
+    .action(async (flags: { report: string; every: string; config?: string; detached?: boolean }) => {
+      await runPusherCommand(
+        {
+          report: flags.report,
+          every: flags.every,
+          detached: flags.detached === true,
+          ...(flags.config === undefined ? {} : { config: flags.config }),
+        },
+        io,
+        await resolveDeps(deps),
+      );
+    });
   ci.command('upload')
     .description(
       'upload a folder as a workflow run artifact (needs the runtime variables of a JavaScript action)',
@@ -354,29 +343,6 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
         io,
         await resolveDeps(deps),
       );
-    });
-  ci.command('dispatch')
-    .description('wake the deployer workflow on the default branch (never fails)')
-    .option('--workflow <file>', 'the deployer workflow file', 'pages-deploy.yml')
-    .option('--repository <owner/repo>', 'repository (default: $GITHUB_REPOSITORY)')
-    .option('--run-id <n>', 'the run that asks (default: $GITHUB_RUN_ID)')
-    .option('--no-watch', 'do not wait to see the deployer run start')
-    .action(async (flags: { workflow: string; repository?: string; runId?: string; watch: boolean }) => {
-      try {
-        const runId = flags.runId ?? envVar(io, 'GITHUB_RUN_ID');
-        await runDispatch(
-          {
-            workflow: flags.workflow,
-            repository: repositoryOf(flags.repository),
-            runId: parseRunId(runId ?? ''),
-          },
-          io,
-          undefined,
-          { skip: !flags.watch },
-        );
-      } catch (e) {
-        say(io, `otel-html dispatch: not dispatched: ${messageOf(e)}`);
-      }
     });
   deploy
     .command('plan')

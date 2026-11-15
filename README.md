@@ -448,7 +448,7 @@ shell: node dist/cli/main.js run -o .otel-html/report -- bash --noprofile --norc
 
 The `otel-html ci context` step ([src/cli/ci/context-main.ts](src/cli/ci/context-main.ts)) looks the job up in the Actions API and sets `TRACEPARENT` and the resource attributes for later steps. The trace id is derived from the run, and the span ids from the run and job, so the job reports nest under the run → job spans without the jobs talking to each other. If the job lookup fails, the job id falls back to a hash of its name and runner (with a warning), and `context.json` records both; the publisher matches it to the job (its display name, or a matrix leg `<name> (…)`, on that runner), so matrix legs no longer need `OTEL_HTML_JOB_NAME`. Set it when the job's `name:` differs from its id beyond case, or when two legs of one name ran one after another on one runner. Each job uploads its `.otel-html/` folder as an `otel-html-*` artifact. The jobs upload artifacts only; the `site` job at the end of the run reports and deploys.
 
-Each `ci` and `load` run ends with a `site` job ([site.yml](.github/workflows/site.yml), a called workflow) that `needs:` every other job, so the run's graph reads test jobs → `site / report` → `site / deploy`. `site / report` runs `otel-html ci report` ([src/cli/ci/report-main.ts](src/cli/ci/report-main.ts)) on the run itself, with `exclude-jobs: 'site / '` so the report is of the finished test jobs (the `site / *` jobs are absent; the run's result is the test jobs'). It builds with the run's own commit, which is trusted: the `site` job's `if:` runs it only for a push or schedule on the default branch, or a pull request from this repository that a person started; a fork's or a bot's pull request run has no `site` job and uploads nothing the deployer accepts. A person's same-repository commit executes under `main`'s Actions cache scope and could save a `mise-tasks-*` entry that later runs replay as a pass. Only people with write access can do that, and `main`'s ruleset requires a pull request with an approving review and requires no status check, so a forged pass can make a run look green but cannot merge anything a reviewer would not see. This risk is accepted. The report job writes the run → job spans from the Actions API, turns each job's log into log records, adds queue-time and duration metrics, and merges these with the job artifacts into one `local` report, uploaded as `ci-run-report`. That artifact is about 15 MB and opens from disk (double-click `index.html` after unzipping); only the copy that goes to the site is converted to `site` format. The report opens on the [CI dashboard](.github/actions/otel-html-publish/otel-html-ci.yaml): job duration, queue time, step counts, runs, and warnings and errors, with `workflow` (`cicd.pipeline.name`, to tell `ci` and `load` runs apart on a shared page), `run` and `job` variables. The run-level span lives on the run's own resource, so selecting a job in `job` hides it from the widgets that list spans; the Runs list still shows each run that job ran in, through its job span. A job skipped by its `if:` gets no duration or queue-time point. The run key includes the run attempt, so after a partial re-run the artifacts of jobs that did not re-run (still attempt 1) show up as separate traces without a job span.
+Each `ci` and `load` run ends with a `site` job ([site.yml](.github/workflows/site.yml), a called workflow) that `needs:` every other job, so the run's graph reads test jobs → `site / report` → `site / deploy`. `site / report` runs `otel-html ci report` ([src/cli/ci/report-main.ts](src/cli/ci/report-main.ts)) on the run itself, with `exclude-jobs: 'site / '` so the report is of the finished test jobs (the `site / *` jobs are absent; the run's result is the test jobs'). It builds with the run's own commit, which is trusted: the `site` job's `if:` runs it only for a non-PR event on the default branch (push, schedule, manual run), or a pull request from this repository opened by a person; a fork's or a bot's pull request run has no `site` job and uploads nothing the deployer accepts. A person's same-repository commit executes under `main`'s Actions cache scope and could save a `mise-tasks-*` entry that later runs replay as a pass. Only people with write access can do that, and `main`'s ruleset requires a pull request with an approving review and requires no status check, so a forged pass can make a run look green but cannot merge anything a reviewer would not see. This risk is accepted. The report job writes the run → job spans from the Actions API, turns each job's log into log records, adds queue-time and duration metrics, and merges these with the job artifacts into one `local` report, uploaded as `ci-run-report`. That artifact is about 15 MB and opens from disk (double-click `index.html` after unzipping); only the copy that goes to the site is converted to `site` format. The report opens on the [CI dashboard](.github/actions/otel-html-publish/otel-html-ci.yaml): job duration, queue time, step counts, runs, and warnings and errors, with `workflow` (`cicd.pipeline.name`, to tell `ci` and `load` runs apart on a shared page), `run` and `job` variables. The run-level span lives on the run's own resource, so selecting a job in `job` hides it from the widgets that list spans; the Runs list still shows each run that job ran in, through its job span. A job skipped by its `if:` gets no duration or queue-time point. The run key includes the run attempt, so after a partial re-run the artifacts of jobs that did not re-run (still attempt 1) show up as separate traces without a job span.
 
 The run's report is then published to the site at <https://bjstabi.github.io/otel-html/>. The layout is:
 
@@ -459,7 +459,7 @@ The run's report is then published to the site at <https://bjstabi.github.io/ote
 
 Each folder holds the runs of every workflow (`ci`, `load`). A run on any other branch, or a push from a fork, with no open pull request is not published. The site keeps the last 30 runs of each workflow per branch and the last 10 of each workflow per pull request; a re-run replaces its folder. GitHub Pages sites are limited to 1 GB. A run's report here is its data only (the viewer is shared). It is estimated at about 1.7 MB: the format-3 report's 3.6 MB less its 1.9 MB viewer. That is the format-3 figure; format 4 has not been measured on the site yet, and the first format-4 publishes will measure it. Each folder also carries its rolling report, the runs' data again: at the defaults that is about 150 MB for `/branch/main/` and about 25 MB per open pull request. On top of that each otel-html version in use adds about 40 MB of `/assets/<version>/` (the DuckDB engine and its extensions) until no retained report references it. Every deployer pass removes the asset versions no report references any more, so a version leaves the site once its last report does. Do not delete `/assets/` by hand: every report breaks. A change to the viewer without a version bump adds its new `viewer.<hash>` files to the same version's folder, a few MB each, until that version is pruned. When a pull request closes or merges, `pull_request_target` triggers the `cleanup` job, which removes its `/pr/<number>/` folder; after a merge, `/branch/main/` carries the merged result. The per-workflow folders of earlier versions (`/ci/`, `/load/`) are removed by the next deployer pass; nothing redirects from them.
 
-`/branch/<name>/` and `/pr/<number>/` are rolling reports: after each deployer pass the deployer merges the channel's retained `runs/<run_id>/` reports, oldest first, into one report and replaces everything in the folder except `runs/` and any `preview-*.png` screenshots, which survive rebuilds (a later step may refresh them). After each rebuild it also writes a `badge-<workflow>.json` file per workflow into the folder, a shields.io endpoint badge showing that workflow's newest run. Runs inside it are told apart by trace id (one per run attempt, so a re-run is its own trace) and by the `cicd.pipeline.run.id` resource attribute, which the dashboard's `run` variable selects. Retention bounds it: a run older than its workflow's newest 30 (10 on a pull request) drops out of the channel, and the next rebuild leaves it out. The run being published always stays listed, even when it is older than the ones kept (a dispatched rebuild of an old run), and the next publish's retention removes it. A per-run report whose format this version of otel-html no longer reads is skipped with a warning; its run stays listed and the rest still merge, until retention removes it. If the merge fails for any other reason, the channel warns and falls back to a stub forwarding to the newest run. A `load` run whose jobs were skipped has no job reports and publishes nothing.
+`/branch/<name>/` and `/pr/<number>/` are rolling reports: after each deployer pass the deployer merges the channel's retained `runs/<run_id>/` reports, oldest first, into one report and replaces everything in the folder except `runs/` and any `preview-*.png` screenshots, which survive rebuilds (a later step may refresh them). After each rebuild it also writes a `badge-<workflow>.json` file per workflow into the folder, a shields.io endpoint badge showing that workflow's newest run. Runs inside it are told apart by trace id (one per run attempt, so a re-run is its own trace) and by the `cicd.pipeline.run.id` resource attribute, which the dashboard's `run` variable selects. Retention bounds it: a run older than its workflow's newest 30 (10 on a pull request) drops out of the channel, and the next rebuild leaves it out. The run being published always stays listed, even when it is older than the ones kept (a re-run of an old run), and the next publish's retention removes it. A per-run report whose format this version of otel-html no longer reads is skipped with a warning; its run stays listed and the rest still merge, until retention removes it. If the merge fails for any other reason, the channel warns and falls back to a stub forwarding to the newest run. A `load` run whose jobs were skipped has no job reports and publishes nothing.
 
 Only the `site / deploy` job writes the site. It runs the [otel-html-deploy](.github/actions/otel-html-deploy/action.yml) action from the default branch's code, whichever branch the run is on. Nothing else pushes to the site, and no job holds `contents: write`. The other jobs only upload artifacts, and the deployer applies them. There is no dispatch, no `workflow_run` wake-up and no schedule: the deploy is a job of the run that produced the update.
 
@@ -468,7 +468,7 @@ The site's life cycle:
 - **Updates.** Each test job uploads its `.otel-html/` folder as an `otel-html-*` artifact. `site / report` uploads an `otel-html-update-run-*` artifact per run attempt: the finished run's compacted report. When a pull request closes or reopens, the `cleanup` job in [pr-cleanup.yml](.github/workflows/pr-cleanup.yml) (`pull_request_target`) uploads an `otel-html-update-remove-pr-*` or `otel-html-update-reopen-pr-*` artifact; the next `site / deploy` of any run applies it.
 - **Passes.** `site / deploy` (`needs: report`, `if: !cancelled()`, so it runs even when the report or a test job failed) takes the last deployed site as its base, applies every pending update and deploys the result with `actions/deploy-pages`. Passes run one at a time in the `pages` concurrency group with `cancel-in-progress: false` and `queue: max`: a waiting pass is queued, never cancelled, and a pass lists everything pending, so none is lost. Re-running a run (or only its failed jobs) is safe: artifacts are named per run attempt, so the re-run's update supersedes the first attempt's and its redeploy builds on the first attempt's deployment. A run that was superseded (a newer push cancelled it) never reaches `site`, so its report is absent from the site. A job's update is accepted only from a trusted run of `ci.yml` or `load.yml` (or, for the 90 days after the move, a legacy `ci-report.yml` or `pages-deploy.yml` run on the default branch) and is checked against that run; a rejected update is named in the pass's log. The `github-pages` environment accepts two rules: the default branch and `refs/pull/*/merge` (a pull request's merge ref, for the pull request runs).
 - **Deferred deletion.** A compaction drops the files it replaced from the manifest, but the site deletes them only 15 minutes later, so a viewer holding an older manifest (the Pages CDN may serve one for ten minutes) still finds its files.
-- **`site-state/`.** The site's state (which updates were applied, the removed pull requests, the file list and the pending deletions) lives in `site-state/` at the site root. Each pass also uploads it alone as the small `otel-html-site-state-<run>-<attempt>` artifact (and the Pages artifact `github-pages-<attempt>`: a re-run of a deploy job is a new attempt of the same run, and `plan` tells attempts apart by these names and by the attempt of the deployment's job), and `plan` reads that instead of downloading the site. After 90 days (artifact retention) the base comes from the live site over HTTPS, using `site-state/files.json`.
+- **`site-state/`.** The site's state (which updates were applied, the removed pull requests, the file list and the pending deletions) lives in `site-state/` at the site root. Each pass also uploads it alone as the small `otel-html-site-state-<run>-<attempt>` artifact (and the Pages artifact `github-pages-<attempt>`: a re-run of a deploy job is a new attempt of the same run, and the plan, the first step of the deploy job (`ci deploy plan`), tells attempts apart by these names and by the attempt of the deployment's job), and the plan reads that instead of downloading the site. After 90 days (artifact retention) the base comes from the live site over HTTPS, using `site-state/files.json`.
 - **Migration.** The first pass after the move from the `gh-pages` branch (the old store) takes the last deployment's Pages artifact as its base, or the `gh-pages` tip when that has expired. The branch is no longer read or written; it stays only so that reverting the move still works, and goes once the deployer has run for a few days.
 
 Permissions: the test jobs hold `contents: read` and `actions: read`; their artifact uploads use the runtime token every job has. The `site` job in ci.yml and load.yml grants the union of the two called jobs' needs. `site / report` holds `actions: write` (downloading the run's artifacts, uploading the update), `contents: read`, `pages: read`, `pull-requests: write` and `checks: write`. `site / deploy` holds `contents: read`, `actions: write` (downloading updates, pruning artifacts), `deployments: read`, `pages: write` and `id-token: write`. `cleanup` holds `actions: write` only. The preview screenshot at the top of this README is taken by the deployer, over a loopback server (`127.0.0.1`, a random port) on the site it is about to deploy, because a `site` report loads its engine over http and does not open from `file://`.
@@ -486,9 +486,8 @@ These subcommands are for the actions; stable flags, output format not guarantee
 | `ci update remove-pr`, `ci update reopen-pr` | Write an update that removes a pull request's channel from the site, or lifts that removal. Write `name` to `$GITHUB_OUTPUT`. | `--pr`, `--out` (both required) |
 | `ci update done` | Records a finished upload in the pusher's ledger. Never fails the job. | `--name` (required); `--publish-dir` (default `.otel-html/publish`) |
 | `ci update stop` | Stops a running pusher (SIGKILL after 90 s); with `--log`, prints the failure lines of that log as one notice. Does nothing without a pusher. Never fails the job. | `--publish-dir` (default `.otel-html/publish`); `--log` (the pusher log to summarise; collect passes `<publish-dir>/pusher.log`) |
-| `ci pusher` | Starts the pusher (see [The pusher](#the-pusher-push-every)): re-spawns itself detached, its output in `<report>/../publish/pusher.log`, and returns at once. | `--report`, `--every` (a duration such as `60s`, `2m` or `500ms`) (both required); `--config`; `--deployer-workflow` (default `pages-deploy.yml`); `--detached` is internal |
+| `ci pusher` | Starts the pusher (see [The pusher](#the-pusher-push-every)): re-spawns itself detached, its output in `<report>/../publish/pusher.log`, and returns at once. | `--report`, `--every` (a duration such as `60s`, `2m` or `500ms`) (both required); `--config`; `--detached` is internal |
 | `ci upload` | Zips a folder and uploads it as an artifact of the current run. Needs the runtime variables (`ACTIONS_RUNTIME_TOKEN`, `ACTIONS_RESULTS_URL`) that only a JavaScript action's environment holds, so it runs as a child of one (`actions/github-script`). | `--name`, `--path` (both required); `--retention-days` |
-| `ci dispatch` | Wakes the deployer workflow on the default branch, for a same-repository run by a user. Never fails the job; a refusal is one log line. | `--workflow` (default `pages-deploy.yml`); `--repository`; `--run-id` (default `$GITHUB_RUN_ID`); `--no-watch` (skip the 20 s wait for the deployer run to start) |
 | `ci deploy plan` | Finds the last deployed site, the newest site state and the pending updates; writes `pending.json` and the state. Writes `pending`, `base_kind`, `base_run_id`, `base_run_attempt`, `base_artifact_id`, `base_artifact_name`, `base_deployment_id` and `wait` to `$GITHUB_OUTPUT`. Reads `$GITHUB_RUN_ID` and `$GITHUB_RUN_ATTEMPT`: the deployment of that run's own attempt never counts as the base, an earlier attempt's does. The names without an attempt suffix (`github-pages`, `otel-html-site-state-<run>`, `otel-html-site-state-base-<deployment>`) are read as attempt 1 | `--out`, `--state-out`, `--pages-url` (all required); `--repository`; `--ci-workflows` (default `ci.yml`); `--report-workflow` (comma list of legacy workflow files, default `ci-report.yml`; their runs on the default branch may upload run updates); `--deployer-workflow` (comma list of legacy workflow files, default `pages-deploy.yml`; their runs on the default branch may upload a consumed state). Runs of a `--ci-workflows` file upload their own run update and a consumed state when they are trusted: a run of this repository, either on the default branch for an event other than `pull_request`, or started by a user |
 | `ci deploy fetch` | Downloads the accepted updates of `pending.json` into `<out>/<update name>/`. An unreadable download (a malformed zip, an oversized body) marks that update rejected for good in `pending.json` (`unreadable: ...`); a network or HTTP failure marks it `retry`, and the next pass tries it again. | `--pending`, `--out` (both required); `--repository` |
 | `ci deploy apply` | Applies the pending updates to the unpacked site in the specified order, deleting superseded files only after a later pass, and writes `site-state/`. Calls no API and deploys nothing. Writes `changed`, `consumed`, `deploy`, `previews` and `pending_jobs` to `$GITHUB_OUTPUT`. | `--site`, `--updates` (required); `--pending` (required without `--trust-updates`); `--state`; `--repository`; `--retention` (30), `--pr-retention` (10); `--config`; `--pass-run-id` (default `$GITHUB_RUN_ID`); `--pass-run-attempt` (default `$GITHUB_RUN_ATTEMPT`, else 1; the attempt written into the state's form); test flags: `--trust-updates` (accept every update folder without `pending.json`), `--channel` (with it, the channel to apply them to) |
@@ -500,24 +499,33 @@ See [Use in your CI](#use-in-your-ci) to adopt this in another repo.
 
 ### Use in your CI
 
-Three composite actions let another repository report on its own CI. They need an otel-html release that has `run` and `ci` (the first release after 0.1.1). `@v0` floats to the latest 0.x release (the release workflow moves it; prereleases leave it alone), and with `version: latest` (the default) the actions used at `@v0` install the newest 0.x binary, never a 1.x one; at any other ref `latest` is the repository's latest release. Pin a release tag such as `@otel-html-v0.2.0` for reproducibility. `v0` becomes `v1` at 1.0.
+Four composite actions let another repository report on its own CI. They need an otel-html release that has `run` and `ci` (the first release after 0.1.1). `@v0` floats to the latest 0.x release (the release workflow moves it; prereleases leave it alone), and with `version: latest` (the default) the actions used at `@v0` install the newest 0.x binary, never a 1.x one; at any other ref `latest` is the repository's latest release. Pin a release tag such as `@otel-html-v0.2.0` for reproducibility. `v0` becomes `v1` at 1.0.
 
 - `bjstabi/otel-html/.github/actions/otel-html-setup@v0` installs the CLI (checksum-verified) and joins the job to the run's trace.
 - `bjstabi/otel-html/.github/actions/otel-html-collect@v0` uploads the job's `.otel-html/` folder as an `otel-html-<job>` artifact and, with `publish: true`, the job's partitions as a site update.
 - `bjstabi/otel-html/.github/actions/otel-html-publish@v0` builds the run's report from those artifacts, uploads it as a site update and links it from the pull request.
 - `bjstabi/otel-html/.github/actions/otel-html-deploy@v0` is the only writer of the site: it applies the pending updates to the last deployed site and deploys it to GitHub Pages.
 
-The publisher and the deployer need a Pages site (see Pages setup below). Without one, use `target: artifact` on the publisher and skip the other two.
+The publisher and the deployer need a Pages site (see Pages setup below). Without one, use `target: artifact` on the publisher and skip the deployer.
 
-In each job, run setup first, make the CLI the job shell, and collect last. A `run:` step before setup runs before the CLI exists, so it needs `shell: bash`:
+The shape is the one this repository runs: the test jobs, then a `site` job at the end of the same workflow that reports the run and deploys the site. Nothing is dispatched and nothing waits for a `workflow_run`: a run's report is built and deployed inside the run.
+
+In each test job, run setup first, make the CLI the job shell, and collect last. A `run:` step before setup runs before the CLI exists, so it needs `shell: bash`:
 
 ```yaml
+# .github/workflows/ci.yml
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
 jobs:
   test:
     runs-on: ubuntu-latest
     permissions:
       contents: read # checkout
-      actions: write # setup reads the run's jobs to find this one; collect dispatches the deployer
+      actions: read # setup reads the run's jobs to find this one
     defaults:
       run:
         shell: otel-html run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
@@ -526,135 +534,58 @@ jobs:
       - uses: bjstabi/otel-html/.github/actions/otel-html-setup@v0
       - run: npm test
       - if: always()
-        uses: bjstabi/otel-html/.github/actions/otel-html-collect@v0
-        with:
-          publish: true # the job's partitions reach the site while the run goes on; optional
+        uses: bjstabi/otel-html/.github/actions/otel-html-collect@v0 # no `publish`: the site job reports the run
+
+  # The last job: the run's report and the Pages deploy. The trust rule (see Security below): a non-PR event on the
+  # default branch, or a pull request from this repository opened by a person. A fork's or a bot's pull request run
+  # has no `site` job and uploads nothing the deployer accepts.
+  site:
+    needs: [test] # every other job of the workflow
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || github.event.pull_request.head.repo.full_name == github.repository && github.event.sender.type == 'User') }}
+    uses: ./.github/workflows/site.yml
+    permissions:
+      actions: write # reading and pruning the run's artifacts, the update upload
+      contents: read
+      pages: write
+      id-token: write
+      deployments: read
+      pull-requests: write # the sticky comment
+      checks: write # the check run
 ```
 
-Setup inputs: `version` (a release such as `0.2.0`, default `latest`), `command` (an executable instead of a download), `job-name` (the job's display name, used to tell the job apart when the lookup is ambiguous, and for the span id when it fails; see above) and `token`, plus the pusher's `push-every`, `config`, `deployer-workflow`, and `dispatch-app-id` / `dispatch-app-private-key` (an App token for the pusher's dispatches, as for collect; see Dispatch token) below.
-
-##### The pusher (`push-every`)
-
-With `push-every: 60s` (empty by default: no pusher), setup starts a background process, `otel-html ci pusher`, that runs for the rest of the job. Every tick (never faster than once a second) it looks at the job's report, uploads the partitions it has not shipped yet as an `otel-html-update-push-*` artifact and wakes the deployer, so the run's report grows on the site while the job is still going. The pusher needs the collect step: collect stops it first (with any `publish`; a pusher still running after 90 s is killed) and, with `publish: true`, uploads whatever is left, and the job's last update carries the compacted partitions. Without collect nothing stops the pusher before the job ends. The job needs `actions: write`. Setup starts the pusher through `actions/github-script`, because the upload needs the runtime variables that only a JavaScript action sees; they are never put in the job's environment (`GITHUB_ENV`); only the pusher's process holds them. A pusher that cannot start is a warning in the log, and a failed upload is a line in `.otel-html/publish/pusher.log` that collect turns into one notice; neither fails the job: the final upload from collect ships what the pusher did not.
-
-Files in `.otel-html/publish/`: `pusher.log` (one line per upload, with its duration, and per failure; failure lines start with `! `), `uploads.json` (the ledger: the last sequence reserved, the manifest sources already shipped, and each finished upload), `pusher.pid` and `pusher.stop` (the stop request). Collect uploads the folder with the rest of `.otel-html/`, so a run's artifact says what the pusher did. The first tick comes after an offset of up to `push-every`, fixed per job, so a run's pushers do not all check at once. After an upload the pusher wakes the deployer only when no deployer run is already waiting: queued, or started less than 2 minutes ago (one listing call; a failed check dispatches anyway). When it skipped because of a run that had only just started, it checks again on its next ticks, even with nothing new, and dispatches once that run is older than 2 minutes, and it looks up the job's CI spans at most every 5 minutes, reusing the last result between lookups; the job's final update builds the complete one. The pusher builds each update under `$RUNNER_TEMP`, never inside `.otel-html/`. The smoke jobs run the pusher on hosted runners only; the `e2e` jobs that run in a container are not covered by a smoke test, so check one of their `otel-html-*` artifacts (`publish/pusher.log` shows uploads) when changing the pusher. `config` is the config file for the CI spans report of each update, and `deployer-workflow` the workflow file dispatched after an upload (default `pages-deploy.yml`). The pusher dispatches with the App token minted when setup ran, or with `token` when no App is configured or the mint failed (a dispatch GitHub may refuse; see Dispatch token). The App token expires after one hour, so in a longer job the later dispatches fail (one line each in `pusher.log`) while the uploads go on. Updates whose dispatch failed reach the site on the deployer's next pass: its 5-minute schedule, or collect's own dispatch.
-
-Collect inputs:
-
-| Input | Default | |
-| --- | --- | --- |
-| `name` | `otel-html-<job>` | Matrix legs need one each, or one leg's upload replaces another's. |
-| `path` | `.otel-html/` | The directory to upload. |
-| `publish` | false | Also upload the job's partitions as an `otel-html-update-push-*` artifact and wake the deployer. The job needs `actions: write`. A failure here is a warning, never a failed job; the `.otel-html/` upload still runs. |
-| `deployer-workflow` | `pages-deploy.yml` | The deployer's workflow file, dispatched on the default branch. |
-| `dispatch-app-id`, `dispatch-app-private-key` | empty | A GitHub App's ID and private key, to dispatch the deployer with an App token (see Dispatch token). Empty, or a failed mint, dispatches with `token`. |
-| `command` | empty | The executable that ran the job (as for setup). Empty uses `otel-html` from the PATH. |
-| `config` | empty | Config file for the CI spans report of the update. |
-| `token` | `github.token` | Needs `actions: write`. Used for the site update, and for the dispatch unless an App token is minted. |
-
-#### Dispatch token
-
-GitHub refuses a workflow dispatch made with `GITHUB_TOKEN`: the API answers 204, but the run ends in `startup_failure` ("Actor is not allowed to trigger Actions workflows"). The collect and publish actions therefore dispatch the deployer with a GitHub App installation token when you give them one. Create an App with the repository permission Actions: read and write and nothing else, install it on the repository, and store its ID as the variable `DEPLOYER_APP_ID` and its private key as the secret `DEPLOYER_APP_PRIVATE_KEY`. Then pass both to the actions, the key only on a run a person started so that a bot's run (Renovate: dependency code) never holds it:
+`site` is a called (reusable) workflow, so the two jobs show as `site / report` and `site / deploy` in the run's graph; you could also put the two jobs inline in `ci.yml` and rename the prefix you exclude. The job id `site` matters: `exclude-jobs: "site / "` below is the display-name prefix of its jobs. Add the same `site` job to every workflow that should publish (this repository's `ci` and `load`).
 
 ```yaml
-with:
-  dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
-  dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
-```
-
-The action mints a token with `actions: write` scoped to this repository alone, only for the dispatch; every other command keeps `token`. Without the two settings (or if minting fails) the dispatch uses `token` as before; `otel-html ci dispatch` then notices the deployer run that ends in `startup_failure` and prints a warning naming it (the collect action dispatches with `--no-watch`, so only the dispatches that watch, such as the pusher's, warn), and the site updates only when `ci-report` ends and on the deployer's five-minute schedule.
-
-#### The publisher and the deployer
-
-Publish from a separate `workflow_run` workflow, which runs the default branch's copy and never the triggering run's code (which may be a fork PR). The deployer is a workflow of its own. [ci-report.yml](.github/workflows/ci-report.yml) and [pages-deploy.yml](.github/workflows/pages-deploy.yml) are the models. In short:
-
-```yaml
-# .github/workflows/ci-report.yml
-name: ci-report
+# .github/workflows/site.yml
+name: site
 on:
-  workflow_run:
-    workflows: [ci]
-    types: [completed]
-  pull_request_target:
-    types: [closed, reopened]
+  workflow_call:
 permissions: {}
 
 jobs:
+  # The run's report, without the `site / ` jobs, which are still running.
   report:
-    # A failed or cancelled run is worth a report; a run that never really ran is not.
-    if: >-
-      github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'skipped' &&
-      github.event.workflow_run.conclusion != 'action_required'
     runs-on: ubuntu-latest
     permissions:
-      actions: write # the run's artifacts, the update upload, the deployer dispatch
+      actions: write # the run's artifacts, the update upload
       pages: read # the site's URL
       pull-requests: write # the comment
       checks: write # the check run
     steps:
       - uses: bjstabi/otel-html/.github/actions/otel-html-publish@v0
-
-  cleanup:
-    if: github.event_name == 'pull_request_target'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    # No checkout: the action installs the CLI, and this job holds a write token, so it never runs the PR's code.
-    steps:
-      - uses: bjstabi/otel-html/.github/actions/otel-html-publish@v0
         with:
-          cleanup-pr: ${{ github.event.action == 'closed' && github.event.pull_request.number || '' }}
-          reopen-pr: ${{ github.event.action == 'reopened' && github.event.pull_request.number || '' }}
-```
+          exclude-jobs: "site / "
 
-```yaml
-# .github/workflows/pages-deploy.yml
-name: pages-deploy
-on:
-  workflow_dispatch:
-  workflow_run:
-    workflows: [ci-report]
-    types: [completed]
-  schedule:
-    - cron: "*/5 * * * *"
-permissions: {}
-
-jobs:
-  # Cheap, outside the `pages` group: is anything pending? An idle tick then never queues an environment job.
-  plan:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-      deployments: read
-      pages: read
-      pull-requests: read # a private repository: the pull requests of each update's commit
-    outputs:
-      pending: ${{ steps.plan.outputs.pending }}
-    steps:
-      - id: otel
-        uses: bjstabi/otel-html/.github/actions/otel-html-setup@v0
-      - id: pages
-        uses: actions/configure-pages@v6
-      - id: plan
-        env:
-          CMD: ${{ steps.otel.outputs.command }}
-          GITHUB_TOKEN: ${{ github.token }}
-          PAGES_URL: ${{ steps.pages.outputs.base_url }}
-        run: |
-          # CMD is deliberately unquoted: it may be a command with arguments.
-          $CMD ci deploy plan --pages-url "$PAGES_URL" --out "$RUNNER_TEMP/plan/pending.json" \
-            --state-out "$RUNNER_TEMP/plan/state" --ci-workflows ci.yml --report-workflow ci-report.yml \
-            --deployer-workflow pages-deploy.yml
-
+  # Runs even when the report job or a test job failed: updates other runs uploaded still deserve a pass. One pass at a
+  # time, queued rather than cancelled, so no pass is dropped; a pass lists everything pending.
   deploy:
-    needs: plan
-    if: needs.plan.outputs.pending == 'true'
+    needs: report
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    # One pass at a time. A pending run that GitHub cancels for a newer one loses nothing: the newer one lists everything.
     concurrency:
       group: pages
       cancel-in-progress: false
+      queue: max
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
@@ -669,18 +600,39 @@ jobs:
       - id: deploy
         uses: bjstabi/otel-html/.github/actions/otel-html-deploy@v0
         with:
-          ci-workflows: ci.yml
+          ci-workflows: ci.yml # every workflow with a `site` job, comma-separated
 ```
 
-The `deploy` job runs on the default branch's code (the `schedule` and `workflow_run` triggers always do; a `workflow_dispatch` runs the ref it is dispatched on, so dispatch the default branch). Never re-run a pass; dispatch a new one. Pin the actions to SHAs as this repo does.
+Neither job checks out code: both install the released CLI, so the deploy runs the release you pin, never the pull request's code. Pin the actions to SHAs as this repo does. To cover pull request cleanup add the `cleanup` job of [pr-cleanup.yml](.github/workflows/pr-cleanup.yml) (a `pull_request_target` workflow whose job calls the publish action with `cleanup-pr` and `reopen-pr`); its update is applied by the next deploy pass of any run.
 
-The site has the same layout as this repo's: a default-branch run goes to `/branch/<name>/` (rolling, last 30 runs of each workflow) and `/branch/<name>/runs/<run_id>/`; a pull request's runs go to `/pr/<number>/` (rolling, last 10 runs of each workflow) and `/pr/<number>/runs/<run_id>/`. Each holds the runs of every workflow. The sticky comment links this run's report and `All runs on pull request #<number>`, the pull request's rolling report. When the pull request closes or merges, `cleanup` uploads the update that removes `/pr/<number>/`; a reopened pull request lifts the removal with `reopen-pr`. After a merge the default branch's page carries the merged result. Upgrading from a version with per-workflow folders (`/ci/`, `/load/`): the next deployer pass removes them, with no redirect, and the default branch starts over at `/branch/<name>/`.
+Setup inputs: `version` (a release such as `0.2.0`, default `latest`), `command` (an executable instead of a download), `job-name` (the job's display name, used to tell the job apart when the lookup is ambiguous, and for the span id when it fails; see above) and `token`, plus the pusher's `push-every` and `config` below.
 
-Pages setup: Settings, Pages, Source: GitHub Actions (`build_type: workflow`), and the `github-pages` environment's deployment branches must allow the default branch. The deployer is the only job that deploys, so it is the only one with `pages: write` and `id-token: write`.
+##### The pusher (`push-every`)
 
-Migrating from the version that pushed to `gh-pages`: add the `pages-deploy.yml` workflow above, give `ci-report.yml` the new publisher example (the publisher drops `deploy`, `preview`, `retention` and `pr-retention`, and `contents: write`), set the Pages source to "GitHub Actions" if it is not, and add `publish: true` to your collect steps if you want reports while runs go on. The deployer's first pass takes the last deployment's Pages artifact as its base, or the `gh-pages` tip when that has expired. The branch is no longer written. Keep it while you may still roll back to the old publisher, which needs it, and delete it once the deployer has run for a few days. A rollback starts from the branch as the migration left it: reports published by the deployer since then are lost, and pull request reports it removed come back until their next cleanup.
+With `push-every: 60s` (empty by default: no pusher), setup starts a background process, `otel-html ci pusher`, that runs for the rest of the job. Every tick (never faster than once a second) it looks at the job's report, uploads the partitions it has not shipped yet as an `otel-html-update-push-*` artifact. It wakes nothing: the pusher is for live targets, and the site's deploy pass (the `site` job at the end of the run) picks the uploads up when it runs, so on the site the report appears with the run's end. The pusher needs the collect step: collect stops it first (with any `publish`; a pusher still running after 90 s is killed) and, with `publish: true`, uploads whatever is left, and the job's last update carries the compacted partitions. Without collect nothing stops the pusher before the job ends. The job needs `actions: read` and the runtime token every job has. Setup starts the pusher through `actions/github-script`, because the upload needs the runtime variables that only a JavaScript action sees; they are never put in the job's environment (`GITHUB_ENV`); only the pusher's process holds them. A pusher that cannot start is a warning in the log, and a failed upload is a line in `.otel-html/publish/pusher.log` that collect turns into one notice; neither fails the job: the final upload from collect ships what the pusher did not.
 
-Security: the report-producing jobs hold `actions: write`, to dispatch the deployer, instead of `contents: write`. That token can also cancel runs and delete artifacts and caches in the repository. otel-html uses it only to dispatch, and only for a person's same-repository run; bot branches (Renovate) never dispatch. A job's `permissions` cannot be conditional, so the token exists on bot runs too: the design guarantees otel-html does not use it there, not that the dependency code could not. Fork runs get a read-only token whatever you declare. No job can write the site; only the deployer can, and it runs the default branch's code. Every update artifact is untrusted data, a fork's included: the deployer accepts a job's update only from a run of one of its `ci-workflows`, takes the run and the channel from the API instead of the update, and rejects an update that is malformed, too large or disagrees with its own name.
+Files in `.otel-html/publish/`: `pusher.log` (one line per upload, with its duration, and per failure; failure lines start with `! `), `uploads.json` (the ledger: the last sequence reserved, the manifest sources already shipped, and each finished upload), `pusher.pid` and `pusher.stop` (the stop request). Collect uploads the folder with the rest of `.otel-html/`, so a run's artifact says what the pusher did. The first tick comes after an offset of up to `push-every`, fixed per job, so a run's pushers do not all check at once., and it looks up the job's CI spans at most every 5 minutes, reusing the last result between lookups; the job's final update builds the complete one. The pusher builds each update under `$RUNNER_TEMP`, never inside `.otel-html/`. The smoke jobs run the pusher on hosted runners only; the `e2e` jobs that run in a container are not covered by a smoke test, so check one of their `otel-html-*` artifacts (`publish/pusher.log` shows uploads) when changing the pusher. `config` is the config file for the CI spans report of each update.
+
+Collect inputs:
+
+| Input | Default | |
+| --- | --- | --- |
+| `name` | `otel-html-<job>` | Matrix legs need one each, or one leg's upload replaces another's. |
+| `path` | `.otel-html/` | The directory to upload. |
+| `publish` | false | Also upload the job's partitions as an `otel-html-update-push-*` artifact, which the next deploy pass applies (a repository whose `site` job reports the run, as above, does not need it). A failure here is a warning, never a failed job; the `.otel-html/` upload still runs. |
+| `command` | empty | The executable that ran the job (as for setup). Empty uses `otel-html` from the PATH. |
+| `config` | empty | Config file for the CI spans report of the update. |
+| `token` | `github.token` | Used for the site update and the CI spans lookup. |
+
+#### The site
+
+The site has the same layout as this repo's: a default-branch run goes to `/branch/<name>/` (rolling, last 30 runs of each workflow) and `/branch/<name>/runs/<run_id>/`; a pull request's runs go to `/pr/<number>/` (rolling, last 10 runs of each workflow) and `/pr/<number>/runs/<run_id>/`. Each holds the runs of every workflow. The sticky comment links this run's report and `All runs on pull request #<number>`, the pull request's rolling report. When the pull request closes or merges, `cleanup` uploads the update that removes `/pr/<number>/`; a reopened pull request lifts the removal with `reopen-pr`. After a merge the default branch's page carries the merged result. Upgrading from a version with per-workflow folders (`/ci/`, `/load/`): the next deploy pass removes them, with no redirect, and the default branch starts over at `/branch/<name>/`.
+
+Pages setup: Settings, Pages, Source: GitHub Actions (`build_type: workflow`), and the `github-pages` environment's deployment branches need two rules: the default branch (`main`) and `refs/pull/*/merge` (a pull request's merge ref, for the pull request runs). The deploy job is the only one that deploys, so it is the only one with `pages: write` and `id-token: write`; the `site` job grants them to the called workflow, which hands them to that job alone.
+
+Migrating from the dispatched deployer (a `ci-report.yml` on `workflow_run` plus a `pages-deploy.yml` that `ci dispatch` woke): add the `site` job and `site.yml` above, delete the old `ci-report.yml` and `pages-deploy.yml` workflows (keep the `cleanup` job, now in its own `pull_request_target` workflow), drop `deployer-workflow`, `dispatch-app-id` and `dispatch-app-private-key` from your `with:` blocks (the inputs are gone), and give the `github-pages` environment the two branch rules above. The first deploy pass still accepts what the old workflows uploaded for 90 days (the `legacy-deployer-workflow` input, default `pages-deploy.yml`, and `report-workflow`, default `ci-report.yml`, name them): the last deployment, the old site states and the run updates of the old `ci-report.yml` runs on the default branch. The deployer GitHub App, the `DEPLOYER_APP_ID` variable and the `DEPLOYER_APP_PRIVATE_KEY` secret are no longer used and can be deleted. Migrating from the version that pushed to `gh-pages` first: set the Pages source to "GitHub Actions" if it is not; the deployer's first pass takes the last deployment's Pages artifact as its base, or the `gh-pages` tip when that has expired. That branch is no longer written; keep it while you may still roll back to the old publisher, which needs it, and delete it once the deployer has run for a few days.
+
+Security: the trust rule is the `site` job's `if:` and, in the deployer, the same test on the run that uploaded an update: a run of this repository, either on the default branch for an event other than `pull_request`, or started by a person. No job holds `contents: write`, and nothing dispatches, so no App or token that can start workflows exists. The jobs of a trusted run can write artifacts, which is all the report-producing jobs do; the site is written only by the deploy job, whose token is the only one with `pages: write`. Fork and bot (Renovate: dependency code) pull request runs have no `site` job, and a forged artifact name in such a run is rejected: the deployer takes the run and the channel from the API instead of the update, accepts an update only from a trusted run of one of its `ci-workflows`, and rejects one that is malformed, too large or disagrees with its own name. A person's same-repository branch does run its own commit's `site` job, so anyone with write access can publish a report of their pull request; that is the accepted exposure.
 
 A private repository's Pages site is public unless the organization has Pages access control (GitHub Enterprise Cloud). The reports carry the CI logs, job names and pull request titles, so publishing them makes those public; the action warns when it publishes from a private repository. Use `target: artifact` to keep the reports in the run's artifacts instead.
 
@@ -698,8 +650,6 @@ Publish inputs:
 | `comment`, `check` | true | The sticky PR comment and the `otel-html report` check run. |
 | `cleanup-pr` | empty | A pull request number: upload the update that removes that PR's reports (`/pr/<number>/`) from the site, instead of publishing. |
 | `reopen-pr` | empty | A pull request number: upload the update that lifts that removal (a reopened PR). |
-| `deployer-workflow` | `pages-deploy.yml` | The deployer's workflow file, dispatched on the default branch after the upload. A failed dispatch only delays the site. |
-| `dispatch-app-id`, `dispatch-app-private-key` | empty | As for collect: the App whose token dispatches the deployer. |
 | `token` | `github.token` | Needs `actions: write`, `pages: read`, `pull-requests: write`, `checks: write`. A `cleanup-pr` or `reopen-pr` job needs only `actions: write`. |
 
 Deploy inputs:
@@ -711,19 +661,17 @@ Deploy inputs:
 | `config` | the tool's built-in dashboard | The dashboard config for the rolling reports. |
 | `retention`, `pr-retention` | 30, 10 | Runs kept of each workflow per branch page and per pull request page. GitHub Pages sites are limited to 1 GB, so mind the total: about 40 MB per otel-html version still referenced (the shared `assets/<version>/`) plus workflows × (`retention` + open pull requests × `pr-retention`) × your report's data size × 2, the 2 for the rolling reports (each holds its runs' data again). In this repo (reports estimated at about 1.7 MB without the viewer, the format-3 figure; format 4 has not been measured on the site yet) that is about 150 MB for the default branch and 25 MB per open pull request. |
 | `preview` | false | Screenshot each default-branch rolling report the pass rebuilt, in light and dark (`preview-light.png`, `preview-dark.png` in its folder), for a README image. Installs Playwright's Chromium, about 1 minute per pass; needs Node and passwordless sudo on the runner. A failed install or screenshot is a warning and the pass goes on. |
-| `ci-workflows` | `ci.yml` | Comma-separated workflow files whose jobs upload `push` updates. |
-| `report-workflow` | `ci-report.yml` | The workflow file that uploads the run and pull request updates. |
-| `legacy-deployer-workflow` | `pages-deploy.yml` | The workflow file of a pre-in-graph deployer whose site states still count. |
+| `ci-workflows` | `ci.yml` | Comma-separated workflow files with a `site` job: their runs' updates are accepted. |
+| `report-workflow` | `ci-report.yml` | Legacy: the workflow file whose runs on the default branch uploaded run and pull request updates before the in-graph deploy; they count for 90 days. |
+| `legacy-deployer-workflow` | `pages-deploy.yml` | Legacy: the workflow file of a pre-in-graph deployer whose site states still count for 90 days. |
 | `keep-deployments` | 3 | Successful deployments whose `github-pages` and site-state artifacts the pass keeps. |
 | `update-retention-days` | 90 | Days the pass keeps the artifacts it uploads. |
 
 The deploy action runs on Linux only.
 
-Publish outputs: `report-url` (the URL the deployer will serve the report at; empty when no update was uploaded) and `published` (`true` when an update was uploaded). A run with no page on the site (no open pull request, not the default branch) uploads nothing. Deploy outputs: `deployed` and `page_url`.
+Publish outputs: `report-url` (the URL the deploy job will serve the report at; empty when no update was uploaded) and `published` (`true` when an update was uploaded). A run with no page on the site (no open pull request, not the default branch) uploads nothing. Deploy outputs: `deployed` and `page_url`.
 
 GitHub points a check run created with `GITHUB_TOKEN` at the Actions run page, so the report URL is in the check's summary and in the PR comment.
-
-Final-job mode: for a repository with no separate publisher, put the publish action in the last job of the same workflow (`needs:` every other job, `if: always()`) with `actions: write`. That job's own timings are incomplete in the report, and a fork PR's token cannot upload to the base repository, so prefer the `workflow_run` publisher.
 
 ### Report format compatibility
 

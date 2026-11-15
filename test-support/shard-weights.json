@@ -17,7 +17,6 @@
     "test/cli/ci/deploy-fetch.test.ts": 0.2,
     "test/cli/ci/deploy-plan.test.ts": 0.4,
     "test/cli/ci/deploy-prune.test.ts": 0.3,
-    "test/cli/ci/dispatch.test.ts": 0.4,
     "test/cli/ci/github-api.test.ts": 0.1,
     "test/cli/ci/ids.test.ts": 0.1,
     "test/cli/ci/job-logs.test.ts": 0.1,
