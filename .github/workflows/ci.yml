@@ -236,14 +236,14 @@ jobs:
           key: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-${{ github.run_id }}
           restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-
       # Windows bytes may differ from Linux's, so this job keeps its own reports, one cache per shard: the weighted split is
-      # deterministic, so what a shard built is what its next run reads. No up-front build: the tests build the shapes they read.
+      # deterministic (the weights are in the key), so what a shard built is what its next run reads. No up-front build: the tests build the shapes they read.
       - id: scaling-key
         shell: bash
         run: echo "key=$(bun scripts/scaling-reports.ts --print-key)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
         with:
           path: .cache/scaling-reports
-          key: scaling-reports-${{ runner.os }}-${{ steps.scaling-key.outputs.key }}-${{ matrix.shard }}of2
+          key: scaling-reports-${{ runner.os }}-${{ steps.scaling-key.outputs.key }}-${{ matrix.shard }}of2-${{ hashFiles('test-support/shard-weights.json') }}
       # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
       - name: Build otel-html
         shell: bash
@@ -413,7 +413,7 @@ jobs:
       # `--pass perf`: the chromium `-perf-file` and `-perf-http` projects, one test at a time; `--shard i/2` is Playwright's, by count.
       - run: mise run --skip-deps test:e2e --browser chromium --pass perf --shard ${{ matrix.shard }}/2
       # The reports are built by the steps above when the restore missed; main alone saves them.
-      - if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.scale-reports.outputs.cache-hit != 'true' }}
+      - if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.scale-reports.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
         with:
           path: e2e/.reports-scale
