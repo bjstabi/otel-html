@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.0](https://github.com/bjstabi/otel-html/compare/otel-html-v0.5.0...otel-html-v0.6.0) (2026-11-15)
+
+
+### Features
+
+* **writer:** upgrade --assets-base accepts a report whose assets/ links out ([#324](https://github.com/bjstabi/otel-html/issues/324)) ([4fc64c9](https://github.com/bjstabi/otel-html/commit/4fc64c9c1cc609d6a489c38e55336d8eb9e77c0a))
+
+
+### Bug fixes
+
+* **ci:** pushers jitter their first tick and count a starting deploy as waiting ([#323](https://github.com/bjstabi/otel-html/issues/323)) ([26fe023](https://github.com/bjstabi/otel-html/commit/26fe0232c02bc187874b8d2619097085e520ee00))
+* **receiver:** a refused upload reads its 413, not a reset; the restart test stops racing ([#325](https://github.com/bjstabi/otel-html/issues/325)) ([19b9e12](https://github.com/bjstabi/otel-html/commit/19b9e12f558ef566dbe3483ecf4bddfefdd69f92))
+
 ## [0.5.0](https://github.com/bjstabi/otel-html/compare/otel-html-v0.4.1...otel-html-v0.5.0) (2026-11-15)
 
 
