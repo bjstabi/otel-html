@@ -19,6 +19,7 @@
       "!e2e/.metrics-scale.tmp-*",
       "!.otel-html",
       "!coverage",
+      "!.vitest-reports",
       "!.mise",
       "!e2e/.cache",
       "!.cache",

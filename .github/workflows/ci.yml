@@ -168,7 +168,18 @@ jobs:
           config: .github/otel-html-ci.yaml
           dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
           dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
-      - run: mise run test:unit:main -- --shard=${{ matrix.shard }}/2
+      # On main and on dispatch the shard also collects coverage (the same projects and assertions as test:unit:main, never cached) into blobs the `coverage` job merges.
+      - if: ${{ github.event_name != 'push' && github.event_name != 'workflow_dispatch' }}
+        run: mise run test:unit:main -- --shard=${{ matrix.shard }}/2
+      - if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        run: mise run coverage:shard ${{ matrix.shard }}/2
+      - if: ${{ always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vitest-blob-${{ matrix.shard }}of2
+          path: .vitest-reports/
+          include-hidden-files: true
+          if-no-files-found: ignore
       - run: mise run test:unit:perf -- --shard=${{ matrix.shard }}/2
       - if: always()
         uses: ./.github/actions/otel-html-collect
@@ -501,11 +512,12 @@ jobs:
           command: node dist/cli/main.js
           name: otel-html-${{ github.job }}
 
-  # Unit coverage of the suite without @perf, on pushes to main and on dispatch (never gates anything). `mise run coverage` has no sources and no
-  # cache, so nothing can replay it and leave coverage/ empty.
+  # Unit coverage of the suite without @perf, on pushes to main and on dispatch (never gates anything): the `unit` shards
+  # collect it (`coverage:shard`, never cached) and this job merges their blobs. Documentation-only pushes skip it; the
+  # shards still upload blobs then, which nothing reads.
   coverage:
-    needs: changes
-    if: ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.changes.outputs.docs_only != 'true' }}
+    needs: [changes, unit]
+    if: ${{ !cancelled() && needs.unit.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -526,7 +538,12 @@ jobs:
           config: .github/otel-html-ci.yaml
           dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
           dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
-      - run: mise run coverage
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: vitest-blob-*
+          path: .vitest-reports
+          merge-multiple: true
+      - run: mise run coverage:merge
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage

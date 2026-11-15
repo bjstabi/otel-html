@@ -407,13 +407,36 @@ depends = ["engine:assets"]
 # and leave coverage/ empty. Coverage is only meaningful from the whole suite, never from the subset the cached
 # test:unit:main would skip or `vitest --changed` would pick. Pinned like test:unit:main: an inherited
 # OTEL_HTML_PERF_PASS=1 would measure only the @perf tests.
-description = "Unit coverage from the suite without @perf, per vitest project, into coverage/unit-<project>/ (lcov, summary); never cached"
+description = "Unit coverage from the suite without @perf, per vitest project, into coverage/unit-<project>/ (lcov, summary); never cached. Local use; CI runs coverage:shard in the unit shards and coverage:merge"
 env = { OTEL_HTML_PERF_PASS = "0" }
 run = [
   # Each run is charged only for its own sources. The CLI --coverage.exclude replaces vitest.config.ts's list, so the
-  # node run repeats those excludes (generated files) and adds the viewer's.
-  "pnpm exec vitest run --project node --coverage --coverage.reportsDirectory=coverage/unit-node '--coverage.exclude=src/model/gen/**' '--coverage.exclude=src/**/*.gen.ts' '--coverage.exclude=src/**/*.gen.terms.ts' '--coverage.exclude=src/viewer/**'",
+  # node run repeats those excludes (generated files, the grammar) and adds the viewer's.
+  "pnpm exec vitest run --project node --coverage --coverage.reportsDirectory=coverage/unit-node '--coverage.exclude=src/model/gen/**' '--coverage.exclude=src/**/*.gen.ts' '--coverage.exclude=src/**/*.gen.terms.ts' '--coverage.exclude=src/**/*.grammar' '--coverage.exclude=src/viewer/**'",
   "pnpm exec vitest run --project viewer --coverage --coverage.reportsDirectory=coverage/unit-viewer '--coverage.include=src/viewer/**'",
+  "bun scripts/coverage-summary.ts",
+]
+
+# One unit shard with coverage: the same projects, pin and weighted sequencer as test:unit:main, plus blob reports that
+# carry the coverage for coverage:merge. Never cached (a replay would write no blob). The two projects run as two vitest
+# runs with their own coverage flags (the same as `coverage`'s): a merged blob keeps the run's coverage as it was
+# collected, ignores --project and the include/exclude flags of the merge, and cannot be split by project afterwards.
+[tasks."coverage:shard"]
+depends = ["engine:assets"]
+description = "One unit shard (`<i/n>`) with coverage into .vitest-reports/<project>/blob-<i>-<n>.json; merge them with coverage:merge"
+usage = 'arg "<shard>" help="the shard, i/n"'
+env = { OTEL_HTML_PERF_PASS = "0" }
+run = [
+  "pnpm exec vitest run --project node --shard=$usage_shard --reporter=default --reporter=blob --outputFile.blob=.vitest-reports/node/blob-$(echo $usage_shard | tr / -).json --coverage --coverage.reporter=json '--coverage.exclude=src/model/gen/**' '--coverage.exclude=src/**/*.gen.ts' '--coverage.exclude=src/**/*.gen.terms.ts' '--coverage.exclude=src/**/*.grammar' '--coverage.exclude=src/viewer/**'",
+  "pnpm exec vitest run --project viewer --shard=$usage_shard --reporter=default --reporter=blob --outputFile.blob=.vitest-reports/viewer/blob-$(echo $usage_shard | tr / -).json --coverage --coverage.reporter=json '--coverage.include=src/viewer/**'",
+]
+
+[tasks."coverage:merge"]
+description = "Merge the .vitest-reports/<project> blobs into coverage/unit-<project>/ (lcov, summary), as `coverage` writes them, and print the summary"
+env = { OTEL_HTML_PERF_PASS = "0" }
+run = [
+  "pnpm exec vitest run --merge-reports .vitest-reports/node --coverage --coverage.reportsDirectory=coverage/unit-node",
+  "pnpm exec vitest run --merge-reports .vitest-reports/viewer --coverage --coverage.reportsDirectory=coverage/unit-viewer",
   "bun scripts/coverage-summary.ts",
 ]
 
