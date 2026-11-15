@@ -121,7 +121,7 @@ runs:
         # shellcheck disable=SC2086
         $CMD ci update done --name "$NAME" --publish-dir "${COLLECT_PATH%/}/publish"
         # shellcheck disable=SC2086
-        GITHUB_TOKEN=${DISPATCH_TOKEN:-$GITHUB_TOKEN} $CMD ci dispatch --workflow "$WORKFLOW"
+        GITHUB_TOKEN=${DISPATCH_TOKEN:-$GITHUB_TOKEN} $CMD ci dispatch --workflow "$WORKFLOW" --no-watch
     # Last, and after steps that cannot fail the job, so the job's report artifact is always uploaded.
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:

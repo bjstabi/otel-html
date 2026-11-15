@@ -1,6 +1,7 @@
 {
   "unit": {
     "test/actions/ci-config.test.ts": 0.1,
+    "test/actions/collect.test.ts": 0.1,
     "test/actions/install.test.ts": 0.5,
     "test/actions/preview-version.test.ts": 0.1,
     "test/api/convert.test.ts": 0.8,

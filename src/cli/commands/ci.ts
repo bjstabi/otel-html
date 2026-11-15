@@ -340,7 +340,8 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .option('--workflow <file>', 'the deployer workflow file', 'pages-deploy.yml')
     .option('--repository <owner/repo>', 'repository (default: $GITHUB_REPOSITORY)')
     .option('--run-id <n>', 'the run that asks (default: $GITHUB_RUN_ID)')
-    .action(async (flags: { workflow: string; repository?: string; runId?: string }) => {
+    .option('--no-watch', 'do not wait to see the deployer run start')
+    .action(async (flags: { workflow: string; repository?: string; runId?: string; watch: boolean }) => {
       try {
         const runId = flags.runId ?? envVar(io, 'GITHUB_RUN_ID');
         await runDispatch(
@@ -350,6 +351,8 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
             runId: parseRunId(runId ?? ''),
           },
           io,
+          undefined,
+          { skip: !flags.watch },
         );
       } catch (e) {
         say(io, `otel-html dispatch: not dispatched: ${messageOf(e)}`);
