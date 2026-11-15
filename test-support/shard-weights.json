@@ -153,6 +153,7 @@
     "test/scaling/generator.test.ts": 57.5,
     "test/scaling/model.test.ts": 0.2,
     "test/scaling/recording-source.test.ts": 0.9,
+    "test/scaling/report-cache.test.ts": 0.4,
     "test/scripts/ci-fixture.test.ts": 0.1,
     "test/scripts/coverage-summary.test.ts": 0.1,
     "test/scripts/engine-assets.test.ts": 6,

@@ -17,12 +17,12 @@ import {
 import {
   buildScalingReport,
   isMerged,
-  PREBUILT_ENV,
   type ScalingReport,
   type Shape,
   shapeKey,
   stepsOf,
 } from './generator.js';
+import { MEASURED_ENV } from './report-cache.js';
 
 export const AXES: readonly Axis[] = ['retention', 'density', 'window'];
 
@@ -141,7 +141,7 @@ function measuredOf(entry: CatalogueEntry, shape: Shape, opts?: MeasureOptions):
   const key = `${entry.id}|${keyOf(shape, threshold)}`;
   const hit = measured.get(key);
   if (hit !== undefined) return hit;
-  const shared = process.env[PREBUILT_ENV];
+  const shared = process.env[MEASURED_ENV];
   const made =
     shared === undefined ? measure(entry, shape, threshold) : sharedMeasure(shared, entry, shape, threshold);
   measured.set(key, made);

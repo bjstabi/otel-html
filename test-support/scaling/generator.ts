@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
-import { readFile, rename, writeFile } from 'node:fs/promises';
+import { cp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { threadId } from 'node:worker_threads';
 import { z } from 'zod';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { isPartitioned, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
@@ -451,14 +452,33 @@ const MetaSchema = z.object({
 });
 type Meta = z.infer<typeof MetaSchema>;
 
+const buildBound = (shape: Shape): number =>
+  shape.rowGroupRows === undefined ? STEP_TIMEOUT_MS : 10 * STEP_TIMEOUT_MS;
+
+/**
+ * Puts the finished report folder `from` at `target` in one rename, so a reader sees the whole report or none. A report
+ * built in the temp directory may be on another filesystem than the persistent cache (`EXDEV`): it is then copied to
+ * `<target>.part-<pid>-<thread>` beside the target, which is renamed, so a crash leaves a `.part` folder (swept by the
+ * global setup) and never a half-written `target`.
+ */
+export async function moveInto(from: string, target: string): Promise<void> {
+  try {
+    await rename(from, target);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e;
+    const part = `${target}.part-${process.pid}-${threadId}`;
+    await rm(part, { recursive: true, force: true });
+    await cp(from, part, { recursive: true });
+    await rename(part, target);
+    await rm(from, { recursive: true, force: true });
+  }
+}
+
 /**
  * Makes `<root>/<shape key>/` (the report folder and a `meta.json`) if no worker has: the first to create the `.lock`
  * folder builds it and moves it into place with one rename, the others wait for it. The reports are deterministic, so
  * the workers of one run share them instead of each building its own.
  */
-const buildBound = (shape: Shape): number =>
-  shape.rowGroupRows === undefined ? STEP_TIMEOUT_MS : 10 * STEP_TIMEOUT_MS;
-
 async function ensurePrebuilt(root: string, shape: Shape): Promise<string> {
   const target = join(root, shapeKey(shape));
   return await shareOnce({
@@ -480,7 +500,7 @@ async function ensurePrebuilt(root: string, shape: Shape): Promise<string> {
       );
       const meta: Meta = { epoch: String(r.epoch), window: r.window, ids: r.ids };
       await writeFile(join(r.dir, 'meta.json'), JSON.stringify(meta));
-      await rename(r.dir, target);
+      await moveInto(r.dir, target);
       return target;
     },
   });
