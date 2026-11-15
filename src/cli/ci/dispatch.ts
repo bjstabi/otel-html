@@ -26,12 +26,15 @@ type DispatchedRun = {
  * to start the run (a `GITHUB_TOKEN` dispatch ends in `startup_failure`), so a run that concluded `startup_failure`
  * is one warning. Not finding the run, or any failure while looking, says nothing.
  */
+/** `refused`: this run may never dispatch (not a same-repository run by a user); `failed`: a call failed, so a retry may work. */
+export type DispatchOutcome = 'dispatched' | 'refused' | 'failed';
+
 export async function runDispatch(
   o: { workflow: string; repository: string; runId: number },
   io: CliIo,
   fetchFn: Fetch = fetch,
   watch: Watch = {},
-): Promise<void> {
+): Promise<DispatchOutcome> {
   const api = envVar(io, 'GITHUB_API_URL') ?? 'https://api.github.com';
   const token = envVar(io, 'GITHUB_TOKEN');
   const repo = `${api}/repos/${o.repository}`;
@@ -39,7 +42,7 @@ export async function runDispatch(
     const run = (await getJson<ApiRun>(`${repo}/actions/runs/${o.runId}`, token, TIMEOUT_MS, fetchFn)).body;
     if (run.actor?.type !== 'User' || run.head_repository?.full_name !== run.repository.full_name) {
       say(io, `otel-html dispatch: run ${o.runId} is not a same-repository run by a user; not dispatching`);
-      return;
+      return 'refused';
     }
     const { default_branch: ref } = (
       await getJson<{ default_branch: string }>(repo, token, TIMEOUT_MS, fetchFn)
@@ -55,8 +58,10 @@ export async function runDispatch(
     if (!res.ok) throw new Error(`${url} answered ${res.status}`);
     say(io, `otel-html dispatch: ${o.workflow} dispatched on ${ref}`);
     if (watch.skip !== true) await warnIfNotStarted(o, repo, token, dispatchedAt, io, fetchFn, watch);
+    return 'dispatched';
   } catch (e) {
     say(io, `otel-html dispatch: not dispatched: ${messageOf(e)}`);
+    return 'failed';
   }
 }
 

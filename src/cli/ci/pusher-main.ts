@@ -5,7 +5,7 @@ import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
 import { uploadArtifact } from './artifact-client.js';
 import { LOG_FILE, PID_FILE, STOP_FILE } from './ledger.js';
-import { runPusher } from './pusher.js';
+import { jitterMs, runPusher } from './pusher.js';
 
 export interface PusherCommand {
   report: string;
@@ -23,6 +23,9 @@ export function parseEvery(text: string): number {
     throw new OtelHtmlError('usage', { message: `--every is not a duration like 60s, 2m or 500ms: ${text}` });
   return m[2] === 'ms' ? n : m[2] === 's' ? n * 1_000 : n * 60_000;
 }
+
+/** The variables that tell one job's pusher from another's (matrix legs share GITHUB_JOB; the runner name differs). */
+const ID_VARS = ['GITHUB_RUN_ID', 'GITHUB_JOB', 'OTEL_HTML_JOB_NAME', 'RUNNER_NAME'];
 
 /**
  * `ci pusher`: without `--detached` it re-spawns itself detached, its output in `<report>/../publish/pusher.log`,
@@ -73,6 +76,8 @@ export async function runPusherCommand(o: PusherCommand, io: CliIo, deps: Writer
       report,
       publishDir,
       everyMs,
+      // Matrix legs share the job id; the runner name tells them apart.
+      startDelayMs: jitterMs([...ID_VARS.map((n) => io.env[n]), o.report].join('|'), everyMs),
       ...(o.config === undefined ? {} : { config: o.config }),
       env: io.env,
       deployerWorkflow: o.deployerWorkflow,
