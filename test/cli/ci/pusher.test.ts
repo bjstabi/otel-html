@@ -184,11 +184,15 @@ describe('tick', () => {
       repository: { full_name: 'o/r' },
       head_repository: { full_name: 'o/r' },
     };
-    const api = (listing: () => Response, calls: string[]): typeof fetch =>
+    const api = (
+      listing: () => Response,
+      calls: string[],
+      postStatus: () => number = () => 204,
+    ): typeof fetch =>
       (async (url: string, init?: RequestInit) => {
         const u = String(url);
         calls.push(`${init?.method ?? 'GET'} ${u}`);
-        if (init?.method === 'POST') return new Response(null, { status: 204 });
+        if (init?.method === 'POST') return new Response(null, { status: postStatus() });
         if (u.includes('/workflows/pages-deploy.yml/runs?')) return listing();
         if (u.endsWith('/actions/runs/42')) return json(run42);
         return json({ default_branch: 'main' });
@@ -268,6 +272,28 @@ describe('tick', () => {
       calls.length = 0;
       await tick(opts(), d, null, cache);
       expect(calls).toEqual([]);
+    });
+
+    test('a failed dispatch stays owed, and a later quiet tick dispatches it', async () => {
+      const r = await openReport();
+      await flush(r, 1);
+      let status = 503;
+      const calls: string[] = [];
+      const d = pdeps();
+      d.fetchFn = api(
+        () => json({ workflow_runs: [] }),
+        calls,
+        () => status,
+      );
+      const cache: PusherCache = {};
+      await tick(opts(), d, null, cache);
+      expect(posted(calls)).toBe(true);
+      expect(cache.dispatchOwed).toBe(true);
+      calls.length = 0;
+      status = 204;
+      await tick(opts(), d, null, cache);
+      expect(posted(calls)).toBe(true);
+      expect(cache.dispatchOwed).toBe(false);
     });
 
     test('a queued run clears an owed dispatch', async () => {

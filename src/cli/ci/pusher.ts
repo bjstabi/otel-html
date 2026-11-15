@@ -275,7 +275,6 @@ async function dispatch(
     d.log('deployer already waiting; not dispatched');
     return;
   }
-  kept.dispatchOwed = false;
   const sink = (s: string): void => {
     for (const line of s.split('\n'))
       if (line.trim() !== '') d.log(line.includes('not dispatched') ? `${FAILURE_MARK}${line}` : line);
@@ -287,7 +286,11 @@ async function dispatch(
   const env =
     dispatchToken === undefined || dispatchToken === '' ? o.env : { ...o.env, GITHUB_TOKEN: dispatchToken };
   const io = { stdout: sink, stderr: sink, env, cwd: '' } as unknown as CliIo;
-  await runDispatch({ workflow: o.deployerWorkflow, repository, runId }, io, d.fetchFn, { skip: true });
+  // A failed call stays owed, so a later tick (new data or not) tries again; a refusal is final for this run.
+  kept.dispatchOwed =
+    (await runDispatch({ workflow: o.deployerWorkflow, repository, runId }, io, d.fetchFn, {
+      skip: true,
+    })) === 'failed';
 }
 
 /**

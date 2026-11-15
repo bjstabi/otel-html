@@ -93,7 +93,7 @@ describe('runDispatch', () => {
 
   test('a 403 is one line and resolves', async () => {
     const s = setup({ postStatus: 403 });
-    await expect(runDispatch(opts, s.io, s.fetchFn)).resolves.toBeUndefined();
+    await expect(runDispatch(opts, s.io, s.fetchFn)).resolves.toBe('failed');
     expect(s.lines).toHaveLength(1);
     expect(s.lines[0]).toContain('403');
   });
@@ -104,7 +104,7 @@ describe('runDispatch', () => {
       runDispatch(opts, s.io, async () => {
         throw new Error('down');
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe('failed');
     expect(s.lines).toHaveLength(1);
   });
 
