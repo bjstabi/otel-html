@@ -30,6 +30,9 @@ function fake(routes: Record<string, Route>): {
       // a run without an artifact of that name
       if (route === undefined && /\/actions\/runs\/\d+\/artifacts\?name=/.test(url))
         return Response.json({ artifacts: [] });
+      // a deployment's run, when the test does not say otherwise: a trusted ci run
+      const runId = /\/actions\/runs\/(\d+)$/.exec(url)?.[1];
+      if (route === undefined && runId !== undefined) return Response.json(apiRun(Number(runId)));
       if (route === undefined) throw new Error(`unexpected request: ${url}`);
       return route();
     },
@@ -467,10 +470,19 @@ describe('planDeploy', () => {
     ['another repository', { head_repository: { full_name: 'fork/r' } }],
     ['a branch that is not the default', { head_branch: 'feat' }],
     ['a pull_request event', { event: 'pull_request' }],
-    ['a run older than the base', { id: 10 }],
   ])('a consumed state uploaded by %s is ignored', async (_n, over) => {
     const routes = await world();
     routes[`${R}/actions/runs/50`] = json(deployerRun(50, over));
+    const plan = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn);
+    expect(plan.state).toEqual({ kind: 'full', runId: 11, runAttempt: 1 });
+  });
+
+  test('a consumed state uploaded before the base went live is ignored', async () => {
+    const routes = await world();
+    // the base (deployment 2000) went live at 11:05
+    routes[`${R}/actions/artifacts?per_page=100`] = listing([
+      art(102, 'otel-html-site-state-base-2000', '2026-11-10T11:00:00Z', 50),
+    ]);
     const plan = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn);
     expect(plan.state).toEqual({ kind: 'full', runId: 11, runAttempt: 1 });
   });
@@ -704,10 +716,10 @@ describe('planDeploy', () => {
         [`${R}/actions/artifacts/401/zip`]: zipRoute(await stateZip(c1)),
         [`${R}/actions/artifacts/402/zip`]: zipRoute(await stateZip(c2)),
         [`${R}/actions/runs/60`]: json(apiRun(60, { run_attempt: 2 })),
-        // attempt 1's state is the newer upload here: the pair, not the listing order, decides
+        // attempt 2 uploads after attempt 1, whatever the listing's order
         [`${R}/actions/artifacts?per_page=100`]: listing([
-          art(401, 'otel-html-site-state-base-2000-1', '2026-11-10T11:52:00Z', 60),
-          art(402, 'otel-html-site-state-base-2000-2', '2026-11-10T11:51:00Z', 60),
+          art(401, 'otel-html-site-state-base-2000-1', '2026-11-10T11:51:00Z', 60),
+          art(402, 'otel-html-site-state-base-2000-2', '2026-11-10T11:52:00Z', 60),
         ]),
       });
       const plan = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn);
@@ -879,6 +891,154 @@ describe('planDeploy', () => {
       expect(
         (await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn)).base.kind,
       ).toBe('empty');
+    });
+  });
+
+  describe('who made a deployment', () => {
+    const forkRun = (id: number) =>
+      apiRun(id, {
+        event: 'pull_request',
+        head_branch: 'feat',
+        head_repository: { full_name: 'evil/r' },
+      });
+    const plan = (routes: Record<string, Route>, over: Partial<PlanOptions> = {}) =>
+      planDeploy(opts(over), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn);
+
+    test('a fork pull_request ci run with a deployment, a tarball and a full state is never the base', async () => {
+      const mine = stateWith({ kind: 'full', runId: 11, runAttempt: 1 }, []);
+      const forged = stateWith({ kind: 'full', runId: 70, runAttempt: 1 }, ['666']);
+      const routes = {
+        [R]: json({ default_branch: 'main' }),
+        ...deployments(
+          { id: 3000, created: '2026-11-10T11:55:00Z', success: true, run: 70 },
+          { id: 2000, created: '2026-11-10T11:05:00Z', success: true, run: 11 },
+        ),
+        [`${R}/actions/runs/70`]: json(forkRun(70)),
+        [`${R}/actions/runs/70/artifacts?name=github-pages-1`]: json({
+          artifacts: [art(700, 'github-pages-1', '2026-11-10T11:54:00Z', 70)],
+        }),
+        [`${R}/actions/runs/70/artifacts?name=otel-html-site-state-70-1`]: json({
+          artifacts: [art(701, 'otel-html-site-state-70-1', '2026-11-10T11:54:30Z', 70)],
+        }),
+        [`${R}/actions/artifacts/701/zip`]: zipRoute(await stateZip(forged)),
+        [`${R}/actions/runs/11/artifacts?name=github-pages-1`]: json({
+          artifacts: [art(100, 'github-pages-1', '2026-11-10T11:05:00Z', 11)],
+        }),
+        [`${R}/actions/runs/11/artifacts?name=otel-html-site-state-11-1`]: json({
+          artifacts: [art(101, 'otel-html-site-state-11-1', '2026-11-10T11:06:00Z', 11)],
+        }),
+        [`${R}/actions/artifacts/101/zip`]: zipRoute(await stateZip(mine)),
+        [`${R}/actions/artifacts?per_page=100`]: listing([]),
+      };
+      const p = await plan(routes);
+      expect(p.base).toMatchObject({ kind: 'artifact', deploymentId: 2000, runId: 11, artifactId: 100 });
+      expect(p.state).toEqual({ kind: 'full', runId: 11, runAttempt: 1 });
+    });
+
+    test('a same-repository bot pull_request ci run is not a deployer either', async () => {
+      const routes = {
+        [R]: json({ default_branch: 'main' }),
+        ...deployments({ id: 3000, created: '2026-11-10T11:55:00Z', success: true, run: 70 }),
+        [`${R}/actions/runs/70`]: json(
+          apiRun(70, { event: 'pull_request', head_branch: 'feat', actor: { type: 'Bot' } }),
+        ),
+        [`${R}/actions/runs/70/artifacts?name=github-pages-1`]: json({
+          artifacts: [art(700, 'github-pages-1', '2026-11-10T11:54:00Z', 70)],
+        }),
+        [`${R}/actions/artifacts?per_page=100`]: listing([]),
+        [`${PAGES}/site-state/files.json`]: json({ version: 1, files: {} }),
+        [`${PAGES}/site-state/applied.json`]: missing,
+      };
+      expect((await plan(routes)).base).toEqual({ kind: 'live' });
+    });
+
+    test('a deployment whose run is gone is not counted, and is not looked up as a job', async () => {
+      const routes = {
+        [R]: json({ default_branch: 'main' }),
+        ...deployments({ id: 3000, created: '2026-11-10T11:55:00Z', success: true, run: 70, job: 9 }),
+        [`${R}/actions/runs/70`]: missing,
+        [`${R}/actions/artifacts?per_page=100`]: listing([]),
+        [`${PAGES}/site-state/files.json`]: json({ version: 1, files: {} }),
+        [`${PAGES}/site-state/applied.json`]: missing,
+      };
+      const f = fake(routes);
+      const p = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', f.fetchFn);
+      expect(p.base).toEqual({ kind: 'live' });
+      expect(f.calls.some((c) => c.includes('/actions/jobs/'))).toBe(false);
+    });
+
+    test('a legacy pages-deploy run on the default branch still counts; the same file on another branch does not', async () => {
+      const arts = {
+        [`${R}/actions/runs/50/artifacts?name=github-pages-1`]: json({ artifacts: [] }),
+        [`${R}/actions/runs/50/artifacts?name=github-pages`]: json({
+          artifacts: [art(500, 'github-pages', '2026-11-10T11:00:00Z', 50)],
+        }),
+        [`${R}/actions/artifacts?per_page=100`]: listing([]),
+        [`${PAGES}/site-state/applied.json`]: missing,
+      };
+      const routes = (run: Record<string, unknown>) => ({
+        [R]: json({ default_branch: 'main' }),
+        ...deployments({ id: 2500, created: '2026-11-10T11:05:00Z', success: true, run: 50 }),
+        [`${R}/actions/runs/50`]: json(run),
+        ...arts,
+      });
+      const ok = await plan(routes(deployerRun(50)));
+      expect(ok.base).toMatchObject({ kind: 'artifact', deploymentId: 2500, artifactName: 'github-pages' });
+      const other = {
+        ...routes(deployerRun(50, { head_branch: 'feat' })),
+        [`${PAGES}/site-state/files.json`]: json({ version: 1, files: {} }),
+      };
+      expect((await plan(other)).base).toEqual({ kind: 'live' });
+    });
+
+    test('a legacy log URL of a job that is gone reads as attempt 1', async () => {
+      const routes = {
+        [R]: json({ default_branch: 'main' }),
+        ...deployments({ id: 2500, created: '2026-11-10T11:05:00Z', success: true, run: 80, job: 41234 }),
+        // the job's own lookup is a 404: its run's logs were deleted
+        [`${R}/actions/jobs/41234`]: missing,
+        [`${R}/actions/runs/80/artifacts?name=github-pages-1`]: json({
+          artifacts: [art(800, 'github-pages-1', '2026-11-10T11:00:00Z', 80)],
+        }),
+        [`${R}/actions/artifacts?per_page=100`]: listing([]),
+        [`${PAGES}/site-state/applied.json`]: missing,
+      };
+      expect((await plan(routes)).base).toMatchObject({ deploymentId: 2500, runId: 80, runAttempt: 1 });
+    });
+  });
+
+  describe('passes order by time, not run id', () => {
+    test('a consumed state built on the re-run deployment by a lower run id is used; older states are not', async () => {
+      // run 20 (low id) attempt 2 deployed last; run 15 (lower still) then planned on it
+      const full = stateWith({ kind: 'full', runId: 20, runAttempt: 2 }, []);
+      const consumed = stateWith({ kind: 'consumed', base: 2005, runAttempt: 1 }, ['900']);
+      const stale = stateWith({ kind: 'consumed', base: 2005, runAttempt: 1 }, ['901']);
+      const routes = {
+        [R]: json({ default_branch: 'main' }),
+        ...deployments({ id: 2005, created: '2026-11-10T11:30:00Z', success: true, run: 20, job: 6002 }),
+        [`${R}/actions/jobs/6002`]: json({ id: 6002, run_attempt: 2 }),
+        [`${R}/actions/runs/20`]: json(apiRun(20, { run_attempt: 2 })),
+        [`${R}/actions/runs/15`]: json(apiRun(15)),
+        [`${R}/actions/runs/16`]: json(apiRun(16)),
+        [`${R}/actions/runs/20/artifacts?name=github-pages-2`]: json({
+          artifacts: [art(300, 'github-pages-2', '2026-11-10T11:29:00Z', 20)],
+        }),
+        [`${R}/actions/runs/20/artifacts?name=otel-html-site-state-20-2`]: json({
+          artifacts: [art(301, 'otel-html-site-state-20-2', '2026-11-10T11:29:30Z', 20)],
+        }),
+        [`${R}/actions/artifacts/301/zip`]: zipRoute(await stateZip(full)),
+        [`${R}/actions/artifacts/302/zip`]: zipRoute(await stateZip(consumed)),
+        [`${R}/actions/artifacts/303/zip`]: zipRoute(await stateZip(stale)),
+        [`${R}/actions/artifacts?per_page=100`]: listing([
+          art(302, 'otel-html-site-state-base-2005-1', '2026-11-10T11:50:00Z', 15),
+          art(303, 'otel-html-site-state-base-2005-1', '2026-11-10T11:10:00Z', 16),
+        ]),
+      };
+      const f = fake(routes);
+      const p = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', f.fetchFn);
+      expect(p.base).toMatchObject({ deploymentId: 2005, runId: 20, runAttempt: 2 });
+      expect(p.state).toEqual({ kind: 'consumed', base: 2005, runAttempt: 1 });
+      expect(f.calls.some((c) => c.endsWith('/artifacts/303/zip'))).toBe(false);
     });
   });
 

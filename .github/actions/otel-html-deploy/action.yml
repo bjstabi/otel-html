@@ -3,7 +3,7 @@ description: One deployer pass for the GitHub Pages site. Finds the last deploye
 
 # The job that uses this action needs:
 #   environment: github-pages
-#   concurrency: { group: pages, cancel-in-progress: false }
+#   concurrency: { group: pages, cancel-in-progress: false, queue: max }
 #   permissions: contents: read, actions: write, deployments: read, pages: write, id-token: write
 # and a checkout of the code that provides `command` (unless `command` is empty, which installs the release binary).
 # It runs on Linux only (tar, bash, the paths below).
@@ -39,7 +39,7 @@ inputs:
     description: Comma-separated workflow file names whose runs publish `push` updates.
     default: ci.yml
   report-workflow:
-    description: Comma-separated workflow files whose runs on the default branch upload pull request cleanup and reopen updates (`pr-cleanup.yml`) and, for 90 days, legacy run updates (`ci-report.yml`).
+    description: Comma-separated workflow files whose runs upload pull request cleanup and reopen updates (`pr-cleanup.yml`; a `pull_request_target` run, checked against the pull request) and, for 90 days, legacy run updates (`ci-report.yml`; only its runs on the default branch).
     default: pr-cleanup.yml,ci-report.yml
   keep-deployments:
     description: Successful deployments whose artifacts the prune step keeps.
@@ -306,7 +306,9 @@ runs:
         CMD: ${{ steps.resolve.outputs.command }}
         DIR: ${{ steps.resolve.outputs.dir }}
         KEEP: ${{ inputs.keep-deployments }}
+        DEPLOYER: ${{ inputs.legacy-deployer-workflow }}
+        CI_WORKFLOWS: ${{ inputs.ci-workflows }}
         GITHUB_TOKEN: ${{ inputs.token }}
       run: |
         # shellcheck disable=SC2086
-        $CMD ci deploy prune --site "$DIR/base" --keep "$KEEP"
+        $CMD ci deploy prune --site "$DIR/base" --keep "$KEEP" --ci-workflows "$CI_WORKFLOWS" --deployer-workflow "$DEPLOYER"

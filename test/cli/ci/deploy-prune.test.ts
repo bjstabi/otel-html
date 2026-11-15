@@ -11,27 +11,49 @@ const API = 'https://api.test';
 const R = `${API}/repos/o/r`;
 const NOW = '2026-11-10T12:00:00Z';
 
-const art = (id: number, name: string, run: number) => ({
+const art = (id: number, name: string, run: number, createdAt = '2026-11-09T00:00:00Z') => ({
   id,
   name,
   size_in_bytes: 1000,
-  created_at: '2026-11-09T00:00:00Z',
+  created_at: createdAt,
   expires_at: '2027-01-01T00:00:00Z',
   workflow_run: { id: run },
 });
 
-function world(artifacts: unknown[], runs = [50, 40, 30, 20, 10]) {
+/** The time a run's deployment went live: later runs later, unless `live` says otherwise. */
+const liveAt = (run: number): string => new Date(Date.parse(NOW) - (100 - run) * 1000).toISOString();
+
+const apiRun = (id: number, over: Record<string, unknown> = {}) => ({
+  id,
+  run_attempt: 1,
+  event: 'push',
+  path: '.github/workflows/ci.yml',
+  actor: { type: 'User' },
+  head_branch: 'main',
+  head_repository: { full_name: 'o/r' },
+  ...over,
+});
+
+function world(
+  artifacts: unknown[],
+  runs = [50, 40, 30, 20, 10],
+  more: { live?: Record<number, string>; runOver?: Record<number, Record<string, unknown>> } = {},
+) {
   const deleted: string[] = [];
+  const at = (run: number): string => more.live?.[run] ?? liveAt(run);
   const statuses = (run: number) => [
-    { state: 'success', log_url: `https://github.com/o/r/actions/runs/${run}/jobs/1`, created_at: NOW },
+    { state: 'success', log_url: `https://github.com/o/r/actions/runs/${run}/jobs/1`, created_at: at(run) },
   ];
   const fetchFn = async (url: string, init?: RequestInit): Promise<Response> => {
     if (init?.method === 'DELETE') {
       deleted.push(url.slice(`${R}/actions/artifacts/`.length));
       return new Response(null, { status: url.endsWith('/403') ? 403 : 204 });
     }
+    if (url === R) return Response.json({ default_branch: 'main' });
+    const run = /\/actions\/runs\/(\d+)$/.exec(url);
+    if (run) return Response.json(apiRun(Number(run[1]), more.runOver?.[Number(run[1])]));
     if (url === `${R}/deployments?environment=github-pages&per_page=100`)
-      return Response.json(runs.map((r) => ({ id: r * 10, created_at: NOW, environment: 'github-pages' })));
+      return Response.json(runs.map((r) => ({ id: r * 10, created_at: at(r), environment: 'github-pages' })));
     const m = /deployments\/(\d+)\/statuses/.exec(url);
     if (m) return Response.json(statuses(Number(m[1]) / 10));
     if (url === `${R}/actions/artifacts?per_page=100`) return Response.json({ artifacts });
@@ -63,7 +85,7 @@ describe('pruneArtifacts', () => {
     art(9, 'otel-html-site-state-20', 20),
     art(10, 'github-pages', 10),
     art(11, 'otel-html-site-state-base-77', 10),
-    art(12, 'github-pages', 60), // a pass in flight
+    art(12, 'github-pages', 60, NOW), // a pass in flight
     art(21, 'otel-html-update-push-1-1', 5),
     art(22, 'otel-html-update-push-1-2', 5),
     art(23, 'otel-html-update-push-1-3', 5),
@@ -71,7 +93,15 @@ describe('pruneArtifacts', () => {
     art(25, 'otel-html-update-push-1-5', 5), // pending, not recorded
     art(30, 'unrelated', 10),
   ];
-  const base = { apiUrl: API, repository: 'o/r', keep: 3, now: NOW, token: 'tok' };
+  const base = {
+    apiUrl: API,
+    repository: 'o/r',
+    keep: 3,
+    now: NOW,
+    token: 'tok',
+    ciWorkflows: ['ci.yml'],
+    deployerWorkflows: ['pages-deploy.yml'],
+  };
 
   test('deletes older deployments artifacts, a failed pass and updates consumed up to the oldest kept pass', async () => {
     const { fetchFn, deleted } = world(artifacts);
@@ -113,6 +143,80 @@ describe('pruneArtifacts', () => {
     const { fetchFn, deleted } = world(arts);
     await pruneArtifacts({ ...base, applied: applied({}) }, fetchFn, () => {});
     expect(deleted.sort()).toEqual(['6', '7', '8']);
+  });
+
+  test('a fork pull_request run with a deployment, a tarball and a state is never kept and forces no deletion', async () => {
+    // 57, 56 and 55 are forged deployments of one fork's pull_request ci.yml runs (the newest three)
+    const fork = { event: 'pull_request', head_branch: 'feat', head_repository: { full_name: 'evil/r' } };
+    const arts = [
+      ...[55, 56, 57].flatMap((r) => [
+        art(r * 10, 'github-pages-1', r, NOW),
+        art(r * 10 + 1, 'otel-html-site-state-' + r + '-1', r, NOW),
+      ]),
+      ...artifacts,
+    ];
+    const { fetchFn, deleted } = world(arts, [57, 56, 55, 50, 40, 30, 20, 10], {
+      runOver: { 55: fork, 56: fork, 57: fork },
+    });
+    await pruneArtifacts({ ...base, applied: applied({ '21': 10, '24': 40 }) }, fetchFn, () => {});
+    // kept = 50, 40, 30: their artifacts and the in-flight pass stay; the forged runs' artifacts are not kept status, but are not older than the oldest kept either
+    for (const id of ['1', '2', '3', '4', '5', '12', '24']) expect(deleted).not.toContain(id);
+    expect(deleted).toContain('21');
+    expect(deleted).toContain('8');
+  });
+
+  test('a fork run cannot push the real base out of the kept deployments', async () => {
+    const fork = { event: 'pull_request', head_branch: 'main', head_repository: { full_name: 'evil/r' } };
+    const arts = [
+      art(1, 'github-pages-1', 50),
+      art(2, 'otel-html-site-state-50-1', 50),
+      art(3, 'github-pages-1', 40),
+      ...[53, 54, 55].map((r) => art(r * 10, 'github-pages-1', r, NOW)),
+      art(30, 'github-pages-1', 20),
+    ];
+    const { fetchFn, deleted } = world(arts, [55, 54, 53, 50, 40, 20], {
+      runOver: { 55: fork, 54: fork, 53: fork },
+    });
+    // kept = 50, 40, 20 (the trusted ones): nothing older than run 20 exists, and 50's tarball stays
+    await pruneArtifacts({ ...base, applied: applied({}) }, fetchFn, () => {});
+    expect(deleted).not.toContain('1');
+    expect(deleted).not.toContain('2');
+    expect(deleted).not.toContain('3');
+  });
+
+  test('a trusted ci run and a legacy pages-deploy run still count', async () => {
+    const legacy = {
+      path: '.github/workflows/pages-deploy.yml',
+      event: 'workflow_dispatch',
+      actor: { type: 'Bot' },
+    };
+    const arts = [
+      art(1, 'github-pages', 50),
+      art(3, 'github-pages', 40),
+      art(4, 'github-pages', 30),
+      art(8, 'github-pages', 20),
+    ];
+    const { fetchFn, deleted } = world(arts, [50, 40, 30, 20], { runOver: { 40: legacy, 30: legacy } });
+    await pruneArtifacts({ ...base, applied: applied({}) }, fetchFn, () => {});
+    expect(deleted).toEqual(['8']);
+  });
+
+  test("a re-run of an older run that deployed last: the newest deployment's consumed updates stay", async () => {
+    // run 20 was re-run and went live after 50, 40 and 30: kept = 20 (newest), 50, 40; the oldest kept by time is 40
+    const live = { 20: '2026-11-10T11:59:00Z', 50: '2026-11-10T11:30:00Z', 40: '2026-11-10T11:00:00Z' };
+    const arts = [
+      art(1, 'github-pages-1', 50, '2026-11-10T11:29:00Z'),
+      art(3, 'github-pages-1', 40, '2026-11-10T10:59:00Z'),
+      art(8, 'github-pages-1', 20, '2026-11-10T11:58:00Z'),
+      art(4, 'github-pages-1', 30, '2026-11-10T10:30:00Z'),
+      art(21, 'otel-html-update-push-1-1', 5),
+      art(22, 'otel-html-update-push-1-2', 5),
+      art(23, 'otel-html-update-push-1-3', 5),
+    ];
+    const { fetchFn, deleted } = world(arts, [20, 50, 40, 30], { live });
+    // 21 was consumed by the re-run (live last), 22 by 40 (the oldest kept), 23 by 50
+    await pruneArtifacts({ ...base, applied: applied({ '21': 20, '22': 40, '23': 50 }) }, fetchFn, () => {});
+    expect(deleted.sort()).toEqual(['22', '4']);
   });
 
   test('a failed delete is a warning and the rest proceed', async () => {

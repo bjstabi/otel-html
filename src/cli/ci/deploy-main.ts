@@ -187,6 +187,9 @@ export interface DeployPruneOptions {
   site: string;
   repository: string;
   keep: number;
+  /** A deployment counts only when a trusted run of one of these files (or a legacy deployer file's run) made it. */
+  ciWorkflows: string[];
+  deployerWorkflows: string[];
   now: string;
 }
 
@@ -208,6 +211,8 @@ export async function runDeployPrune(
       apiUrl: apiUrlOf(io),
       repository: opts.repository,
       keep: opts.keep,
+      ciWorkflows: opts.ciWorkflows,
+      deployerWorkflows: opts.deployerWorkflows,
       applied: state.applied,
       now: opts.now,
       ...(token === undefined ? {} : { token }),

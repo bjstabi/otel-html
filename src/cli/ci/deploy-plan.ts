@@ -130,20 +130,43 @@ const fullStateNames = (runId: number, attempt: number): string[] => [
 ];
 
 /**
+ * Whether a run may have deployed the site: a run of a `ciWorkflows` file that is trusted (`isTrustedRun`), or a run of
+ * a legacy deployer workflow file from this repository on the default branch with a deployer event. A run that is not
+ * found is not.
+ */
+export const isDeploymentRunTrusted = (
+  run: ApiRun | undefined,
+  o: { repository: string; defaultBranch: string; ciWorkflows: string[]; deployerWorkflows: string[] },
+): boolean => {
+  if (run === undefined) return false;
+  const path = (w: string): string => `.github/workflows/${w}`;
+  if (o.ciWorkflows.map(path).includes(run.path)) return isTrustedRun(run, o.repository, o.defaultBranch);
+  return (
+    o.deployerWorkflows.map(path).includes(run.path) &&
+    run.head_repository?.full_name === o.repository &&
+    run.head_branch === o.defaultBranch &&
+    DEPLOYER_EVENTS.includes(run.event)
+  );
+};
+
+/**
  * The deployments that went live, newest first, with the deploy job's run and attempt (from its success status's log
  * URL: the run id and, for a job, the job id whose `run_attempt` the Jobs API gives; a legacy log URL without a job is
  * attempt 1). GitHub records a `github-pages` deployment for every job naming the environment, whether or not it
  * deployed, so with `filter` a deployment counts only when it is not the running attempt's own (an earlier attempt of the
- * same run counts) and, while its run's artifacts cannot have expired, that attempt uploaded the site (`hasSite`). One
+ * same run counts), its run is trusted (`filter.trusted`) and, while its run's artifacts cannot have expired, that attempt uploaded the site (`hasSite`). One
  * older than the retention counts (the live cold start copes).
  */
 export async function* successfulDeployments(
   get: <T>(url: string) => Promise<T>,
+  getIfFound: <T>(url: string) => Promise<T | undefined>,
   repo: string,
   deployments: ApiDeployment[],
   filter?: {
     current?: { runId: number; runAttempt: number };
     nowMs: number;
+    /** Whether the run may write the site (see `isDeploymentRunTrusted`); a run that cannot be found may not. */
+    trusted: (runId: number) => Promise<boolean>;
     hasSite: (runId: number, runAttempt: number) => Promise<boolean>;
   },
 ): AsyncGenerator<{ id: number; runId: number; runAttempt: number; liveAt: string }> {
@@ -153,12 +176,15 @@ export async function* successfulDeployments(
     return m[2] === undefined ? { runId: Number(m[1]) } : { runId: Number(m[1]), jobId: Number(m[2]) };
   };
   const attempts = new Map<number, Promise<number>>();
+  // a job that is gone (its run's logs deleted) reads as attempt 1
   const attemptOf = (ref: { jobId?: number }): Promise<number> => {
     const jobId = ref.jobId;
     if (jobId === undefined) return Promise.resolve(1);
     let p = attempts.get(jobId);
     if (p === undefined) {
-      p = get<{ run_attempt: number }>(`${repo}/actions/jobs/${jobId}`).then((j) => j.run_attempt);
+      p = getIfFound<{ run_attempt: number }>(`${repo}/actions/jobs/${jobId}`).then(
+        (j) => j?.run_attempt ?? 1,
+      );
       attempts.set(jobId, p);
     }
     return p;
@@ -177,6 +203,8 @@ export async function* successfulDeployments(
     const ok = statuses.find((s) => s.state === 'success');
     const ref = refOf(ok?.log_url);
     if (ok === undefined || ref === undefined) continue;
+    // any job naming the environment records a deployment, a fork's pull_request run included: only a trusted run counts
+    if (filter !== undefined && !(await filter.trusted(ref.runId))) continue;
     const runAttempt = await attemptOf(ref);
     if (filter !== undefined) {
       const liveMs = isoOrUndefined(ok.created_at) ?? -Infinity;
@@ -199,6 +227,8 @@ export async function planDeploy(
   const hourBefore = (ms: number): string => new Date(ms - HOUR_MS).toISOString();
   const get = async <T>(url: string): Promise<T> =>
     (await getJson<T>(url, token, API_TIMEOUT_MS, fetchFn)).body;
+  const getIfFound = <T>(url: string): Promise<T | undefined> =>
+    getJsonIfFound<T>(url, token, API_TIMEOUT_MS, fetchFn);
   const live = async (path: string): Promise<Response | undefined> => {
     // the public site: no credentials go there
     const res = await fetchFn(`${o.pagesUrl.replace(/\/+$/, '')}/${path}`, {
@@ -214,6 +244,20 @@ export async function planDeploy(
       await get<{ artifacts?: ApiArtifact[] }>(`${repo}/actions/runs/${runId}/artifacts?name=${name}`)
     ).artifacts?.filter(unexpired) ?? [];
 
+  // the API lookups, cached per pass
+  const runs = new Map<number, Promise<ApiRun | undefined>>();
+  const getRun = (id: number): Promise<ApiRun | undefined> => {
+    let p = runs.get(id);
+    if (p === undefined) {
+      p = getJsonIfFound<ApiRun>(`${repo}/actions/runs/${id}`, token, API_TIMEOUT_MS, fetchFn);
+      runs.set(id, p);
+    }
+    return p;
+  };
+  let defaultBranch: Promise<string> | undefined;
+  const defaultBranchOf = (): Promise<string> =>
+    (defaultBranch ??= get<{ default_branch: string }>(repo).then((r) => r.default_branch));
+
   // (1) the last successful deployment
   const deployments = await listDeployments(get, repo);
   /** The first artifact of the run under any of `names` (the attempt's own name first, then the legacy one). */
@@ -228,9 +272,16 @@ export async function planDeploy(
     (await firstArtifact(runId, pagesNames(attempt))) !== undefined ||
     (await firstArtifact(runId, fullStateNames(runId, attempt))) !== undefined;
   let base: BaseInfo = { kind: 'live' };
-  for await (const d of successfulDeployments(get, repo, deployments, {
+  for await (const d of successfulDeployments(get, getIfFound, repo, deployments, {
     ...(o.current === undefined ? {} : { current: o.current }),
     nowMs,
+    trusted: async (id) =>
+      isDeploymentRunTrusted(await getRun(id), {
+        repository: o.repository,
+        defaultBranch: await defaultBranchOf(),
+        ciWorkflows: o.ciWorkflows,
+        deployerWorkflows: o.deployerWorkflows,
+      }),
     hasSite,
   })) {
     base = { kind: 'live', deploymentId: d.id, runId: d.runId, runAttempt: d.runAttempt, liveAt: d.liveAt };
@@ -310,16 +361,6 @@ export async function planDeploy(
   }
   const floorMs = isoOrUndefined(applied?.floor) ?? nowMs - HOUR_MS;
 
-  // the API lookups, cached per pass
-  const runs = new Map<number, Promise<ApiRun | undefined>>();
-  const getRun = (id: number): Promise<ApiRun | undefined> => {
-    let p = runs.get(id);
-    if (p === undefined) {
-      p = getJsonIfFound<ApiRun>(`${repo}/actions/runs/${id}`, token, API_TIMEOUT_MS, fetchFn);
-      runs.set(id, p);
-    }
-    return p;
-  };
   const pullsByRun = new Map<number, Promise<ApiPull[]>>();
   const pullsOf = (run: ApiRun): Promise<ApiPull[]> => {
     let p = pullsByRun.get(run.id);
@@ -349,10 +390,6 @@ export async function planDeploy(
     }
     return p;
   };
-  let defaultBranch: Promise<string> | undefined;
-  const defaultBranchOf = (): Promise<string> =>
-    (defaultBranch ??= get<{ default_branch: string }>(repo).then((r) => r.default_branch));
-
   // (3) the listing walk, newest first, down to the floor
   const listed = (
     await fetchArtifacts(
@@ -367,12 +404,15 @@ export async function planDeploy(
   const reportPaths = o.reportWorkflows.map((w) => `.github/workflows/${w}`);
   const deployerPaths = o.deployerWorkflows.map((w) => `.github/workflows/${w}`);
   // a fork's pull_request run can upload artifacts here: only trusted ci runs and the legacy deployer's runs on the default branch count
-  // and only a state of a later (run, attempt) than the base's: the base's own and older passes' states are behind it
+  // and only a state of a later pass than the base's: the base's own attempt and states uploaded before it went live are behind it.
+  // Passes order by time, not run id: a re-run or a long run deploys after runs with higher ids.
+  const baseLiveMs = isoOrUndefined(base.liveAt) ?? -Infinity;
   const isNewerPass = async (a: ApiArtifact, attempt: number): Promise<ApiRun | undefined> => {
     const id = a.workflow_run?.id;
     const run = id === undefined ? undefined : await getRun(id);
     if (run === undefined || attempt > run.run_attempt) return undefined;
-    if (run.id < (base.runId ?? 0) || (run.id === base.runId && attempt <= baseAttempt)) return undefined;
+    if (run.id === base.runId && attempt <= baseAttempt) return undefined;
+    if ((isoOrUndefined(a.created_at) ?? Infinity) < baseLiveMs) return undefined;
     return run;
   };
   const isDeployerRun = async (a: ApiArtifact, attempt: number): Promise<boolean> => {
@@ -386,7 +426,7 @@ export async function planDeploy(
       DEPLOYER_EVENTS.includes(run.event)
     );
   };
-  // the newest pass first: by (run id, attempt), the listing order (newest upload first) breaking ties
+  // the newest pass first: by upload time, then attempt, the listing order (newest upload first) breaking ties
   const candidates = listed
     .map((a, i) => ({ a, i, form: parseStateName(a.name) }))
     .flatMap((c) =>
@@ -394,7 +434,7 @@ export async function planDeploy(
     )
     .sort(
       (x, y) =>
-        (y.a.workflow_run?.id ?? 0) - (x.a.workflow_run?.id ?? 0) ||
+        (isoOrUndefined(y.a.created_at) ?? 0) - (isoOrUndefined(x.a.created_at) ?? 0) ||
         y.form.runAttempt - x.form.runAttempt ||
         x.i - y.i,
     );

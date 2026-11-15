@@ -356,7 +356,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .option('--ci-workflows <files>', 'comma-separated workflow files whose runs publish', 'ci.yml')
     .option(
       '--report-workflow <files>',
-      'comma-separated legacy workflow files that upload run and PR updates',
+      'comma-separated workflow files whose runs upload run updates (legacy, default branch) and PR removals and reopenings (checked against the pull request)',
       'pr-cleanup.yml,ci-report.yml',
     )
     .option(
@@ -462,23 +462,39 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .option('--repository <owner/repo>', 'repository (default: $GITHUB_REPOSITORY)')
     .requiredOption('--site <dir>', 'the deployed site, whose site-state/applied.json says what was consumed')
     .option('--keep <n>', 'successful deployments whose artifacts are kept', '3')
-    .action(async (flags: { repository?: string; site: string; keep: string }) => {
-      try {
-        await runDeployPrune(
-          {
-            site: flags.site,
-            repository: repositoryOf(flags.repository),
-            keep: parsePositive('--keep', flags.keep),
-            now: new Date().toISOString(),
-          },
-          io,
-          await resolveDeps(deps),
-        );
-      } catch (e) {
-        say(io, `::error::otel-html deploy prune: ${messageOf(e)}`);
-        throw new CliExit(1);
-      }
-    });
+    .option('--ci-workflows <files>', 'comma-separated workflow files whose trusted runs deploy', 'ci.yml')
+    .option(
+      '--deployer-workflow <files>',
+      'comma-separated legacy workflow files whose runs on the default branch may have deployed',
+      'pages-deploy.yml',
+    )
+    .action(
+      async (flags: {
+        repository?: string;
+        site: string;
+        keep: string;
+        ciWorkflows: string;
+        deployerWorkflow: string;
+      }) => {
+        try {
+          await runDeployPrune(
+            {
+              site: flags.site,
+              repository: repositoryOf(flags.repository),
+              keep: parsePositive('--keep', flags.keep),
+              ciWorkflows: names(flags.ciWorkflows),
+              deployerWorkflows: names(flags.deployerWorkflow),
+              now: new Date().toISOString(),
+            },
+            io,
+            await resolveDeps(deps),
+          );
+        } catch (e) {
+          say(io, `::error::otel-html deploy prune: ${messageOf(e)}`);
+          throw new CliExit(1);
+        }
+      },
+    );
   deploy
     .command('fetch-live')
     .description(
