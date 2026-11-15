@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createReportWith } from '../../api/report.js';
 import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
+import { finishedView } from './finished-view.js';
 import {
   type ApiRun,
   envVar,
@@ -34,6 +35,8 @@ export type ReportOptions = {
   token?: string;
   /** Append the summary table to $GITHUB_STEP_SUMMARY (default true); off when `ci link` writes the linked one. */
   stepSummary?: boolean;
+  /** Report the run as finished without the jobs whose name starts with this prefix (the report's own jobs). */
+  excludeJobs?: string;
 };
 
 const LOG_CONCURRENCY = 4;
@@ -93,7 +96,7 @@ export async function runReport(
   const token = opts.token ?? env('GITHUB_TOKEN');
   const config = opts.config === undefined ? {} : { config: opts.config };
 
-  const run = (
+  const fetched = (
     await getJson<ApiRun>(
       `${API}/repos/${opts.repository}/actions/runs/${opts.runId}`,
       token,
@@ -101,11 +104,20 @@ export async function runReport(
       fetchFn,
     )
   ).body;
-  const jobs = await fetchJobs(
-    { apiUrl: API, repository: opts.repository, runId: run.id, runAttempt: run.run_attempt },
-    token,
-    API_TIMEOUT_MS,
-    fetchFn,
+  const { run, jobs } = finishedView(
+    fetched,
+    await fetchJobs(
+      {
+        apiUrl: API,
+        repository: opts.repository,
+        runId: fetched.id,
+        runAttempt: fetched.run_attempt,
+      },
+      token,
+      API_TIMEOUT_MS,
+      fetchFn,
+    ),
+    opts.excludeJobs ?? '',
   );
   const artifacts = await discoverArtifacts(opts.artifacts).catch((e: unknown) => {
     warn(`cannot read ${opts.artifacts}: ${messageOf(e)}`);

@@ -60,7 +60,7 @@ describe('ci pusher', () => {
     expect(calls).toHaveLength(1);
     const [c] = calls;
     const args = ['ci', 'pusher', '--report', '.otel-html/report', '--every', '60s'];
-    const tail = [...args, '--deployer-workflow', 'pages-deploy.yml', '--detached'];
+    const tail = [...args, '--detached'];
     expect(c?.cmd).toBe(process.execPath);
     expect(c?.args).toEqual('bun' in process.versions ? tail : [process.argv[1], ...tail]);
     expect(c?.opts.detached).toBe(true);

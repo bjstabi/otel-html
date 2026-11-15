@@ -42,10 +42,9 @@ jobs:
         with:
           name: otel-html-smoke-${{ matrix.os }}
 
-  # The actions as built from this branch (D67): the `ci update`, `ci dispatch` and `ci deploy` commands exist only on the
-  # branch until a release ships them. The job shell is the built CLI, as in ci.yml. The dispatch uses the job token,
-  # which the repository's Actions policy refuses, and never fails the job. The deployer rejects these updates (this workflow is
-  # not one of its ci-workflows) but still runs one extra pass for them.
+  # The actions as built from this branch (D67): the `ci update` and `ci deploy` commands exist only on the
+  # branch until a release ships them. The job shell is the built CLI, as in ci.yml. The deployer rejects these updates (this workflow is
+  # not one of its ci-workflows).
   publish:
     strategy:
       fail-fast: false
@@ -55,8 +54,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      # The setup reads the run's jobs; the collect dispatches the deployer.
-      actions: write
+      # The setup reads the run's jobs.
+      actions: read
     defaults:
       run:
         shell: node dist/cli/main.js run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}

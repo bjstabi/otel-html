@@ -5,8 +5,7 @@ import type { Clock, FileSystem } from '../../writer/ports.js';
 import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
 import { type uploadArtifact, zipDirectory } from './artifact-client.js';
-import { runDispatch } from './dispatch.js';
-import { type Fetch, getJson, messageOf } from './github-api.js';
+import { type Fetch, messageOf } from './github-api.js';
 import { FAILURE_MARK, PID_FILE, readLedger, STOP_FILE, writeLedger } from './ledger.js';
 import { parseJobContext } from './publish.js';
 import { buildPushUpdate, ciSpansFromApi } from './push-update.js';
@@ -16,21 +15,11 @@ import { updateName } from './update.js';
 const STOP_POLL_MS = 1_000;
 /** The CI-spans lookup (2 API calls and a scratch report) runs at most this often; between lookups the last result is reused. */
 export const CI_SPANS_EVERY_MS = 300_000;
-const DEPLOYER_WAITING = new Set(['queued', 'pending', 'waiting', 'requested']);
-/**
- * A deployer run that started (`in_progress`) less than this long ago has most likely not reached its `plan` job's
- * listing of pending updates (checkout, setup, build and the listing take about a minute), so it counts as waiting. The
- * age comes from `run_started_at` in the run list the check already fetches: no extra API call.
- */
-const DEPLOYER_STARTING_MS = 120_000;
-/** The runner's clock may run behind the API's: a run that appears to start up to this far ahead still counts. */
-const CLOCK_SKEW_MS = 5_000;
 
 /**
  * Where in `[0, everyMs)` a pusher's first tick falls: a hash of the job's identity, so the pushers of one run, started
  * within seconds of each other, do not all make their first check at the same moment. Deterministic: the same job always
- * gets the same offset. It only spreads the first ticks; the `DEPLOYER_STARTING_MS` window does most of the work of
- * keeping dispatches apart.
+ * gets the same offset. It only spreads the first ticks, so the pushers' CI-spans lookups do not all hit the API at the same moment.
  */
 export function jitterMs(identity: string, everyMs: number): number {
   let h = 0x811c9dc5;
@@ -57,7 +46,6 @@ export interface PusherOptions {
   startDelayMs?: number;
   config?: string;
   env: Readonly<Record<string, string | undefined>>;
-  deployerWorkflow: string;
 }
 
 /** What a pusher keeps between ticks: the last CI-spans lookup (its report lives in `dir` until the pusher ends). */
@@ -65,8 +53,6 @@ export interface PusherCache {
   at?: number;
   dir?: string;
   ci?: { jobName?: string; report?: string };
-  /** A dispatch was skipped because a deployer run had only just started: re-check on later ticks, even with nothing new. */
-  dispatchOwed?: boolean;
 }
 
 type Outcome = { outcome: 'uploaded' | 'unchanged' | 'retry'; listing: string[] };
@@ -83,7 +69,7 @@ function needNumber(env: PusherOptions['env'], name: string): number {
 /**
  * One tick (D60): read the manifest (absent: nothing), diff its sources against the ledger's `shipped`, reserve the
  * next sequence in the ledger, build the update folder under the OS temp dir (`$RUNNER_TEMP`; never inside the uploaded `.otel-html/`), zip, upload, record the
- * finished upload in the ledger (`shipped`, `uploads`), dispatch, remove the folder. Every failure is one log line and
+ * finished upload in the ledger (`shipped`, `uploads`), remove the folder. Every failure is one log line and
  * `'retry'`; a retry takes a fresh sequence, so a name is never offered twice.
  */
 export async function tick(
@@ -104,13 +90,6 @@ export async function tick(
     let ledger = await readLedger(fs, o.publishDir);
     const shipped = new Set(ledger.shipped);
     if (listing.every((s) => shipped.has(s))) {
-      // An update was skipped behind a deployer run that had only just started; that run may not have listed it.
-      const repo = ev(o, 'GITHUB_REPOSITORY');
-      const id = Number(ev(o, 'GITHUB_RUN_ID'));
-      if (kept.dispatchOwed === true && repo && Number.isSafeInteger(id) && id > 0) {
-        step = 'dispatch';
-        await dispatch(o, d, repo, id, kept);
-      }
       return { outcome: 'unchanged', listing };
     }
 
@@ -215,8 +194,6 @@ export async function tick(
         ],
       });
     d.log(`uploaded ${name} (${built.sources.length} source(s), ${zip.length} bytes, ${uploadMs} ms)`);
-    step = 'dispatch';
-    await dispatch(o, d, repository, runId, kept);
     return { outcome: 'uploaded', listing };
   } catch (e) {
     d.log(`${FAILURE_MARK}${step} failed, will retry: ${messageOf(e)}`);
@@ -225,72 +202,6 @@ export async function tick(
     for (const f of folders) await fs.removeDir(f).catch(() => undefined);
     if (cache === undefined && kept.dir !== undefined) await fs.removeDir(kept.dir).catch(() => undefined);
   }
-}
-
-/**
- * Whether a run of the deployer is queued (`'waiting'`: it lists everything pending when it starts) or only just started
- * (`'starting'`, under `DEPLOYER_STARTING_MS`: it may not have listed yet), else `'none'`. A failed check is `'none'`
- * (dispatch anyway).
- */
-async function deployerWaiting(
-  o: PusherOptions,
-  d: PusherDeps,
-  repository: string,
-): Promise<'waiting' | 'starting' | 'none'> {
-  try {
-    const token = ev(o, 'OTEL_HTML_DISPATCH_TOKEN') || ev(o, 'GITHUB_TOKEN');
-    const api = ev(o, 'GITHUB_API_URL') ?? 'https://api.github.com';
-    const url = `${api}/repos/${repository}/actions/workflows/${o.deployerWorkflow}/runs?per_page=20`;
-    const { body } = await getJson<{
-      workflow_runs: { status: string | null; run_started_at?: string | null }[];
-    }>(url, token, 15_000, d.fetchFn);
-    const now = nowMs(d.clock);
-    let state: 'none' | 'starting' = 'none';
-    for (const r of body.workflow_runs) {
-      if (r.status === null) continue;
-      if (DEPLOYER_WAITING.has(r.status)) return 'waiting';
-      if (r.status !== 'in_progress' || r.run_started_at == null) continue;
-      const age = now - Date.parse(r.run_started_at);
-      if (age > -CLOCK_SKEW_MS && age < DEPLOYER_STARTING_MS) state = 'starting';
-    }
-    return state;
-  } catch {
-    return 'none';
-  }
-}
-
-/** Wakes the deployer; `runDispatch` never throws and says what happened on its stdout, which goes to the log. */
-async function dispatch(
-  o: PusherOptions,
-  d: PusherDeps,
-  repository: string,
-  runId: number,
-  kept: PusherCache,
-): Promise<void> {
-  const state = await deployerWaiting(o, d, repository);
-  if (state !== 'none') {
-    // A queued run lists everything when it starts; a run that only just started may have listed already, so the
-    // dispatch stays owed and a later tick (new data or not) looks again.
-    kept.dispatchOwed = state === 'starting';
-    d.log('deployer already waiting; not dispatched');
-    return;
-  }
-  const sink = (s: string): void => {
-    for (const line of s.split('\n'))
-      if (line.trim() !== '') d.log(line.includes('not dispatched') ? `${FAILURE_MARK}${line}` : line);
-  };
-  // GitHub refuses a dispatch made with GITHUB_TOKEN (#264), so setup may hand over a GitHub App token for the dispatch alone.
-  // An App token lasts one hour: a longer job's later dispatches fail and are logged as any dispatch failure is; the
-  // deployer's schedule and the dispatch when the job ends still run.
-  const dispatchToken = ev(o, 'OTEL_HTML_DISPATCH_TOKEN');
-  const env =
-    dispatchToken === undefined || dispatchToken === '' ? o.env : { ...o.env, GITHUB_TOKEN: dispatchToken };
-  const io = { stdout: sink, stderr: sink, env, cwd: '' } as unknown as CliIo;
-  // A failed call stays owed, so a later tick (new data or not) tries again; a refusal is final for this run.
-  kept.dispatchOwed =
-    (await runDispatch({ workflow: o.deployerWorkflow, repository, runId }, io, d.fetchFn, {
-      skip: true,
-    })) === 'failed';
 }
 
 /**

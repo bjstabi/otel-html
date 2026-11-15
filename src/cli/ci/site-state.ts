@@ -10,17 +10,36 @@ const HOUR_MS = 3_600_000;
 /** What a missing or malformed file reads as: dated at the epoch, so nothing is newer than it. */
 const EPOCH = new Date(0).toISOString();
 
-export type StateForm = { kind: 'full'; runId: number } | { kind: 'consumed'; base: number };
+/** The run attempt that wrote the state: a re-run of a deploy job is a new attempt of the same run id. */
+export type StateForm =
+  | { kind: 'full'; runId: number; runAttempt: number }
+  | { kind: 'consumed'; base: number; runAttempt: number };
 
+/** `otel-html-site-state-<run>-<attempt>` (full) or `otel-html-site-state-base-<deployment>-<attempt>` (consumed-only). */
 export function stateArtifactName(form: StateForm): string {
-  return form.kind === 'full' ? `${STATE_PREFIX}${form.runId}` : `${STATE_PREFIX}base-${form.base}`;
+  return form.kind === 'full'
+    ? `${STATE_PREFIX}${form.runId}-${form.runAttempt}`
+    : `${STATE_PREFIX}base-${form.base}-${form.runAttempt}`;
 }
 
+/** The names without an attempt suffix are the legacy forms: attempt 1. */
 export function parseStateName(name: string): StateForm | undefined {
-  const m = /^otel-html-site-state-(base-)?(\d+)$/.exec(name);
+  const m = /^otel-html-site-state-(base-)?(\d+)(?:-([1-9]\d*))?$/.exec(name);
   if (m === null) return undefined;
   const n = Number(m[2]);
-  return m[1] === undefined ? { kind: 'full', runId: n } : { kind: 'consumed', base: n };
+  const runAttempt = m[3] === undefined ? 1 : Number(m[3]);
+  return m[1] === undefined
+    ? { kind: 'full', runId: n, runAttempt }
+    : { kind: 'consumed', base: n, runAttempt };
+}
+
+/** The Pages artifact of one run attempt. */
+export const pagesArtifactName = (runAttempt: number): string => `github-pages-${runAttempt}`;
+
+/** The attempt a Pages artifact name stands for (the legacy `github-pages` is attempt 1), or undefined for another name. */
+export function parsePagesName(name: string): number | undefined {
+  const m = /^github-pages(?:-([1-9]\d*))?$/.exec(name);
+  return m === null ? undefined : m[1] === undefined ? 1 : Number(m[1]);
 }
 
 export type UpdateOutcome = 'applied' | 'superseded' | 'removed-pr' | 'complete' | 'rejected';
@@ -62,11 +81,13 @@ export interface SiteState {
 }
 
 const count = z.number().int().nonnegative();
+/** A state written before attempts existed has no `runAttempt`: attempt 1. */
+const attempt = z.number().int().positive().default(1);
 const AppliedSchema: z.ZodType<AppliedJson> = z.strictObject({
   version: z.literal(1),
   form: z.discriminatedUnion('kind', [
-    z.strictObject({ kind: z.literal('full'), runId: count }),
-    z.strictObject({ kind: z.literal('consumed'), base: count }),
+    z.strictObject({ kind: z.literal('full'), runId: count, runAttempt: attempt }),
+    z.strictObject({ kind: z.literal('consumed'), base: count, runAttempt: attempt }),
   ]),
   updates: z.record(
     z.string(),
@@ -113,7 +134,7 @@ export function emptyState(now: string): SiteState {
   return {
     applied: {
       version: 1,
-      form: { kind: 'full', runId: 0 },
+      form: { kind: 'full', runId: 0, runAttempt: 1 },
       updates: {},
       floor: new Date(Date.parse(now) - HOUR_MS).toISOString(),
       writtenAt: now,

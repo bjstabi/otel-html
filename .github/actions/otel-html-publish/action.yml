@@ -1,7 +1,7 @@
 name: otel-html publish
 description: >-
-  Build a workflow run's report from its otel-html-* job artifacts, upload it as a site update for the Pages deployer,
-  wake the deployer and link the report from the run's pull request; or, with cleanup-pr or reopen-pr, upload the
+  Build a workflow run's report from its otel-html-* job artifacts, upload it as a site update for the Pages deployer
+  and link the report from the run's pull request; or, with cleanup-pr or reopen-pr, upload the
   update that removes a closed pull request's reports from the site, or lifts that removal.
 
 inputs:
@@ -19,10 +19,15 @@ inputs:
   config:
     description: Dashboard config file for the reports. Empty uses the CI dashboard shipped with this action (otel-html-ci.yaml).
     default: ""
+  exclude-jobs:
+    description: >-
+      Report the run as finished without the jobs whose name starts with this prefix (`ci report --exclude-jobs`), for a
+      job that runs inside the run being reported, such as `site / `. Empty reports the run as it is.
+    default: ""
   target:
     description: >-
-      `github-pages` uploads the run's site update, wakes the deployer and links the report; `artifact` uploads the run
-      report as the `ci-run-report` artifact only: no update, no deployer and no link.
+      `github-pages` uploads the run's site update and links the report; `artifact` uploads the run
+      report as the `ci-run-report` artifact only: no update and no link.
     default: github-pages
   comment:
     description: Post a sticky comment linking the report on the run's open pull requests.
@@ -33,8 +38,8 @@ inputs:
   cleanup-pr:
     description: >-
       A pull request number. When set, the action uploads the update that removes that pull request's reports
-      (`pr/<number>/`) from the site instead of publishing: no artifact download, report or link, only the update and
-      the deployer's wake-up. Use it in a `pull_request_target: [closed]` job, set to `github.event.pull_request.number`;
+      (`pr/<number>/`) from the site instead of publishing: no artifact download, report or link, only the update, which the
+      next deploy pass applies. Use it in a `pull_request_target: [closed]` job, set to `github.event.pull_request.number`;
       the token then needs only `actions: write`. Requires `target: github-pages`. Not together with `reopen-pr`.
     default: ""
   reopen-pr:
@@ -43,27 +48,10 @@ inputs:
       reports (a reopened pull request), instead of publishing. Use it in a `pull_request_target: [reopened]` job. The
       token needs only `actions: write`. Requires `target: github-pages`. Not together with `cleanup-pr`.
     default: ""
-  deployer-workflow:
-    description: >-
-      The Pages deployer's workflow file name, dispatched on the default branch after an update is uploaded. The
-      deployer also runs on a five-minute tick, so a failed dispatch only delays the site.
-    default: pages-deploy.yml
-  dispatch-app-id:
-    description: >-
-      The ID of a GitHub App that dispatches the deployer, with `dispatch-app-private-key`. GitHub refuses a workflow
-      dispatch made with `GITHUB_TOKEN` (the run ends in `startup_failure`), so give the ID and key of an App installed
-      on this repository with Actions: read and write only. The action mints a token scoped to this repository for the
-      dispatch; every other command keeps `token`. Empty (the default) or a failed mint dispatches with `token`.
-    default: ""
-  dispatch-app-private-key:
-    description: >-
-      The private key of the App named by `dispatch-app-id`. Pass the secret only on a run a person started
-      (when the event's `github.event.sender.type` is `User`), so a bot's run never holds it.
-    default: ""
   token:
     description: >-
-      Token for the release download, the Actions API, the deployer dispatch (unless `dispatch-app-id` mints one), the comment and the check run. It needs
-      `actions: write` (the dispatch; it also reads the run's artifacts), `pages: read`, `pull-requests: write` and
+      Token for the release download, the Actions API, the comment and the check run. It needs
+      `actions: write` (it reads the run's artifacts), `pages: read`, `pull-requests: write` and
       `checks: write`. A `cleanup-pr` or `reopen-pr` job needs only `actions: write`.
     default: ${{ github.token }}
 
@@ -166,6 +154,7 @@ runs:
         # On github-pages the table goes to a scratch file for this step only: `ci link` writes the summary with the
         # report's link on a published run, and the "Summary without a link" step appends the file otherwise.
         SUMMARY_FILE: ${{ inputs.target == 'github-pages' && format('{0}/otel-html-report-summary.md', runner.temp) || '' }}
+        EXCLUDE_JOBS: ${{ inputs.exclude-jobs }}
         GITHUB_TOKEN: ${{ inputs.token }}
       run: |
         if [ -n "$SUMMARY_FILE" ]; then
@@ -175,7 +164,7 @@ runs:
         # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
         # shellcheck disable=SC2086
         $CMD ci report --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --artifacts "$ARTIFACTS" --out "$REPORT" \
-          --config "$CONFIG"
+          --config "$CONFIG" ${EXCLUDE_JOBS:+--exclude-jobs "$EXCLUDE_JOBS"}
     - if: inputs.cleanup-pr == '' && inputs.reopen-pr == '' && steps.report.outputs.published != 'false'
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
@@ -257,32 +246,6 @@ runs:
         retention-days: 90
         # A re-run of the job reuses the run, and so the name.
         overwrite: true
-    # Never fails: the deployer's five-minute tick finds the update anyway.
-    # The deployer's workflow_dispatch is refused when made with GITHUB_TOKEN (the run ends in `startup_failure`), so the
-    # wake-up uses an installation token of the deployer GitHub App (Actions: read and write), scoped to this repository.
-    # A failed mint is a warning; the dispatch then runs with `token`, as without the App.
-    - name: Mint the dispatch token
-      id: dispatch-token
-      if: steps.artifact.outputs.name != '' && inputs.dispatch-app-id != '' && inputs.dispatch-app-private-key != ''
-      continue-on-error: true
-      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-      with:
-        # The App ID (the variable holds the ID, not the Client ID). With no owner or repositories the token is scoped to this repository.
-        app-id: ${{ inputs.dispatch-app-id }}
-        private-key: ${{ inputs.dispatch-app-private-key }}
-        permission-actions: write
-    - name: Wake the deployer
-      if: steps.artifact.outputs.name != ''
-      shell: bash
-      env:
-        CMD: ${{ steps.resolve.outputs.command }}
-        WORKFLOW: ${{ inputs.deployer-workflow }}
-        GITHUB_TOKEN: ${{ inputs.token }}
-        DISPATCH_TOKEN: ${{ steps.dispatch-token.outputs.token }}
-      run: |
-        # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
-        # shellcheck disable=SC2086
-        GITHUB_TOKEN=${DISPATCH_TOKEN:-$GITHUB_TOKEN} $CMD ci dispatch --workflow "$WORKFLOW"
     # A run that reached no site page (no channel, or no update written) still gets the table `ci report` kept in a file.
     # `!cancelled()` lets it run after a failure.
     - name: Summary without a link
@@ -306,11 +269,13 @@ runs:
         BASE_URL: ${{ steps.pages.outputs.base_url }}
         COMMENT: ${{ inputs.comment }}
         CHECK: ${{ inputs.check }}
+        EXCLUDE_JOBS: ${{ inputs.exclude-jobs }}
         GITHUB_TOKEN: ${{ inputs.token }}
       run: |
         args=()
         if [ "$COMMENT" != true ]; then args+=(--no-comment); fi
         if [ "$CHECK" != true ]; then args+=(--no-check); fi
+        if [ -n "$EXCLUDE_JOBS" ]; then args+=(--exclude-jobs "$EXCLUDE_JOBS"); fi
         # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
         # shellcheck disable=SC2086
         $CMD ci link --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --url "$REPORT_URL" \

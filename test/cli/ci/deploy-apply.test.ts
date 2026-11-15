@@ -294,7 +294,7 @@ describe('push', () => {
     const state = await stateOf();
     expect(state.runs.runs[RUN42]?.next).toBe(3);
     expect(state.applied.updates[p.id]?.outcome).toBe('applied');
-    expect(state.applied.form).toEqual({ kind: 'full', runId: 100 });
+    expect(state.applied.form).toEqual({ kind: 'full', runId: 100, runAttempt: 1 });
     expect(Object.keys(state.files.files).some((f) => f.startsWith('site-state/'))).toBe(false);
     expect(state.files.files[`${RUN42}/data/manifest.js`]).toBeGreaterThan(0);
   });
@@ -744,7 +744,7 @@ describe('the pass', () => {
     });
     expect(r).toMatchObject({ changed: false, consumed: 2, deployed: false });
     const { applied } = await stateOf();
-    expect(applied.form).toEqual({ kind: 'consumed', base: 77 });
+    expect(applied.form).toEqual({ kind: 'consumed', base: 77, runAttempt: 1 });
     expect(late.map((p) => applied.updates[p.id]?.outcome)).toEqual(['superseded', 'superseded']);
   });
 
@@ -771,7 +771,13 @@ describe('the pass', () => {
     expect(readJson<{ form: unknown }>(join(site, 'site-state/applied.json')).form).toEqual({
       kind: 'full',
       runId: 100,
+      runAttempt: 1,
     });
+  });
+
+  test('the full state names the pass attempt', async () => {
+    await apply([addPush({ sequence: 1, parts: [['job:7#flush:0', 0, true]] })], { passRunAttempt: 3 });
+    expect((await stateOf()).applied.form).toEqual({ kind: 'full', runId: 100, runAttempt: 3 });
   });
 
   test('a --state folder that does not exist leaves the base site-state in place', async () => {

@@ -48,7 +48,6 @@ const opts = (over: Partial<PusherOptions> = {}): PusherOptions => ({
   publishDir: join(dir, '.otel-html', 'publish'),
   everyMs: 60_000,
   env: ENV,
-  deployerWorkflow: 'pages-deploy.yml',
   ...over,
 });
 const pdeps = (): PusherDeps => ({
@@ -176,7 +175,7 @@ describe('tick', () => {
     expect(log.some((l) => l.startsWith('! no CI spans in update 1:'))).toBe(true);
   });
 
-  describe('dispatch and CI-spans cadence', () => {
+  describe('CI-spans cadence and no wake-up', () => {
     const json = (b: object): Response => new Response(JSON.stringify(b), { status: 200 });
     const run42 = {
       id: 42,
@@ -184,164 +183,26 @@ describe('tick', () => {
       repository: { full_name: 'o/r' },
       head_repository: { full_name: 'o/r' },
     };
-    const api = (
-      listing: () => Response,
-      calls: string[],
-      postStatus: () => number = () => 204,
-    ): typeof fetch =>
+    const api = (calls: string[]): typeof fetch =>
       (async (url: string, init?: RequestInit) => {
         const u = String(url);
         calls.push(`${init?.method ?? 'GET'} ${u}`);
-        if (init?.method === 'POST') return new Response(null, { status: postStatus() });
-        if (u.includes('/workflows/pages-deploy.yml/runs?')) return listing();
+        if (init?.method === 'POST') return new Response(null, { status: 204 });
         if (u.endsWith('/actions/runs/42')) return json(run42);
         return json({ default_branch: 'main' });
       }) as unknown as typeof fetch;
     const posted = (calls: string[]): boolean => calls.some((c) => c.startsWith('POST'));
 
-    test.each(['queued', 'pending', 'waiting', 'requested'])(
-      'a %s deployer run: no dispatch, a routine log line',
-      async (status) => {
-        const r = await openReport();
-        await flush(r, 1);
-        const calls: string[] = [];
-        const d = pdeps();
-        d.fetchFn = api(() => json({ workflow_runs: [{ status: 'completed' }, { status }] }), calls);
-        expect((await tick(opts(), d, null)).outcome).toBe('uploaded');
-        expect(posted(calls)).toBe(false);
-        expect(calls.some((c) => c.includes('/workflows/pages-deploy.yml/runs?per_page=20'))).toBe(true);
-        expect(log).toContain('deployer already waiting; not dispatched');
-      },
-    );
-
-    test('a deployer run that started a moment ago counts as waiting; an old one does not', async () => {
+    test('an upload wakes nothing: no dispatch call, no deployer workflow lookup', async () => {
       const r = await openReport();
       await flush(r, 1);
-      const startedAgo = (ms: number): string =>
-        new Date(Number(deps.clock.nowUnixNano() / 1_000_000n) - ms).toISOString();
-      const young: string[] = [];
-      const d = pdeps();
-      d.fetchFn = api(
-        () => json({ workflow_runs: [{ status: 'in_progress', run_started_at: startedAgo(20_000) }] }),
-        young,
-      );
-      await tick(opts(), d, null);
-      expect(posted(young)).toBe(false);
-      expect(log).toContain('deployer already waiting; not dispatched');
-
-      await flush(r, 2);
-      const old: string[] = [];
-      d.fetchFn = api(
-        () => json({ workflow_runs: [{ status: 'in_progress', run_started_at: startedAgo(300_000) }] }),
-        old,
-      );
-      await tick(opts(), d, null);
-      expect(posted(old)).toBe(true);
-    });
-
-    test('an update skipped behind a starting run is dispatched on a later quiet tick', async () => {
-      const r = await openReport();
-      await flush(r, 1);
-      const nowMs = Number(deps.clock.nowUnixNano() / 1_000_000n);
-      let startedAgo = 20_000;
       const calls: string[] = [];
       const d = pdeps();
-      d.fetchFn = api(
-        () =>
-          json({
-            workflow_runs: [
-              { status: 'in_progress', run_started_at: new Date(nowMs - startedAgo).toISOString() },
-            ],
-          }),
-        calls,
-      );
-      const cache: PusherCache = {};
-      await tick(opts(), d, null, cache);
+      d.fetchFn = api(calls);
+      expect((await tick(opts(), d, null)).outcome).toBe('uploaded');
       expect(posted(calls)).toBe(false);
-      expect(cache.dispatchOwed).toBe(true);
-      // Nothing new, run still young: a listing call, no dispatch, still owed.
-      await tick(opts(), d, null, cache);
-      expect(posted(calls)).toBe(false);
-      expect(cache.dispatchOwed).toBe(true);
-      // Nothing new, run now older than the bound: dispatched, no longer owed.
-      startedAgo = 300_000;
-      await tick(opts(), d, null, cache);
-      expect(posted(calls)).toBe(true);
-      expect(cache.dispatchOwed).toBe(false);
-      // A quiet tick with nothing owed makes no call.
-      calls.length = 0;
-      await tick(opts(), d, null, cache);
-      expect(calls).toEqual([]);
-    });
-
-    test('a failed dispatch stays owed, and a later quiet tick dispatches it', async () => {
-      const r = await openReport();
-      await flush(r, 1);
-      let status = 503;
-      const calls: string[] = [];
-      const d = pdeps();
-      d.fetchFn = api(
-        () => json({ workflow_runs: [] }),
-        calls,
-        () => status,
-      );
-      const cache: PusherCache = {};
-      await tick(opts(), d, null, cache);
-      expect(posted(calls)).toBe(true);
-      expect(cache.dispatchOwed).toBe(true);
-      calls.length = 0;
-      status = 204;
-      await tick(opts(), d, null, cache);
-      expect(posted(calls)).toBe(true);
-      expect(cache.dispatchOwed).toBe(false);
-    });
-
-    test('a queued run clears an owed dispatch', async () => {
-      const r = await openReport();
-      await flush(r, 1);
-      const d = pdeps();
-      const calls: string[] = [];
-      d.fetchFn = api(() => json({ workflow_runs: [{ status: 'queued' }] }), calls);
-      const cache: PusherCache = { dispatchOwed: true };
-      await tick(opts(), d, null, cache);
-      expect(cache.dispatchOwed).toBe(false);
-      expect(posted(calls)).toBe(false);
-    });
-
-    test('only finished or in-progress deployer runs: dispatches', async () => {
-      const r = await openReport();
-      await flush(r, 1);
-      const calls: string[] = [];
-      const d = pdeps();
-      d.fetchFn = api(
-        () => json({ workflow_runs: [{ status: 'completed' }, { status: 'in_progress' }] }),
-        calls,
-      );
-      await tick(opts(), d, null);
-      expect(posted(calls)).toBe(true);
-    });
-
-    test('a failed check dispatches anyway', async () => {
-      const r = await openReport();
-      await flush(r, 1);
-      const calls: string[] = [];
-      const d = pdeps();
-      d.fetchFn = api(() => new Response('no', { status: 500 }), calls);
-      await tick(opts(), d, null);
-      expect(posted(calls)).toBe(true);
-    });
-
-    test('the check uses the dispatch token when set', async () => {
-      const r = await openReport();
-      await flush(r, 1);
-      let auth: string | null = null;
-      const d = pdeps();
-      d.fetchFn = (async (url: string, init?: RequestInit) => {
-        if (String(url).includes('/workflows/')) auth = new Headers(init?.headers).get('authorization');
-        return json({ workflow_runs: [{ status: 'queued' }] });
-      }) as unknown as typeof fetch;
-      await tick(opts({ env: { ...ENV, GITHUB_TOKEN: 'job', OTEL_HTML_DISPATCH_TOKEN: 'app' } }), d, null);
-      expect(auth).toBe('Bearer app');
+      expect(calls.some((c) => c.includes('/dispatches') || c.includes('/workflows/'))).toBe(false);
+      expect(log.some((l) => l.includes('dispatch') || l.includes('deployer'))).toBe(false);
     });
 
     test('the CI-spans lookup runs at most every 5 minutes', async () => {
@@ -349,7 +210,7 @@ describe('tick', () => {
       const r = await openReport();
       const calls: string[] = [];
       const d = pdeps();
-      d.fetchFn = api(() => json({ workflow_runs: [{ status: 'queued' }] }), calls);
+      d.fetchFn = api(calls);
       let t = 1_700_000_000_000;
       d.clock = {
         ...deps.clock,
@@ -406,40 +267,11 @@ describe('tick', () => {
     }) as unknown as typeof fetch;
     const t2 = await tick(o, d2, t1.listing);
     expect(t2.outcome).toBe('uploaded');
-    expect(calls.some((u) => u.startsWith('POST') && u.includes('/dispatches'))).toBe(true);
+    expect(calls.some((u) => u.startsWith('POST') || u.includes('/dispatches'))).toBe(false);
     expect(calls.some((u) => u.includes('/actions/runs?'))).toBe(false);
     expect(uploads.map((u) => u.name)).toEqual(['otel-html-update-push-777-2']);
     ledger = await readLedger(deps.fs, o.publishDir);
     expect(ledger.shipped).toEqual(['flush:0']);
-  });
-
-  test('the dispatch carries OTEL_HTML_DISPATCH_TOKEN; its own calls keep GITHUB_TOKEN', async () => {
-    const o = opts({ env: { ...ENV, GITHUB_TOKEN: 'job-token', OTEL_HTML_DISPATCH_TOKEN: 'app-token' } });
-    const r = await openReport();
-    await flush(r, 1);
-    const auth: string[] = [];
-    const d = pdeps();
-    const json = (b: object): Response => new Response(JSON.stringify(b), { status: 200 });
-    d.fetchFn = (async (url: string, init?: RequestInit) => {
-      const h = new Headers(init?.headers);
-      auth.push(
-        `${init?.method ?? 'GET'} ${String(url).includes('/dispatches') ? 'dispatch' : 'other'} ${h.get('authorization')}`,
-      );
-      if (init?.method === 'POST') return new Response(null, { status: 204 });
-      if (String(url).endsWith('/actions/runs/42'))
-        return json({
-          id: 42,
-          actor: { type: 'User' },
-          repository: { full_name: 'o/r' },
-          head_repository: { full_name: 'o/r' },
-        });
-      return json({ default_branch: 'main', workflow_runs: [] });
-    }) as unknown as typeof fetch;
-    const t = await tick(o, d, null);
-    expect(t.outcome).toBe('uploaded');
-    expect(auth).toContain('POST dispatch Bearer app-token');
-    // the pusher's own calls (before the dispatch command starts) keep the job token
-    expect(auth[0]).toBe('GET other Bearer job-token');
   });
 
   test('a partition file gone before the copy is a retry', async () => {

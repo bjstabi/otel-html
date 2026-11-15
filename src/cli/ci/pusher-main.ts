@@ -11,7 +11,6 @@ export interface PusherCommand {
   report: string;
   every: string;
   config?: string;
-  deployerWorkflow: string;
   detached: boolean;
 }
 
@@ -47,8 +46,6 @@ export async function runPusherCommand(o: PusherCommand, io: CliIo, deps: Writer
       '--every',
       o.every,
       ...(o.config === undefined ? [] : ['--config', o.config]),
-      '--deployer-workflow',
-      o.deployerWorkflow,
       '--detached',
     ];
     const logFd = openSync(join(publishDir, LOG_FILE), 'a');
@@ -80,7 +77,6 @@ export async function runPusherCommand(o: PusherCommand, io: CliIo, deps: Writer
       startDelayMs: jitterMs([...ID_VARS.map((n) => io.env[n]), o.report].join('|'), everyMs),
       ...(o.config === undefined ? {} : { config: o.config }),
       env: io.env,
-      deployerWorkflow: o.deployerWorkflow,
     },
     {
       fs: deps.fs,

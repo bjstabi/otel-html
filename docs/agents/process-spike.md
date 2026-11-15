@@ -9,7 +9,7 @@ our load. Nothing from a spike is merged.
 - `mise run check` need not pass; say so in the report if it does not.
 - Time-box it: the brief says how long or how many attempts. Stop when the question is answered, even if the code
   is ugly.
-- Do not touch `release.yml`, `ci-report.yml` or anything that runs with a write token.
+- Do not touch `release.yml`, `site.yml`, `pr-cleanup.yml` or anything that runs with a write token.
 
 ## The report
 

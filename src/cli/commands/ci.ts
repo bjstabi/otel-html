@@ -11,7 +11,6 @@ import {
   runDeployPrune,
   runDeployScan,
 } from '../ci/deploy-main.js';
-import { runDispatch } from '../ci/dispatch.js';
 import { envVar, messageOf, say } from '../ci/github-api.js';
 import { runLink } from '../ci/link-main.js';
 import { runPusherCommand } from '../ci/pusher-main.js';
@@ -32,6 +31,7 @@ interface ReportFlags {
   out: string;
   config?: string;
   summary: boolean;
+  excludeJobs?: string;
 }
 
 const parseRunId = (text: string): number => parsePositive('--run-id', text);
@@ -56,6 +56,7 @@ interface LinkFlags {
   indexUrl: string;
   comment: boolean;
   check: boolean;
+  excludeJobs?: string;
 }
 
 interface DeployApplyFlags {
@@ -68,12 +69,20 @@ interface DeployApplyFlags {
   prRetention: string;
   config?: string;
   passRunId?: string;
+  passRunAttempt?: string;
   trustUpdates?: boolean;
   channel?: string;
 }
 
 /** A channel key as `channelFor` builds it: `branch/<slug>` (slug: lower-case alphanumerics and dashes) or `pr/<n>`. */
 const CHANNEL_KEY_RE = /^(branch\/[a-z0-9-]+|pr\/[1-9][0-9]*)$/;
+
+/** A comma list of workflow files. */
+const names = (list: string): string[] =>
+  list
+    .split(',')
+    .map((w) => w.trim())
+    .filter((w) => w !== '');
 
 interface DeployPlanFlags {
   repository?: string;
@@ -110,6 +119,10 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .requiredOption('--out <dir>', 'merged report folder')
     .option('--config <file>', 'config file for the written reports')
     .option('--no-summary', 'do not write the job summary (`ci link` writes the one with the report link)')
+    .option(
+      '--exclude-jobs <prefix>',
+      "report the run as finished without the jobs whose name starts with this prefix (a report built from one of the run's own jobs)",
+    )
     .action(async (flags: ReportFlags) => {
       const opts = {
         runId: parseRunId(flags.runId),
@@ -118,6 +131,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
         out: flags.out,
         stepSummary: flags.summary,
         ...(flags.config === undefined ? {} : { config: flags.config }),
+        ...(flags.excludeJobs === undefined ? {} : { excludeJobs: flags.excludeJobs }),
       };
       try {
         await runReport(opts, io, await resolveDeps(deps));
@@ -139,6 +153,10 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     )
     .option('--no-comment', 'do not comment on pull requests')
     .option('--no-check', 'do not create a check run')
+    .option(
+      '--exclude-jobs <prefix>',
+      "link the run as finished without the jobs whose name starts with this prefix (a link made from one of the run's own jobs)",
+    )
     .action(async (flags: LinkFlags) => {
       await runLink(
         {
@@ -148,6 +166,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
           indexUrl: flags.indexUrl,
           comment: flags.comment,
           check: flags.check,
+          ...(flags.excludeJobs === undefined ? {} : { excludeJobs: flags.excludeJobs }),
         },
         io,
       );
@@ -292,29 +311,19 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
       'time between ticks: 60s, 2m, 500ms (the loop never ticks faster than 1000ms)',
     )
     .option('--config <file>', 'config file for the CI spans report')
-    .option('--deployer-workflow <file>', 'the deployer workflow file to wake', 'pages-deploy.yml')
     .option('--detached', 'INTERNAL: run the loop in this process instead of re-spawning')
-    .action(
-      async (flags: {
-        report: string;
-        every: string;
-        config?: string;
-        deployerWorkflow: string;
-        detached?: boolean;
-      }) => {
-        await runPusherCommand(
-          {
-            report: flags.report,
-            every: flags.every,
-            deployerWorkflow: flags.deployerWorkflow,
-            detached: flags.detached === true,
-            ...(flags.config === undefined ? {} : { config: flags.config }),
-          },
-          io,
-          await resolveDeps(deps),
-        );
-      },
-    );
+    .action(async (flags: { report: string; every: string; config?: string; detached?: boolean }) => {
+      await runPusherCommand(
+        {
+          report: flags.report,
+          every: flags.every,
+          detached: flags.detached === true,
+          ...(flags.config === undefined ? {} : { config: flags.config }),
+        },
+        io,
+        await resolveDeps(deps),
+      );
+    });
   ci.command('upload')
     .description(
       'upload a folder as a workflow run artifact (needs the runtime variables of a JavaScript action)',
@@ -335,29 +344,6 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
         await resolveDeps(deps),
       );
     });
-  ci.command('dispatch')
-    .description('wake the deployer workflow on the default branch (never fails)')
-    .option('--workflow <file>', 'the deployer workflow file', 'pages-deploy.yml')
-    .option('--repository <owner/repo>', 'repository (default: $GITHUB_REPOSITORY)')
-    .option('--run-id <n>', 'the run that asks (default: $GITHUB_RUN_ID)')
-    .option('--no-watch', 'do not wait to see the deployer run start')
-    .action(async (flags: { workflow: string; repository?: string; runId?: string; watch: boolean }) => {
-      try {
-        const runId = flags.runId ?? envVar(io, 'GITHUB_RUN_ID');
-        await runDispatch(
-          {
-            workflow: flags.workflow,
-            repository: repositoryOf(flags.repository),
-            runId: parseRunId(runId ?? ''),
-          },
-          io,
-          undefined,
-          { skip: !flags.watch },
-        );
-      } catch (e) {
-        say(io, `otel-html dispatch: not dispatched: ${messageOf(e)}`);
-      }
-    });
   deploy
     .command('plan')
     .description(
@@ -368,10 +354,14 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .requiredOption('--state-out <dir>', "where the chosen state's files are written")
     .requiredOption('--pages-url <url>', "the site's public URL")
     .option('--ci-workflows <files>', 'comma-separated workflow files whose runs publish', 'ci.yml')
-    .option('--report-workflow <file>', 'the workflow file that uploads run and PR updates', 'ci-report.yml')
     .option(
-      '--deployer-workflow <file>',
-      'the workflow file whose runs may upload the consumed site state',
+      '--report-workflow <files>',
+      'comma-separated workflow files whose runs upload run updates (legacy, default branch) and PR removals and reopenings (checked against the pull request)',
+      'pr-cleanup.yml,ci-report.yml',
+    )
+    .option(
+      '--deployer-workflow <files>',
+      'comma-separated legacy workflow files whose runs on the default branch may upload a site state',
       'pages-deploy.yml',
     )
     .action(async (flags: DeployPlanFlags) => {
@@ -380,12 +370,9 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
         out: flags.out,
         stateOut: flags.stateOut,
         pagesUrl: flags.pagesUrl,
-        ciWorkflows: flags.ciWorkflows
-          .split(',')
-          .map((w) => w.trim())
-          .filter((w) => w !== ''),
-        reportWorkflow: flags.reportWorkflow,
-        deployerWorkflow: flags.deployerWorkflow,
+        ciWorkflows: names(flags.ciWorkflows),
+        reportWorkflows: names(flags.reportWorkflow),
+        deployerWorkflows: names(flags.deployerWorkflow),
         now: new Date().toISOString(),
       };
       try {
@@ -424,6 +411,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .option('--pr-retention <n>', 'runs kept per workflow in each pull request channel', '10')
     .option('--config <file>', 'the dashboard config file for the rolling reports')
     .option('--pass-run-id <n>', 'this deployer run id (default: $GITHUB_RUN_ID)')
+    .option('--pass-run-attempt <n>', 'this deployer run attempt (default: $GITHUB_RUN_ATTEMPT, else 1)')
     .option('--trust-updates', 'TEST ONLY: apply every update folder under --updates without pending.json')
     .option('--channel <key>', 'TEST ONLY: with --trust-updates, the channel (branch/<slug> or pr/<n>)')
     .action(async (flags: DeployApplyFlags) => {
@@ -448,6 +436,10 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
           retention: parsePositive('--retention', flags.retention),
           prRetention: parsePositive('--pr-retention', flags.prRetention),
           passRunId: parsePositive('--pass-run-id', passRun),
+          passRunAttempt: parsePositive(
+            '--pass-run-attempt',
+            flags.passRunAttempt ?? envVar(io, 'GITHUB_RUN_ATTEMPT') ?? '1',
+          ),
           now: new Date().toISOString(),
           ...(flags.state === undefined ? {} : { state: flags.state }),
           ...(flags.pending === undefined ? {} : { pending: flags.pending }),
@@ -470,23 +462,39 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .option('--repository <owner/repo>', 'repository (default: $GITHUB_REPOSITORY)')
     .requiredOption('--site <dir>', 'the deployed site, whose site-state/applied.json says what was consumed')
     .option('--keep <n>', 'successful deployments whose artifacts are kept', '3')
-    .action(async (flags: { repository?: string; site: string; keep: string }) => {
-      try {
-        await runDeployPrune(
-          {
-            site: flags.site,
-            repository: repositoryOf(flags.repository),
-            keep: parsePositive('--keep', flags.keep),
-            now: new Date().toISOString(),
-          },
-          io,
-          await resolveDeps(deps),
-        );
-      } catch (e) {
-        say(io, `::error::otel-html deploy prune: ${messageOf(e)}`);
-        throw new CliExit(1);
-      }
-    });
+    .option('--ci-workflows <files>', 'comma-separated workflow files whose trusted runs deploy', 'ci.yml')
+    .option(
+      '--deployer-workflow <files>',
+      'comma-separated legacy workflow files whose runs on the default branch may have deployed',
+      'pages-deploy.yml',
+    )
+    .action(
+      async (flags: {
+        repository?: string;
+        site: string;
+        keep: string;
+        ciWorkflows: string;
+        deployerWorkflow: string;
+      }) => {
+        try {
+          await runDeployPrune(
+            {
+              site: flags.site,
+              repository: repositoryOf(flags.repository),
+              keep: parsePositive('--keep', flags.keep),
+              ciWorkflows: names(flags.ciWorkflows),
+              deployerWorkflows: names(flags.deployerWorkflow),
+              now: new Date().toISOString(),
+            },
+            io,
+            await resolveDeps(deps),
+          );
+        } catch (e) {
+          say(io, `::error::otel-html deploy prune: ${messageOf(e)}`);
+          throw new CliExit(1);
+        }
+      },
+    );
   deploy
     .command('fetch-live')
     .description(

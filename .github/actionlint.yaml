@@ -1,0 +1,6 @@
+# GitHub added `concurrency.queue` in May 2026 (https://github.blog/changelog/2026-05-07-github-actions-concurrency-groups-now-allow-larger-queues).
+# Drop this once actionlint knows the key.
+paths:
+  .github/workflows/site.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
