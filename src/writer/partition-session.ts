@@ -133,8 +133,8 @@ export async function openPartitionSession(
     throw new OtelHtmlError('invalid-report', {
       message: `${out}/assets links out of the report${where}, and writing the report's viewer files would rewrite the link's target`,
       hint: shared
-        ? `the report already records the shared assets base ${recorded}: append with --assets-base ${recorded}`
-        : linkedAssetsHint(out),
+        ? linkedAssetsHint(out, { recorded })
+        : linkedAssetsHint(out, { replacing: !folder.appending }),
     });
   }
   await fs.mkdirp(at(out, STATE_DIR));

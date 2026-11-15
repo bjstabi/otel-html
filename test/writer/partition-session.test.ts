@@ -230,7 +230,13 @@ describe('PartitionSession', () => {
     expect(e.hint).toContain('replace the assets link with a real folder');
     expect(e.hint).toContain('--replace');
     expect(e.hint).not.toMatch(/append with --assets-base/);
+    expect(e.hint).toContain("this version's viewer files");
+    expect(e.hint).toContain('flat folder');
     expect(w.fs.snapshot()).toEqual(before);
+    // --replace discards the data: no upgrade advice, the working remedy first.
+    const replace = await failure(openSession(deps, { out: OUT, config: cfg(), mode: 'replace' }));
+    expect(replace.hint).toMatch(/^start the report over with --replace/);
+    expect(replace.hint).not.toContain('upgrade');
     const again = await failure(
       openSession(deps, { out: OUT, config: cfg({ assetsBase: '../assets/0.0.0/' }), mode: 'append' }),
     );

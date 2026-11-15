@@ -35,14 +35,14 @@ export interface UpgradeOptions {
  * Refuses an `assets` folder that is a link out of the report: the viewer files would land wherever it points.
  * Not called when the upgrade ends on a shared base: nothing is then written to or removed from `assets/`.
  */
-async function assertAssetsInside(fs: WriterDeps['fs'], dir: string): Promise<void> {
+async function assertAssetsInside(fs: WriterDeps['fs'], dir: string, recorded: string): Promise<void> {
   if (await assetsInside(fs, dir)) return;
   const assets = at(dir, 'assets');
   throw new OtelHtmlError('invalid-report', {
     path: assets,
     expected: 'a folder inside the report',
     actual: await fs.realpath(assets),
-    hint: linkedAssetsHint(dir),
+    hint: linkedAssetsHint(dir, { recorded }),
   });
 }
 
@@ -83,10 +83,10 @@ export async function upgradeReport(
       hint: 'use assets/ or a relative path like ../../assets/0.3.0/',
     });
   }
-  assertSharedBaseNamed(report, opts);
+  await assertSharedBaseNamed(fs, report, opts);
   // A shared base writes and prunes nothing in the report's own `assets/`, so a link there is left as it is.
-  if ((opts.assetsBase ?? report.manifest.engine.assetsBase) === DEFAULT_ASSETS_BASE) {
-    await assertAssetsInside(fs, report.dir);
+  if ((opts.assetsBase ?? DEFAULT_ASSETS_BASE) === DEFAULT_ASSETS_BASE) {
+    await assertAssetsInside(fs, report.dir, report.manifest.engine.assetsBase);
   }
   // Holding the writer lock for the rewrite also keeps a writer from starting underneath it.
   const lock = await acquireLock(deps, at(report.dir, LOCK_PATH)).catch((e: unknown) => {
@@ -107,7 +107,7 @@ export async function upgradeReport(
         hint: 'the report changed while upgrade was starting; run upgrade again',
       });
     }
-    assertSharedBaseNamed(current, opts);
+    await assertSharedBaseNamed(fs, current, opts);
     await upgradePartitioned(deps, report.dir, current.manifest, opts);
   } finally {
     await lock.release();
@@ -116,14 +116,33 @@ export async function upgradeReport(
 }
 
 /** A report on a shared base is upgraded only when told the base: the shared copy is the publisher's, so upgrade cannot know it holds this version's files. */
-function assertSharedBaseNamed(report: { dir: string; manifest: ManifestV4 }, opts: UpgradeOptions): void {
+async function assertSharedBaseNamed(
+  fs: FileSystem,
+  report: { dir: string; manifest: ManifestV4 },
+  opts: UpgradeOptions,
+): Promise<void> {
   if (opts.assetsBase !== undefined) return;
   const { assetsBase } = report.manifest.engine;
   if (assetsBase === DEFAULT_ASSETS_BASE) return;
   throw new OtelHtmlError('usage', {
     message: `cannot upgrade ${report.dir}: it loads its viewer files from ${assetsBase}`,
-    hint: "pass --assets-base <base holding this version's files>, or --assets-base assets/ to copy them into the report",
+    hint: (await assetsInside(fs, report.dir))
+      ? "pass --assets-base <base holding this version's files>, or --assets-base assets/ to copy them into the report"
+      : "pass --assets-base <base holding this version's files> (assets/ links out of the report, so it cannot hold a copy)",
   });
+}
+
+/** A base that resolves on this disk but lacks this version's viewer entry loads nothing; a site base may be deployed later, so only a warning. */
+async function warnIfBaseLacksViewer(deps: WriterDeps, dir: string, assetsBase: string): Promise<void> {
+  const entry = deps.viewerAssets.entry().script;
+  const name = entry.slice(entry.lastIndexOf('/') + 1);
+  const base = assetsBase.endsWith('/') ? assetsBase : `${assetsBase}/`;
+  const file = `${at(dir, base)}${name}`;
+  if (await deps.fs.exists(file)) return;
+  deps.logger.warn(
+    `the assets base ${assetsBase} holds no ${name} on this disk, so the report will not open until this version's viewer files are there`,
+    { assetsBase, expected: file },
+  );
 }
 
 async function addWrappers(fs: FileSystem, dir: string, manifest: ManifestV4): Promise<void> {
@@ -163,6 +182,7 @@ async function upgradePartitioned(
     for (const p of manifest.partitions) for (const f of Object.values(p.files)) bytes += f.bytes;
     warnIfLocalLarge(deps.logger, bytes, opts.localWarnBytes ?? DEFAULT_LOCAL_WARN_BYTES);
   }
+  if (sharedBase) await warnIfBaseLacksViewer(deps, dir, assetsBase);
   if (toLocal) await addWrappers(fs, dir, manifest);
   if (!sharedBase) await writeViewerAssets(fs, dir, viewerAssets, format);
   await fs.writeTextAtomic(
