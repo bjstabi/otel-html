@@ -748,6 +748,30 @@ describe('run', () => {
     expect(w.fs.snapshot().has(`out/${LOCK_PATH}`)).toBe(false);
   });
 
+  test('a report whose assets/ links out of it refuses the run: exit 1, the command still ran, nothing written', async () => {
+    const w = createTestWriter();
+    const first = start(w, ['run', '-o', 'out', ...node, '0']);
+    open.push(first);
+    expect(await first.result).toBe(0);
+    const linked: FileSystem = {
+      ...w.fs,
+      realpath: async (p: string) => (p === 'out/assets' ? '/shared/assets' : w.fs.realpath(p)),
+    };
+    const before = w.fs.snapshot();
+    const h = start(
+      w,
+      ['run', '-o', 'out', '--http', '0', '--no-grpc', '--', process.execPath, '-e', 'console.log("ran")'],
+      {},
+      undefined,
+      linked,
+    );
+    open.push(h);
+    expect(await h.result).toBe(1);
+    expect(h.child).toContain('ran');
+    expect(h.stderr).toContain('links out of the report');
+    expect(w.fs.snapshot()).toEqual(before);
+  });
+
   test('a report locked by a live process runs the command without a report', async () => {
     const w = createTestWriter();
     const lock = await acquireLock(w.deps, at('out', LOCK_PATH));

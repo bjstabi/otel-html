@@ -62,7 +62,10 @@ function refusesReport(e: unknown): boolean {
   return e instanceof OtelHtmlError && (e.code === 'version-mismatch' || e.code === 'invalid-report');
 }
 
-/** The report could not be started: tell why, then run the command as it would have run, with its own exit code. */
+/**
+ * The report could not be started: tell why, then run the command as it would have run, with its own exit code.
+ * When the report itself refused the run (`refused`), a command that exited 0 makes `run` exit 1 instead.
+ */
 async function runWithoutReport(
   io: CliIo,
   executable: string,
