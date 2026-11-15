@@ -12,7 +12,7 @@ inputs:
     description: The job's name in the report. Empty uses the GITHUB_JOB id.
     default: ""
   token:
-    description: "Token for the release download, the `ci context` API calls and the pusher's uploads (the pusher needs `actions: write`)."
+    description: "Token for the release download, the `ci context` API calls and the pusher's uploads (the pusher reads the run's jobs and so needs `actions: read`; its artifact uploads use the runtime token)."
     default: ${{ github.token }}
   push-every:
     description: Start the pusher, which uploads the job's new report partitions as site updates this often (such as `60s`) while the job runs. Empty starts no pusher. The pusher needs the collect step, which stops it.

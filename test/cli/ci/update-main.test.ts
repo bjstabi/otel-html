@@ -370,7 +370,7 @@ describe('runUpdateStop', () => {
     const log = join(publish, 'pusher.log');
     writeFileSync(
       log,
-      'uploaded a (1 source(s))\n! upload failed, will retry: 503\notel-html dispatch: x dispatched on main\n! not dispatched: 403\n',
+      'uploaded a (1 source(s))\n! upload failed, will retry: 503\n! upload failed, will retry: 403\n',
     );
     await runUpdateStop({ publishDir: publish, log }, ioOf(), deps, fast);
     const notices = out

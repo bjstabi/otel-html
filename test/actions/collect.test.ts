@@ -11,3 +11,9 @@ describe.each(['setup', 'collect', 'publish'])('the %s action', (name) => {
     expect(action).not.toContain('DISPATCH_TOKEN');
   });
 });
+
+test('the deploy accepts pr-cleanup.yml and ci-report.yml updates by default, in the action and the CLI', () => {
+  const action = readFileSync('.github/actions/otel-html-deploy/action.yml', 'utf8');
+  expect(action).toMatch(/report-workflow:[\s\S]*?default: pr-cleanup\.yml,ci-report\.yml/);
+  expect(readFileSync('src/cli/commands/ci.ts', 'utf8')).toContain("'pr-cleanup.yml,ci-report.yml'");
+});

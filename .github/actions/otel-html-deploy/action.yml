@@ -39,8 +39,8 @@ inputs:
     description: Comma-separated workflow file names whose runs publish `push` updates.
     default: ci.yml
   report-workflow:
-    description: The workflow file that uploads the run and pull request updates.
-    default: ci-report.yml
+    description: Comma-separated workflow files whose runs on the default branch upload pull request cleanup and reopen updates (`pr-cleanup.yml`) and, for 90 days, legacy run updates (`ci-report.yml`).
+    default: pr-cleanup.yml,ci-report.yml
   keep-deployments:
     description: Successful deployments whose artifacts the prune step keeps.
     default: "3"

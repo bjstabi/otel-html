@@ -357,7 +357,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .option(
       '--report-workflow <files>',
       'comma-separated legacy workflow files that upload run and PR updates',
-      'ci-report.yml',
+      'pr-cleanup.yml,ci-report.yml',
     )
     .option(
       '--deployer-workflow <files>',

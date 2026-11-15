@@ -183,16 +183,11 @@ describe('tick', () => {
       repository: { full_name: 'o/r' },
       head_repository: { full_name: 'o/r' },
     };
-    const api = (
-      listing: () => Response,
-      calls: string[],
-      postStatus: () => number = () => 204,
-    ): typeof fetch =>
+    const api = (calls: string[]): typeof fetch =>
       (async (url: string, init?: RequestInit) => {
         const u = String(url);
         calls.push(`${init?.method ?? 'GET'} ${u}`);
-        if (init?.method === 'POST') return new Response(null, { status: postStatus() });
-        if (u.includes('/workflows/pages-deploy.yml/runs?')) return listing();
+        if (init?.method === 'POST') return new Response(null, { status: 204 });
         if (u.endsWith('/actions/runs/42')) return json(run42);
         return json({ default_branch: 'main' });
       }) as unknown as typeof fetch;
@@ -203,7 +198,7 @@ describe('tick', () => {
       await flush(r, 1);
       const calls: string[] = [];
       const d = pdeps();
-      d.fetchFn = api(() => json({ workflow_runs: [] }), calls);
+      d.fetchFn = api(calls);
       expect((await tick(opts(), d, null)).outcome).toBe('uploaded');
       expect(posted(calls)).toBe(false);
       expect(calls.some((c) => c.includes('/dispatches') || c.includes('/workflows/'))).toBe(false);
@@ -215,7 +210,7 @@ describe('tick', () => {
       const r = await openReport();
       const calls: string[] = [];
       const d = pdeps();
-      d.fetchFn = api(() => json({ workflow_runs: [{ status: 'queued' }] }), calls);
+      d.fetchFn = api(calls);
       let t = 1_700_000_000_000;
       d.clock = {
         ...deps.clock,
