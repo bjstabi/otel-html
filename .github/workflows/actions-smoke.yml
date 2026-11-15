@@ -128,8 +128,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           UPLOAD_NAME: otel-html-smoke-upload-${{ matrix.os }}
+        # The artifact list lags an upload by a few seconds, so look for up to 30 s before failing.
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].name' | grep -qxF "$UPLOAD_NAME"
+          for _ in $(seq 1 10); do
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].name' > names.txt
+            grep -qxF "$UPLOAD_NAME" names.txt && exit 0
+            sleep 3
+          done
+          echo "::error::$UPLOAD_NAME is not among this run's artifacts after 30 s"
+          exit 1
       # Every update the ledger lists (the pusher's and the final one, which is empty when the pusher shipped everything)
       # is an artifact of this run.
       - name: The update artifacts were uploaded
