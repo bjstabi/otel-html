@@ -3,7 +3,7 @@ name: site
 # The last jobs of a ci or load run (`site / report`, `site / deploy`): build the run's report, upload it as the run's
 # update, link it from the run's pull request, then apply every pending update to the last deployed site and deploy the
 # result. The only writer of the GitHub Pages site. The caller (ci.yml, load.yml) runs it only for a trusted run: a
-# push or schedule on the default branch, or a pull request from this repository started by a person.
+# push or schedule on the default branch, or a pull request from this repository whose triggering event came from a person.
 #
 # The run's own commit supplies the code: a trusted run's code is already trusted to run with this token.
 on:
@@ -19,6 +19,8 @@ env:
 jobs:
   # The run's report, without the `site / ` jobs, which are still running.
   report:
+    # A called workflow's jobs are skipped when the caller's `needs` include a failed job, unless `if:` says otherwise.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       # Downloading the run's artifacts, uploading the update.
