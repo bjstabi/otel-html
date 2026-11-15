@@ -235,6 +235,53 @@ describe('tick', () => {
       expect(posted(old)).toBe(true);
     });
 
+    test('an update skipped behind a starting run is dispatched on a later quiet tick', async () => {
+      const r = await openReport();
+      await flush(r, 1);
+      const nowMs = Number(deps.clock.nowUnixNano() / 1_000_000n);
+      let startedAgo = 20_000;
+      const calls: string[] = [];
+      const d = pdeps();
+      d.fetchFn = api(
+        () =>
+          json({
+            workflow_runs: [
+              { status: 'in_progress', run_started_at: new Date(nowMs - startedAgo).toISOString() },
+            ],
+          }),
+        calls,
+      );
+      const cache: PusherCache = {};
+      await tick(opts(), d, null, cache);
+      expect(posted(calls)).toBe(false);
+      expect(cache.dispatchOwed).toBe(true);
+      // Nothing new, run still young: a listing call, no dispatch, still owed.
+      await tick(opts(), d, null, cache);
+      expect(posted(calls)).toBe(false);
+      expect(cache.dispatchOwed).toBe(true);
+      // Nothing new, run now older than the bound: dispatched, no longer owed.
+      startedAgo = 300_000;
+      await tick(opts(), d, null, cache);
+      expect(posted(calls)).toBe(true);
+      expect(cache.dispatchOwed).toBe(false);
+      // A quiet tick with nothing owed makes no call.
+      calls.length = 0;
+      await tick(opts(), d, null, cache);
+      expect(calls).toEqual([]);
+    });
+
+    test('a queued run clears an owed dispatch', async () => {
+      const r = await openReport();
+      await flush(r, 1);
+      const d = pdeps();
+      const calls: string[] = [];
+      d.fetchFn = api(() => json({ workflow_runs: [{ status: 'queued' }] }), calls);
+      const cache: PusherCache = { dispatchOwed: true };
+      await tick(opts(), d, null, cache);
+      expect(cache.dispatchOwed).toBe(false);
+      expect(posted(calls)).toBe(false);
+    });
+
     test('only finished or in-progress deployer runs: dispatches', async () => {
       const r = await openReport();
       await flush(r, 1);

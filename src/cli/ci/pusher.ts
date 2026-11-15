@@ -23,11 +23,14 @@ const DEPLOYER_WAITING = new Set(['queued', 'pending', 'waiting', 'requested']);
  * age comes from `run_started_at` in the run list the check already fetches: no extra API call.
  */
 const DEPLOYER_STARTING_MS = 120_000;
+/** The runner's clock may run behind the API's: a run that appears to start up to this far ahead still counts. */
+const CLOCK_SKEW_MS = 5_000;
 
 /**
  * Where in `[0, everyMs)` a pusher's first tick falls: a hash of the job's identity, so the pushers of one run, started
- * within seconds of each other, do not tick (and dispatch) together. Deterministic: the same job always gets the same
- * offset.
+ * within seconds of each other, do not all make their first check at the same moment. Deterministic: the same job always
+ * gets the same offset. It only spreads the first ticks; the `DEPLOYER_STARTING_MS` window does most of the work of
+ * keeping dispatches apart.
  */
 export function jitterMs(identity: string, everyMs: number): number {
   let h = 0x811c9dc5;
@@ -62,6 +65,8 @@ export interface PusherCache {
   at?: number;
   dir?: string;
   ci?: { jobName?: string; report?: string };
+  /** A dispatch was skipped because a deployer run had only just started: re-check on later ticks, even with nothing new. */
+  dispatchOwed?: boolean;
 }
 
 type Outcome = { outcome: 'uploaded' | 'unchanged' | 'retry'; listing: string[] };
@@ -98,7 +103,16 @@ export async function tick(
     listing = manifest.partitions.map((p) => p.source).sort();
     let ledger = await readLedger(fs, o.publishDir);
     const shipped = new Set(ledger.shipped);
-    if (listing.every((s) => shipped.has(s))) return { outcome: 'unchanged', listing };
+    if (listing.every((s) => shipped.has(s))) {
+      // An update was skipped behind a deployer run that had only just started; that run may not have listed it.
+      const repo = ev(o, 'GITHUB_REPOSITORY');
+      const id = Number(ev(o, 'GITHUB_RUN_ID'));
+      if (kept.dispatchOwed === true && repo && Number.isSafeInteger(id) && id > 0) {
+        step = 'dispatch';
+        await dispatch(o, d, repo, id, kept);
+      }
+      return { outcome: 'unchanged', listing };
+    }
 
     const token = ev(o, 'ACTIONS_RUNTIME_TOKEN');
     if (token === undefined || token === '')
@@ -202,7 +216,7 @@ export async function tick(
       });
     d.log(`uploaded ${name} (${built.sources.length} source(s), ${zip.length} bytes, ${uploadMs} ms)`);
     step = 'dispatch';
-    await dispatch(o, d, repository, runId);
+    await dispatch(o, d, repository, runId, kept);
     return { outcome: 'uploaded', listing };
   } catch (e) {
     d.log(`${FAILURE_MARK}${step} failed, will retry: ${messageOf(e)}`);
@@ -214,10 +228,15 @@ export async function tick(
 }
 
 /**
- * True when a run of the deployer is already queued or only just started (`DEPLOYER_STARTING_MS`): it lists everything
- * pending when its `plan` job runs, so another dispatch adds nothing. A failed check is false (dispatch anyway).
+ * Whether a run of the deployer is queued (`'waiting'`: it lists everything pending when it starts) or only just started
+ * (`'starting'`, under `DEPLOYER_STARTING_MS`: it may not have listed yet), else `'none'`. A failed check is `'none'`
+ * (dispatch anyway).
  */
-async function deployerWaiting(o: PusherOptions, d: PusherDeps, repository: string): Promise<boolean> {
+async function deployerWaiting(
+  o: PusherOptions,
+  d: PusherDeps,
+  repository: string,
+): Promise<'waiting' | 'starting' | 'none'> {
   try {
     const token = ev(o, 'OTEL_HTML_DISPATCH_TOKEN') || ev(o, 'GITHUB_TOKEN');
     const api = ev(o, 'GITHUB_API_URL') ?? 'https://api.github.com';
@@ -226,24 +245,37 @@ async function deployerWaiting(o: PusherOptions, d: PusherDeps, repository: stri
       workflow_runs: { status: string | null; run_started_at?: string | null }[];
     }>(url, token, 15_000, d.fetchFn);
     const now = nowMs(d.clock);
-    return body.workflow_runs.some((r) => {
-      if (r.status === null) return false;
-      if (DEPLOYER_WAITING.has(r.status)) return true;
-      if (r.status !== 'in_progress' || r.run_started_at == null) return false;
+    let state: 'none' | 'starting' = 'none';
+    for (const r of body.workflow_runs) {
+      if (r.status === null) continue;
+      if (DEPLOYER_WAITING.has(r.status)) return 'waiting';
+      if (r.status !== 'in_progress' || r.run_started_at == null) continue;
       const age = now - Date.parse(r.run_started_at);
-      return age >= 0 && age < DEPLOYER_STARTING_MS;
-    });
+      if (age > -CLOCK_SKEW_MS && age < DEPLOYER_STARTING_MS) state = 'starting';
+    }
+    return state;
   } catch {
-    return false;
+    return 'none';
   }
 }
 
 /** Wakes the deployer; `runDispatch` never throws and says what happened on its stdout, which goes to the log. */
-async function dispatch(o: PusherOptions, d: PusherDeps, repository: string, runId: number): Promise<void> {
-  if (await deployerWaiting(o, d, repository)) {
+async function dispatch(
+  o: PusherOptions,
+  d: PusherDeps,
+  repository: string,
+  runId: number,
+  kept: PusherCache,
+): Promise<void> {
+  const state = await deployerWaiting(o, d, repository);
+  if (state !== 'none') {
+    // A queued run lists everything when it starts; a run that only just started may have listed already, so the
+    // dispatch stays owed and a later tick (new data or not) looks again.
+    kept.dispatchOwed = state === 'starting';
     d.log('deployer already waiting; not dispatched');
     return;
   }
+  kept.dispatchOwed = false;
   const sink = (s: string): void => {
     for (const line of s.split('\n'))
       if (line.trim() !== '') d.log(line.includes('not dispatched') ? `${FAILURE_MARK}${line}` : line);
