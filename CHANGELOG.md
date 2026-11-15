@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.0](https://github.com/bjstabi/otel-html/compare/otel-html-v0.4.1...otel-html-v0.5.0) (2026-11-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* **format:** reports are written as format 6. Viewers older than the one that reads format 6 cannot open them.
+
+### Features
+
+* **format:** format 6 stores the service share, no epoch ([#319](https://github.com/bjstabi/otel-html/issues/319)) ([19ec293](https://github.com/bjstabi/otel-html/commit/19ec293ce4a2a4e05d81062d0fc92ca25f67b8eb))
+* **format:** read format 6 ([#318](https://github.com/bjstabi/otel-html/issues/318)) ([592aae2](https://github.com/bjstabi/otel-html/commit/592aae2f5159dfacf84a707b412009f3015fba31))
+
+
+### Bug fixes
+
+* non-finite metric fields, abort retry, linked assets ([#320](https://github.com/bjstabi/otel-html/issues/320)) ([924cea4](https://github.com/bjstabi/otel-html/commit/924cea48b4bf0d9fbf68c18f8a1931cd33e25adf))
+
+
+### Documentation
+
+* **spec:** format 6, a stored service share and no epoch ([#316](https://github.com/bjstabi/otel-html/issues/316)) ([e72cff8](https://github.com/bjstabi/otel-html/commit/e72cff88d49434dd4dd96bbb8aa0a40683c9975d))
+
 ## [0.4.1](https://github.com/bjstabi/otel-html/compare/otel-html-v0.4.0...otel-html-v0.4.1) (2026-11-14)
 
 
