@@ -231,6 +231,10 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .option('--repository <owner/repo>', 'repository (default: $GITHUB_REPOSITORY)')
     .requiredOption('--base-url <url>', "the site's public URL")
     .option('--config <file>', 'config file for the written report')
+    .option(
+      '--exclude-jobs <prefix>',
+      'record a still-running run as finished without the jobs whose name starts with this prefix',
+    )
     .action(
       updateAction(
         'run',
@@ -241,6 +245,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
           repository?: string;
           baseUrl: string;
           config?: string;
+          excludeJobs?: string;
         }) => {
           await runUpdateRun(
             {
@@ -250,6 +255,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
               repository: repositoryOf(flags.repository),
               baseUrl: flags.baseUrl,
               ...(flags.config === undefined ? {} : { config: flags.config }),
+              ...(flags.excludeJobs === undefined ? {} : { excludeJobs: flags.excludeJobs }),
             },
             io,
             await resolveDeps(deps),

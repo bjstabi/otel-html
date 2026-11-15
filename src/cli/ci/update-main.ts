@@ -4,10 +4,12 @@ import { dirname, join } from 'node:path';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
+import { finishedView } from './finished-view.js';
 import {
   type ApiRun,
   envVar,
   type Fetch,
+  fetchJobs,
   fetchPullsForSha,
   getJson,
   messageOf,
@@ -241,6 +243,8 @@ export interface RunOptions {
   repository: string;
   baseUrl: string;
   config?: string;
+  /** A job-name prefix: a run still unfinished is recorded as finished without those jobs (see `finishedView`). */
+  excludeJobs?: string;
 }
 
 /** D64: the files a `run` update carries from the report; anything else the merge wrote is removed. */
@@ -298,6 +302,28 @@ export async function runUpdateRun(
     runAttempt: run.run_attempt,
     createdAt: nowIso(deps),
   };
+  // an in-graph run uploads this while it is still running: record the conclusion the finished run will have
+  if (o.excludeJobs !== undefined && o.excludeJobs !== '' && run.status !== 'completed') {
+    try {
+      const jobs = await fetchJobs(
+        { apiUrl: api, repository: o.repository, runId: run.id, runAttempt: run.run_attempt },
+        token,
+        API_TIMEOUT_MS,
+        fetchFn,
+      );
+      const finished = finishedView(run, jobs, o.excludeJobs).run;
+      if (
+        finished.conclusion === 'success' ||
+        finished.conclusion === 'failure' ||
+        finished.conclusion === 'cancelled'
+      ) {
+        update.conclusion = finished.conclusion;
+        update.completedAt = new Date(Date.parse(finished.updated_at)).toISOString();
+      }
+    } catch (e) {
+      warning(io, 'update run', `no conclusion recorded: ${messageOf(e)}`);
+    }
+  }
   const name = updateName(update);
   const folder = join(o.out, name);
   await deps.fs.removeDir(folder);

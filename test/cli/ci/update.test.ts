@@ -108,6 +108,16 @@ describe('UpdateJsonSchema', () => {
     expect(ok({ ...base, kind: 'run' })).toBe(true);
     expect(ok({ ...base, kind: 'remove-pr', pr: 5 })).toBe(true);
   });
+  test('a run update may record conclusion and completedAt, no other kind may', () => {
+    const run = { version: 1, kind: 'run', runId: 1, runAttempt: 1, createdAt: '2026-11-15T00:00:00.000Z' };
+    expect(UpdateJsonSchema.safeParse(run).success).toBe(true);
+    const rec = { ...run, conclusion: 'failure', completedAt: '2026-11-15T00:01:00.000Z' };
+    expect(UpdateJsonSchema.safeParse(rec).success).toBe(true);
+    expect(UpdateJsonSchema.safeParse({ ...rec, completedAt: 'soon' }).success).toBe(false);
+    expect(UpdateJsonSchema.safeParse({ ...rec, conclusion: 'in_progress' }).success).toBe(false);
+    expect(UpdateJsonSchema.safeParse({ ...rec, kind: 'remove-pr', pr: 1 }).success).toBe(false);
+  });
+
   test('rejects', () => {
     expect(ok({ ...push(), extra: 1 })).toBe(false);
     const { sequence: _s, ...noSeq } = push();

@@ -312,6 +312,12 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
         if (plan.channel === null || plan.run === null) return refuse('no channel');
         channel = plan.channel;
         run = { ...stripEvent(plan.run), reportPath: reportPathOf(channel.key, u.runId) };
+        // recorded values are the run without its in-graph jobs (what the report shows): they win over the API's
+        if (u.kind === 'run' && u.conclusion !== undefined) {
+          run.conclusion = u.conclusion;
+          run.attempt = u.runAttempt;
+          if (u.completedAt !== undefined) run.completedAt = u.completedAt;
+        }
       }
       if (u.kind === 'run') await checkRunReport(fs, `${c.dir}/report`);
       placedUpdates.push({ ...c, u, channel, run });
