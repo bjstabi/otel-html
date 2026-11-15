@@ -30,23 +30,22 @@ export const emptyRunState = (attempt: number): RunReportState => ({ next: 0, at
 
 export interface NewManifestOptions {
   title: string;
-  epochUnixNano: string;
   createdAt: string;
   assetsBase: string;
   config: ResolvedConfig;
   version: string;
 }
 
-/** An empty, `complete: false` format-5 manifest (`withSharesFormat` makes it format 6, without the stored epoch, once an added partition stores a service share) in `site` format with `statisticsKeysFor` each table from `config`. */
+/** An empty, `complete: false` format-6 manifest (no stored epoch; the in-memory anchor is derived as a read derives it, and `withSharesFormat` upgrades a format-5 manifest an older build left on disk) in `site` format with `statisticsKeysFor` each table from `config`. */
 export function newRunManifest(o: NewManifestOptions): ManifestV4 {
   const statisticsKeys = Object.fromEntries(
     TABLES.map((t) => [t, statisticsKeysFor(t, o.config)]),
   ) as StatisticsKeys;
   return {
-    formatVersion: 5,
+    formatVersion: 6,
     otelHtmlVersion: o.version,
     title: o.title,
-    epochUnixNano: o.epochUnixNano,
+    epochUnixNano: (BigInt(Date.parse(o.createdAt)) * 1_000_000n).toString(),
     createdAt: o.createdAt,
     updatedAt: o.createdAt,
     complete: false,

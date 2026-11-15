@@ -15,7 +15,12 @@ import type { UpdateJson, UpdatePartition } from '../../../src/cli/ci/update.js'
 import { resolveConfig } from '../../../src/config/resolve.js';
 import type { ResolvedConfig } from '../../../src/config/schema.js';
 import { ENGINE_VERSION } from '../../../src/format/engine.js';
-import { type ManifestV4, parseAnyManifest } from '../../../src/format/manifest.js';
+import {
+  isPartitioned,
+  type ManifestV4,
+  manifestForWrite,
+  parseAnyManifest,
+} from '../../../src/format/manifest.js';
 import { createTestWriter } from '../../../test-support/writer-deps.js';
 
 const CI_CONFIG = '.github/actions/otel-html-publish/otel-html-ci.yaml';
@@ -26,12 +31,18 @@ const NOW = '2026-11-10T12:00:00.000Z';
 const newManifest = async (): Promise<ManifestV4> =>
   newRunManifest({
     title: 'run 42',
-    epochUnixNano: '1700000000000000000',
     createdAt: '2026-11-10T00:00:00.000Z',
     assetsBase: '../../../assets/0.4.0/',
     config: await config(),
     version: '0.4.0',
   });
+
+/** A run manifest an older build left on disk: format 5, with its stored epoch. */
+const legacyManifest = async (): Promise<ManifestV4> => ({
+  ...(await newManifest()),
+  formatVersion: 5,
+  epochUnixNano: '1700000000000000000',
+});
 
 const file = (path: string, rows: number, timeMin: string, timeMax: string, values = {}) => ({
   path,
@@ -99,9 +110,17 @@ const jobEntry = (plan: { state: RunReportState }) => {
 };
 
 describe('newRunManifest', () => {
+  test('is a format-6 manifest that stores no epoch', async () => {
+    const m = await newManifest();
+    expect(m.formatVersion).toBe(6);
+    const w = createTestWriter();
+    await writeRunReport(w.deps, 'site/run', m);
+    expect(w.fs.snapshot().get('site/run/data/manifest.js')).not.toContain('epochUnixNano');
+    expect((await readRunManifest(w.fs, 'site/run'))?.formatVersion).toBe(6);
+  });
   test('is an empty incomplete v4 site manifest with the CI statistics keys', async () => {
     const m = await newManifest();
-    expect(parseAnyManifest(m)).toEqual(m);
+    expect(parseAnyManifest(manifestForWrite(m))).toEqual(m);
     expect(m.complete).toBe(false);
     expect(m.engine).toEqual({
       version: ENGINE_VERSION,
@@ -170,7 +189,8 @@ describe('planSync', () => {
     expect(v?.['resource:cicd.pipeline.run.id']).toEqual(['42']);
     expect(v).not.toHaveProperty('extra');
     expect(plan.manifest.partitions[1]?.files.spans?.values['resource:cicd.pipeline.run.id']).toBeUndefined();
-    expect(parseAnyManifest(plan.manifest)).toEqual(plan.manifest);
+    const back = parseAnyManifest(manifestForWrite(plan.manifest));
+    expect(isPartitioned(back) ? back.partitions : null).toEqual(plan.manifest.partitions);
   });
 
   test('a compaction update replaces the flushes and the old ci, and numbers are never reused', async () => {
@@ -446,7 +466,8 @@ describe('renumbered (basic)', () => {
       { from: 'data/partitions/000001/spans.parquet', to: 'data/partitions/000011/spans.parquet' },
       { from: 'data/partitions/000000/spans.parquet', to: 'data/partitions/000010/spans.parquet' },
     ]);
-    expect(parseAnyManifest(r.manifest)).toEqual(r.manifest);
+    const back = parseAnyManifest(manifestForWrite(r.manifest));
+    expect(isPartitioned(back) ? back.partitions : null).toEqual(r.manifest.partitions);
   });
 });
 
@@ -475,7 +496,7 @@ describe('format 6 in a run report', () => {
     ]);
 
   test('an added traces file with serviceShare makes the report format 6, the entry keeps it', async () => {
-    const plan = sync(await newManifest(), emptyRunState(1), [ju(upd(true))]);
+    const plan = sync(await legacyManifest(), emptyRunState(1), [ju(upd(true))]);
     expect(plan.manifest.formatVersion).toBe(6);
     expect(plan.manifest.partitions[0]?.files.traces?.serviceShare).toBe(true);
     // the manifest as written (no epoch) is valid, and parses back to the same partitions
@@ -486,8 +507,8 @@ describe('format 6 in a run report', () => {
     expect(back?.formatVersion).toBe(6);
     expect(back?.partitions).toEqual(plan.manifest.partitions);
   });
-  test('without shares the report stays format 5, and a format-6 report stays format 6', async () => {
-    const m = await newManifest();
+  test('without shares a format-5 report stays format 5, and a format-6 report stays format 6', async () => {
+    const m = await legacyManifest();
     expect(sync(m, emptyRunState(1), [ju(upd(false))]).manifest.formatVersion).toBe(5);
     const six = sync(m, emptyRunState(1), [ju(upd(true))]);
     const later = sync(six.manifest, six.state, [ju({ ...upd(false), sequence: 2 })]);
@@ -514,8 +535,8 @@ describe('format 5 run reports', () => {
     carried: true,
   });
 
-  test('a new run report is format 5 and lists the rollup files with their descriptions', async () => {
-    const m = await newManifest();
+  test('a format-5 run report lists the rollup files with their descriptions', async () => {
+    const m = await legacyManifest();
     expect(m.formatVersion).toBe(5);
     const plan = sync(m, emptyRunState(1), [ju(push(1, [v5Partition()]))]);
     const entry = plan.manifest.partitions[0];
@@ -526,7 +547,7 @@ describe('format 5 run reports', () => {
     });
     expect(entry?.files.span_rollups?.path).toBe('data/partitions/000000/span_rollups.parquet');
     expect(plan.copies.map((c) => c.to)).toContain('data/partitions/000000/span_rollups.parquet');
-    expect(parseAnyManifest(plan.manifest)).toEqual(plan.manifest);
+    expect(parseAnyManifest(manifestForWrite(plan.manifest))).toEqual(plan.manifest);
   });
 
   test('the range comes from the base tables: a rollup grain that starts before the first span is not data', async () => {
