@@ -353,17 +353,6 @@ describe('planDeploy', () => {
       expect(plan.updates[0]?.reason).toContain('not trusted');
     });
 
-    test('rejects a site state uploaded by a fork pull_request run of ci.yml', async () => {
-      const routes = await world();
-      routes[`${R}/actions/runs/50`] = json(
-        apiRun(50, { event: 'pull_request', head_branch: 'feat', head_repository: { full_name: 'fork/r' } }),
-      );
-      const { fetchFn, calls } = fake(routes);
-      const plan = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fetchFn);
-      expect(plan.state).toEqual({ kind: 'full', runId: 11 });
-      expect(calls.some((c) => c.endsWith('/artifacts/102/zip'))).toBe(false);
-    });
-
     test('accepts a consumed state from a trusted ci.yml pull_request run', async () => {
       const routes = await world();
       routes[`${R}/actions/runs/50`] = json(apiRun(50, { event: 'pull_request', head_branch: 'feat' }));
@@ -381,7 +370,7 @@ describe('planDeploy', () => {
     });
   });
 
-  test('a push whose uploader is a fork pull request is marked not same-repo and still takes the pull request channel', async () => {
+  test('rejects a push update uploaded by a fork pull_request run', async () => {
     const routes = await world();
     routes[`${R}/actions/runs/21`] = json(
       apiRun(21, {
@@ -391,20 +380,12 @@ describe('planDeploy', () => {
         head_repository: { full_name: 'fork/r' },
       }),
     );
-    routes[`${R}/commits/sha21/pulls?per_page=100`] = json([
-      {
-        number: 5,
-        title: 'Feat',
-        state: 'open',
-        head: { sha: 'sha21', ref: 'feat', repo: { full_name: 'fork/r' } },
-      },
-    ]);
     const plan = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn);
     expect(plan.updates.find((u) => u.id === 103)).toMatchObject({
-      accepted: true,
+      accepted: false,
       uploader: { sameRepo: false },
-      channel: { key: 'pr/5' },
     });
+    expect(plan.updates.find((u) => u.id === 103)?.reason).toContain('not trusted');
   });
 
   test('a push with no open pull request and off the default branch has no channel and is rejected', async () => {

@@ -320,12 +320,11 @@ export async function planDeploy(
     const id = a.workflow_run?.id;
     const run = id === undefined ? undefined : await getRun(id);
     if (run === undefined || run.id <= (base.runId ?? 0)) return false;
-    const branch = await defaultBranchOf();
-    if (ciPaths.includes(run.path)) return isTrustedRun(run, o.repository, branch);
+    if (ciPaths.includes(run.path)) return isTrustedRun(run, o.repository, await defaultBranchOf());
     return (
       deployerPaths.includes(run.path) &&
       run.head_repository?.full_name === o.repository &&
-      run.head_branch === branch &&
+      run.head_branch === (await defaultBranchOf()) &&
       DEPLOYER_EVENTS.includes(run.event)
     );
   };
@@ -365,6 +364,7 @@ export async function planDeploy(
     };
     if (parsed.kind === 'push') {
       if (!ciPaths.includes(uploader.path)) refuse('not a ci workflow');
+      if (!isTrustedRun(uploader, o.repository, await defaultBranchOf())) refuse('not trusted');
       if (!PUSH_EVENTS.includes(uploader.event))
         refuse(`event ${uploader.event} is not allowed for push updates`);
     } else if (parsed.kind === 'run' && ciPaths.includes(uploader.path)) {
