@@ -2,7 +2,7 @@ import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tableFromIPC } from 'apache-arrow';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { HostError, policyStatements, startHostEngine, wrapStatement } from '../../src/host/engine.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { buildFormat4Report, spansOnlyRequest } from '../../test-support/format4-fixture.js';
@@ -18,10 +18,12 @@ afterEach(async () => {
   for (const c of cleanups.splice(0).reverse()) await c();
 });
 
-async function started() {
+/** An engine of its own and the report folder it reads; the caller owns the cleanup. */
+async function start() {
+  const stops: (() => Promise<void>)[] = [];
   const fixture = await buildFormat4Report([spansOnlyRequest(3), spansOnlyRequest(2)], { close: false });
   const report = await writeReportDir(fixture);
-  cleanups.push(report.close);
+  stops.push(report.close);
   const engine = await startHostEngine({
     report: report.dir,
     manifest: fixture.manifest,
@@ -31,8 +33,40 @@ async function started() {
     timeoutMs: 30_000,
     maxResultBytes: 64 * 1024 * 1024,
   });
-  cleanups.push(() => engine.close());
-  return { engine, dir: report.dir };
+  stops.push(() => engine.close());
+  return {
+    engine,
+    dir: report.dir,
+    close: async () => {
+      for (const c of stops.splice(0).reverse()) await c();
+    },
+  };
+}
+
+/** An engine of this test alone, closed after it. */
+async function started() {
+  const h = await start();
+  cleanups.push(h.close);
+  return { engine: h.engine, dir: h.dir };
+}
+
+/**
+ * Inside a `describe`: `const started1 = sharedStarted();` for the tests that only query (no kill, timeout, restart or
+ * close). The first call starts the engine; `afterAll` closes it.
+ */
+function sharedStarted(): () => Promise<{
+  engine: Awaited<ReturnType<typeof start>>['engine'];
+  dir: string;
+}> {
+  let h: ReturnType<typeof start> | undefined;
+  afterAll(async () => {
+    if (h !== undefined) await (await h).close();
+  });
+  return async () => {
+    h ??= start();
+    const { engine, dir } = await h;
+    return { engine, dir };
+  };
 }
 
 const rows = (bytes: Uint8Array): { value?: unknown; n?: unknown }[] =>
@@ -41,6 +75,7 @@ const rows = (bytes: Uint8Array): { value?: unknown; n?: unknown }[] =>
     .map((r: { toJSON(): { value?: unknown; n?: unknown } }) => r.toJSON());
 
 describe('the engine policy', () => {
+  const started1 = sharedStarted();
   it('lists the statements in the order of D37, allowing exactly the manifest-listed paths', async () => {
     const fixture = await buildFormat4Report([spansOnlyRequest(3), spansOnlyRequest(2)], { close: false });
     const listed = fixture.manifest.partitions.flatMap((q) => Object.values(q.files).map((f) => f.path));
@@ -55,7 +90,7 @@ describe('the engine policy', () => {
   });
 
   it('refuses unregistered files under data/partitions/ even by a name relative to the working directory', async () => {
-    const { engine, dir } = await started();
+    const { engine, dir } = await started1();
     const decoy = await mkdtemp(join(tmpdir(), 'otel-html-decoy-'));
     const before = process.cwd();
     try {
@@ -90,7 +125,7 @@ describe('the engine policy', () => {
   });
 
   it('refuses each statement with a 400, and the engine answers right after', async () => {
-    const { engine, dir } = await started();
+    const { engine, dir } = await started1();
     const spansPath = join(dir, 'data/partitions/000001/spans.parquet');
     const refused = [
       'CREATE TABLE t AS SELECT 1',
@@ -126,7 +161,7 @@ describe('the engine policy', () => {
   });
 
   it('writes nothing to stdout when a statement is refused', async () => {
-    const { engine } = await started();
+    const { engine } = await started1();
     const written: string[] = [];
     const original = process.stdout.write.bind(process.stdout);
     process.stdout.write = ((chunk: string | Uint8Array) => {
@@ -144,7 +179,7 @@ describe('the engine policy', () => {
   });
 
   it('keeps ORDER BY of the wrapped statement', async () => {
-    const { engine } = await started();
+    const { engine } = await started1();
     const out = rows(
       await engine.query('WITH r AS (SELECT range AS x FROM range(10)) SELECT x FROM r ORDER BY x DESC'),
     );
@@ -152,7 +187,7 @@ describe('the engine policy', () => {
   });
 
   it('has external access off and the configuration locked', async () => {
-    const { engine } = await started();
+    const { engine } = await started1();
     const v = async (name: string) =>
       rows(await engine.query(`SELECT current_setting('${name}') AS value`))[0]?.value;
     expect(await v('enable_external_access')).toBe(false);
