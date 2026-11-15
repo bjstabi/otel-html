@@ -384,23 +384,24 @@ class PartitionSession implements WriterSession {
     return this.#serial(async () => {
       this.#assertOpen();
       this.#partial = options?.partial === true;
-      const ctx = this.#ensureEpoch(earliestTimestamp(input));
-      const first = input.first ?? 0;
-      let result: AddResult;
-      if (input.signal === 'metrics') {
-        this.#beforeMetrics();
-        const points = [...metricPointsOf(input, ctx, source)];
-        this.#settleEpoch(points.length);
-        result = this.#acceptPoints(points);
-      } else if (input.signal === 'traces') {
-        const rows = normalizeTraces(input.request, ctx, source, first);
-        this.#settleEpoch(rows.length);
-        result = this.#acceptSpans(rows);
-      } else {
+      const result = this.#anchoredBy((): AddResult => {
+        const ctx = this.#ensureEpoch(earliestTimestamp(input));
+        const first = input.first ?? 0;
+        if (input.signal === 'metrics') {
+          this.#beforeMetrics();
+          const points = [...metricPointsOf(input, ctx, source)];
+          this.#settleEpoch(points.length);
+          return this.#acceptPoints(points);
+        }
+        if (input.signal === 'traces') {
+          const rows = normalizeTraces(input.request, ctx, source, first);
+          this.#settleEpoch(rows.length);
+          return this.#acceptSpans(rows);
+        }
         const rows = normalizeLogs(input.request, ctx, source, first);
         this.#settleEpoch(rows.length);
-        result = this.#acceptLogs(rows, source);
-      }
+        return this.#acceptLogs(rows, source);
+      });
       if (result.accepted > 0) this.#sinceCheckpoint = true;
       if (!this.#partial) {
         if (this.#inflight !== null && this.#writer.pendingBytes >= this.#config.writer.chunkTargetBytes) {
@@ -428,21 +429,19 @@ class PartitionSession implements WriterSession {
     return this.#serial(async () => {
       this.#assertOpen();
       this.#partial = false;
-      const rebased = rebaseBatch(batch, (epoch) => this.#ensureEpoch(epoch));
-      if (rebased === null) return { accepted: 0, dropped: 0, duplicates: 0 };
-      let result: AddResult;
-      switch (rebased.signal) {
-        case 'spans':
-          result = this.#acceptSpans(rebased.rows);
-          break;
-        case 'logs':
-          result = this.#acceptLogs(rebased.rows, 'records');
-          break;
-        case 'metrics':
-          this.#beforeMetrics();
-          result = this.#acceptPoints(Array.from(rebased.rows()), batch.origin);
-          break;
-      }
+      const result = this.#anchoredBy((): AddResult => {
+        const rebased = rebaseBatch(batch, (epoch) => this.#ensureEpoch(epoch));
+        if (rebased === null) return { accepted: 0, dropped: 0, duplicates: 0 };
+        switch (rebased.signal) {
+          case 'spans':
+            return this.#acceptSpans(rebased.rows);
+          case 'logs':
+            return this.#acceptLogs(rebased.rows, 'records');
+          case 'metrics':
+            this.#beforeMetrics();
+            return this.#acceptPoints(Array.from(rebased.rows()), batch.origin);
+        }
+      });
       if (result.accepted > 0) this.#sinceCheckpoint = true;
       await this.#maybeCheckpoint();
       this.#armIdle();
@@ -538,6 +537,33 @@ class PartitionSession implements WriterSession {
     let bytes = 0;
     for (const p of all) for (const f of Object.values(p.files)) bytes += f.bytes;
     return { out: this.#out, totals: { ...this.#totals }, chunks: all.length, bytes };
+  }
+
+  /**
+   * Runs one request's acceptance. The anchor it may pick is provisional: when the request throws, or accepts
+   * nothing, the session goes back to the state before it (anchor, context, stream times, dirty flag), so the next
+   * request picks its own. The stream shift back is exact, so nothing is lost by the round trip.
+   */
+  #anchoredBy(accept: () => AddResult): AddResult {
+    if (this.#ownAnchor !== null) return accept();
+    const saved = { ctx: this.#ctx, stream: this.#streamAnchor, dirty: this.#dirty };
+    const undo = (): void => {
+      if (this.#ownAnchor === null && this.#ctx === saved.ctx) return;
+      this.#ownAnchor = null;
+      this.#ctx = saved.ctx;
+      this.#dirty = saved.dirty;
+      if (saved.stream === null) this.#streamAnchor = null;
+      else this.#reanchorStreams(saved.stream);
+    };
+    let result: AddResult;
+    try {
+      result = accept();
+    } catch (e) {
+      undo();
+      throw e;
+    }
+    if (result.accepted === 0) undo();
+    return result;
   }
 
   /** The epoch rule: the earliest timestamp of the first data that has one, never changed. */

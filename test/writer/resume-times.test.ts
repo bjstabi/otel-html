@@ -144,3 +144,58 @@ describe('a resumed session writes the same times as a fresh one', () => {
     }
   });
 });
+
+describe('a rejected first request leaves the session unanchored', () => {
+  const FAR = 2n ** 54n;
+  const badLogs = (anchored: bigint) =>
+    logsRequest([
+      logRecord({
+        timeUnixNano: String(anchored),
+        observedTimeUnixNano: String(anchored),
+        severityNumber: 25,
+        body: { stringValue: 'bad severity' },
+      }),
+    ]);
+
+  test.each(['add', 'addRecords'] as const)(
+    '%s: later data near the old anchor is still accepted',
+    async (via) => {
+      const w = createTestWriter();
+      await write(w, 'plain', [first, second]);
+      await write(w, 'failed', [first]);
+      const s = await openSession(w.deps, { out: 'failed', config: testConfig(), mode: 'append' });
+      if (via === 'add') {
+        await expect(s.add(otlp(badLogs(base + FAR) as never), 'bad.json')).rejects.toThrow();
+      } else {
+        await expect(
+          s.addRecords({
+            signal: 'logs',
+            rows: [
+              {
+                time: 0,
+                observedTime: 0,
+                severityNumber: 25,
+                severityText: '',
+                body: { kind: 'string', value: 'bad severity' },
+                attributes: [],
+                traceId: null,
+                spanId: null,
+                flags: 0,
+                resource: 0,
+                scope: 0,
+              },
+            ] as never,
+            resources: [{ attributes: [], droppedAttributesCount: 0 }] as never,
+            scopes: [{ name: '', version: '', attributes: [], droppedAttributesCount: 0 }] as never,
+            epoch: (base + FAR) as never,
+          }),
+        ).rejects.toThrow();
+      }
+      for (const [j, r] of second.entries()) await s.add(otlp(r as never), `s1-${j}.json`);
+      await s.close();
+      for (const table of ['spans', 'logs', 'points', 'traces'] as const) {
+        expect(rowsOf(w, 'failed', table), table).toEqual(rowsOf(w, 'plain', table));
+      }
+    },
+  );
+});
