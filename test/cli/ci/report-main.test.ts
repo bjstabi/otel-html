@@ -176,7 +176,7 @@ describe('runReport from inside the run', () => {
     const logsA: string[] = [];
     const opts = { runId: 42, repository: 'o/r', artifacts: root, token: 't', stepSummary: false };
     await runReport({ ...opts, out: join(dir, 'a') }, io(), deps, apiOf(afterwards, done, logsA));
-    const post = out.join('').replace(dir, '<dir>').replace('/a', '/<out>');
+    const post = out.join('').replaceAll(join(dir, 'a'), '<out>');
     out = [];
 
     const during = run({ status: 'in_progress', conclusion: null, updated_at: '2026-01-01T00:00:05Z' });
@@ -192,7 +192,7 @@ describe('runReport from inside the run', () => {
       deps,
       apiOf(during, inRun, logsB),
     );
-    expect(out.join('').replace(dir, '<dir>').replace('/b', '/<out>')).toBe(post);
+    expect(out.join('').replaceAll(join(dir, 'b'), '<out>')).toBe(post);
     expect(post).toContain('merged 2 reports');
     expect(logsB).toEqual(logsA);
     expect(logsB.some((u) => u.includes('/jobs/8/') || u.includes('/jobs/9/'))).toBe(false);
