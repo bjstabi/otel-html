@@ -31,7 +31,7 @@ Shared by every PR process in this folder. Short on purpose; the README and the 
 - E2E specs live in `e2e/`; one spec is `mise run test:e2e:chromium -- e2e/<spec>.spec.ts`. A viewer behaviour
   that needs a real browser (canvas, keyboard, URL state) is an e2e test; logic is a unit test. The first test of a new page's spec carries the HTTP tag (`HTTP` in `e2e/test.ts`) so the page is also checked over http.
 - Before each commit run `pnpm exec biome check .` and `mise run typecheck` by hand, not through a pipe that hides
-  the exit status. Before a push, `mise run check`; before opening a PR, the Chromium e2e suite as well (the ladder
+  the exit status. Before a push the hook runs the static checks and the tests changed since the merge base; run `mise run check` yourself after an edit, and `mise run verify` (with the Chromium e2e suite) before a PR (the ladder
   in AGENTS.md).
 - Tasks are documented in their `description` in `mise.toml` (`mise tasks info <task>`); the README's
   Development section is generated from them (`mise run gen`, checked by `gen:check`), never edited by hand. A new or
