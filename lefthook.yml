@@ -12,6 +12,9 @@ pre-push:
   commands:
     check-static:
       run: mise run check:static
+    # Generated files (README task docs, schema docs) match their sources; CI's check job fails otherwise (~0.5 s).
+    gen-check:
+      run: mise run gen:check
     # The tests changed since the merge base with origin/main (else main); with no merge base at all, every unit test.
     # It skips the @perf tests and the scaling measurement, which `mise run check` and CI still run; `mise run verify`
     # before a PR stays the rule (AGENTS.md).
