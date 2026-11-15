@@ -38,7 +38,7 @@ import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
 import { Drain } from '../rollups/drain.js';
 import { StreamNormalizer } from '../rollups/metric-streams.js';
 import { severityKey } from '../semconv/severity.js';
-import { pruneOwnAssets } from './assets-cleanup.js';
+import { assetsInside, pruneOwnAssets } from './assets-cleanup.js';
 import {
   at,
   loadPartitionCheckpoint,
@@ -119,6 +119,13 @@ export async function openPartitionSession(
   const { out } = options;
   let { config } = options;
   const { fs } = deps;
+  // The viewer files would be deleted and recreated through the link: its target is not this report's to rewrite.
+  if (config.writer.assetsBase === DEFAULT_ASSETS_BASE && !(await assetsInside(fs, out))) {
+    throw new OtelHtmlError('invalid-report', {
+      message: `${out}/assets links out of the report, and writing the report's viewer files would rewrite the link's target`,
+      hint: `write with --assets-base to load the viewer files from elsewhere, or replace the assets link with a folder`,
+    });
+  }
   await fs.mkdirp(at(out, STATE_DIR));
   const lock = await acquireLock(deps, at(out, LOCK_PATH));
   try {
@@ -243,6 +250,8 @@ class PartitionSession implements WriterSession {
   #backoffUntilMs = 0;
   #closed: ReportSummary | null = null;
   #aborted = false;
+  /** The lock is gone after an abort: a rejected release leaves this false, and the next `abort()` retries it. */
+  #lockReleased = false;
   /** Set when close released the live state: only `close` (again) and `abort` remain. */
   #closing = false;
   #replacing: boolean;
@@ -511,11 +520,12 @@ class PartitionSession implements WriterSession {
 
   abort(): Promise<void> {
     return this.#serial(async () => {
-      if (this.#closed !== null || this.#aborted) return;
+      if (this.#closed !== null || this.#lockReleased) return;
       this.#aborted = true;
       this.#disarmIdle();
       await this.#inflight;
       await this.#lock.release();
+      this.#lockReleased = true;
     });
   }
 

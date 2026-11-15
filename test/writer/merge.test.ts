@@ -338,6 +338,27 @@ describe('mergeReports', () => {
     expect(w.fs.snapshot()).toEqual(before);
   });
 
+  test('merge into a report whose assets/ links out of it fails invalid-report and writes nothing', async () => {
+    const w = createTestWriter();
+    await writeReport(w, 'a', [spansRequest(1)]);
+    await writeReport(w, 'out', [spansRequest(1, 0, 5)]);
+    const linked = {
+      ...w.fs,
+      realpath: async (p: string) => (p === 'out/assets' ? '/shared/assets' : w.fs.realpath(p)),
+    };
+    const before = w.fs.snapshot();
+    const e = await failure(
+      mergeReports({ ...w.deps, fs: linked }, ['a'], { out: 'out', config: testConfig(), mode: 'append' }),
+    );
+    expect(e.code).toBe('invalid-report');
+    expect(e.hint).toContain('--assets-base');
+    expect(w.fs.snapshot()).toEqual(before);
+    // A shared base writes no viewer files beside the report: the link is not in the way.
+    const shared = testConfig({ writer: { assetsBase: '../assets/0.0.0/' } });
+    await mergeReports({ ...w.deps, fs: linked }, ['a'], { out: 'out', config: shared, mode: 'replace' });
+    expect(manifestOf(w, 'out').totals.spans).toBe(1);
+  });
+
   test('sibling folders with a common name prefix are fine', async () => {
     const w = createTestWriter();
     await writeReport(w, 'a', [spansRequest(1)]);

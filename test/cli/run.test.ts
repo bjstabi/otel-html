@@ -720,6 +720,34 @@ describe('run', () => {
     expect(seen).toEqual([{ FOO: 'bar' }]);
   });
 
+  test('run --append onto a report of another format version exits 1, and the command still ran', async () => {
+    const w = createTestWriter();
+    const first = start(w, ['run', '-o', 'out', ...node, '0']);
+    open.push(first);
+    expect(await first.result).toBe(0);
+    const path = 'out/data/manifest.js';
+    const text = w.fs.snapshot().get(path) ?? '';
+    await w.fs.writeTextAtomic(path, text.replace(/"formatVersion":\d+/, '"formatVersion":4'));
+    const h = start(w, [
+      'run',
+      '-o',
+      'out',
+      '--append',
+      '--http',
+      '0',
+      '--no-grpc',
+      '--',
+      process.execPath,
+      '-e',
+      'console.log("ran")',
+    ]);
+    open.push(h);
+    expect(await h.result).toBe(1);
+    expect(h.child).toContain('ran');
+    expect(h.stderr).toContain('is format 4');
+    expect(w.fs.snapshot().has(`out/${LOCK_PATH}`)).toBe(false);
+  });
+
   test('a report locked by a live process runs the command without a report', async () => {
     const w = createTestWriter();
     const lock = await acquireLock(w.deps, at('out', LOCK_PATH));

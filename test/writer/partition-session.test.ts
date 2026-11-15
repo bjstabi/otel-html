@@ -161,6 +161,46 @@ describe('PartitionSession', () => {
     await again.abort();
   });
 
+  test('an abort whose lock release throws rejects, and a second abort releases the lock', async () => {
+    const w = createTestWriter();
+    let failNext = true;
+    const fs = {
+      ...w.fs,
+      async remove(path: string) {
+        if (path.endsWith(LOCK_PATH) && failNext) {
+          failNext = false;
+          throw new Error('EACCES');
+        }
+        return w.fs.remove(path);
+      },
+    };
+    const s = await openSession({ ...w.deps, fs }, { out: OUT, config: cfg(), mode: 'replace' });
+    await expect(s.abort()).rejects.toThrow('EACCES');
+    expect(w.fs.snapshot().has(`${OUT}/${LOCK_PATH}`)).toBe(true);
+    await s.abort();
+    expect(w.fs.snapshot().has(`${OUT}/${LOCK_PATH}`)).toBe(false);
+    await s.abort(); // released: a further abort is a no-op
+  });
+
+  test('append into a report whose assets/ links out of it fails invalid-report; --assets-base is not refused', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(spans(1), 'a.json');
+    await s.close();
+    expect(w.fs.snapshot().has(`${OUT}/assets`) || (await w.fs.exists(`${OUT}/assets`))).toBe(true);
+    const linked = {
+      ...w.fs,
+      realpath: async (p: string) => (p === `${OUT}/assets` ? '/shared/assets' : w.fs.realpath(p)),
+    };
+    const deps = { ...w.deps, fs: linked };
+    const before = w.fs.snapshot();
+    const e = await failure(openSession(deps, { out: OUT, config: cfg(), mode: 'append' }));
+    expect(e.code).toBe('invalid-report');
+    expect(e.message).toContain('assets');
+    expect(e.hint).toContain('--assets-base');
+    expect(w.fs.snapshot()).toEqual(before);
+  });
+
   test('the lock is held while open', async () => {
     const w = createTestWriter();
     const s = await open(w);
