@@ -10,7 +10,7 @@ import {
   parseAnyManifest,
   type StatisticsKeys,
 } from '../../format/manifest.js';
-import { ROLLUP_OF, TABLES } from '../../format/parquet/columns.js';
+import { ROLLUP_OF, STATISTICS_TABLES, TABLES, type Table } from '../../format/parquet/columns.js';
 import { statisticsKeysFor } from '../../format/parquet/stats.js';
 import { MANIFEST_KEY, MANIFEST_PATH, partitionFilePath } from '../../format/paths.js';
 import { OtelHtmlError } from '../../model/errors.js';
@@ -36,13 +36,13 @@ export interface NewManifestOptions {
   version: string;
 }
 
-/** An empty, `complete: false` format-6 manifest (no stored epoch; the in-memory anchor is derived as a read derives it, and `withSharesFormat` upgrades a format-5 manifest an older build left on disk) in `site` format with `statisticsKeysFor` each table from `config`. */
+/** An empty, `complete: false` format-7 manifest (no stored epoch; the in-memory anchor is derived as a read derives it, and `withSharesFormat` upgrades a format-5 manifest an older build left on disk) in `site` format with `statisticsKeysFor` each table from `config`. */
 export function newRunManifest(o: NewManifestOptions): ManifestV4 {
   const statisticsKeys = Object.fromEntries(
-    TABLES.map((t) => [t, statisticsKeysFor(t, o.config)]),
+    STATISTICS_TABLES.map((t) => [t, statisticsKeysFor(t, o.config)]),
   ) as StatisticsKeys;
   return {
-    formatVersion: 6,
+    formatVersion: 7,
     otelHtmlVersion: o.version,
     title: o.title,
     epochUnixNano: (BigInt(Date.parse(o.createdAt)) * 1_000_000n).toString(),
@@ -118,7 +118,8 @@ function entryFrom(
     if (f === undefined) continue;
     const values: PartitionFile['values'] = {};
     // A key the job did not compute stays absent ("not computed"); the merge computes it. `null` is "over the cap".
-    for (const k of keys[t] ?? []) if (f.values[k] !== undefined) values[k] = f.values[k];
+    for (const k of (keys as Partial<Record<Table, string[]>>)[t] ?? [])
+      if (f.values[k] !== undefined) values[k] = f.values[k];
     const to = partitionFilePath(n, t);
     files[t] = { ...f, path: to, values };
     copies.push({ fromDir: dir, from: f.path, to });
@@ -132,8 +133,8 @@ function entryFrom(
  */
 function withSharesFormat(manifest: ManifestV4, added: readonly PartitionEntry[]): ManifestV4 {
   const shares = added.some((e) => e.files.traces?.serviceShare === true);
-  if (manifest.formatVersion === 6 || !shares) return manifest;
-  return { ...manifest, formatVersion: 6 };
+  if (manifest.formatVersion >= 6 || !shares) return manifest;
+  return { ...manifest, formatVersion: 7 };
 }
 
 function totalsAndRange(partitions: readonly PartitionEntry[]): Pick<ManifestV4, 'totals' | 'range'> {
@@ -316,6 +317,6 @@ export async function readRunManifest(fs: FileSystem, dir: string): Promise<Mani
   if (!(await fs.exists(path))) return null;
   const m = parseAnyManifest(reviveDataJson(unwrapDataFile(await fs.readText(path), MANIFEST_KEY)));
   if (!isPartitioned(m))
-    throw new OtelHtmlError('invalid-report', { path, expected: 'a format 5 or 6 manifest' });
+    throw new OtelHtmlError('invalid-report', { path, expected: 'a format 5 to 7 manifest' });
   return m;
 }

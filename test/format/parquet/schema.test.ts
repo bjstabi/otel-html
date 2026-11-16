@@ -17,7 +17,8 @@ describe('parquet table schemas', () => {
       expect(new Set(names).size).toBe(names.length);
       for (const s of SORT_COLUMNS[t]) expect(names).toContain(s);
       for (const s of FIXED_STATISTICS_COLUMNS[t]) expect(names).toContain(s);
-      expect(names).toContain(TIME_COLUMN[t]);
+      const time = TIME_COLUMN[t];
+      if (time !== null) expect(names).toContain(time);
       expect(arrowSchema(t).fields.map((f) => f.name)).toEqual(names);
     }
   });

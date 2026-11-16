@@ -100,7 +100,7 @@ export async function refreshReport(
  * anchor is frozen at load: URLs and the shown windows stay put, so the refreshed manifest keeps the previous one's.
  */
 export function keepAnchor(next: ManifestV4, previous: ManifestV4): ManifestV4 {
-  return next.formatVersion === 6 && previous.formatVersion === 6
+  return next.formatVersion >= 6 && previous.formatVersion >= 6
     ? { ...next, epochUnixNano: previous.epochUnixNano }
     : next;
 }

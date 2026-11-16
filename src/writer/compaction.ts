@@ -14,9 +14,22 @@ import {
   BloomCollector,
 } from '../format/parquet/bloom.js';
 import { checkRow, compareKeys, encodeColumns, sortKeyOf } from '../format/parquet/codec.js';
-import { ROLLUP_OF, type RollupTable, TABLE_COLUMNS, TABLES, type Table } from '../format/parquet/columns.js';
+import {
+  ROLLUP_OF,
+  type RollupTable,
+  type StatisticsTable,
+  TABLE_COLUMNS,
+  TABLES,
+  type Table,
+} from '../format/parquet/columns.js';
 import type { Row } from '../format/parquet/rows.js';
-import { type FileStatistics, fileStatistics, hasTimeEndMax, timeEndMaxOf } from '../format/parquet/stats.js';
+import {
+  type FileStatistics,
+  fileStatistics,
+  hasTimeEndMax,
+  statisticsKeysOf,
+  timeEndMaxOf,
+} from '../format/parquet/stats.js';
 import { encodeBatches, type PanicGuard, readColumns } from '../format/parquet/stream.js';
 import { partitionDir, partitionFilePath, partitionKey, partitionWrapperPath } from '../format/paths.js';
 import { encodeServiceShare, type ShareSpan, serviceShareOf } from '../format/service-share.js';
@@ -42,12 +55,12 @@ export interface CompactOptions {
   /** The partition number the compacted files are written to. */
   nextPartition: number;
   rowGroupRows: number;
-  statisticsKeys: Record<Table, string[]>;
+  statisticsKeys: Record<StatisticsTable, string[]>;
   /**
    * The statistics keys only a widget condition asked for, per table. A recomputed rollup keeps one that some input's
    * rollup lacks only when the union passes the flush guards (`planRollup`), not because the inputs did.
    */
-  widgetKeys?: Record<Table, string[]>;
+  widgetKeys?: Record<StatisticsTable, string[]>;
   facetValueCap: number;
   /** `local` also writes each final file's base64 script after it (never for the merge temporaries). */
   format?: ReportFormat;
@@ -819,7 +832,7 @@ async function mergeTable(
   guard: PanicGuard,
   onRows?: (chunk: ColumnBatch) => void,
 ): Promise<{ size: number; stats: FileStatistics; timeEndMax: string | null }> {
-  const keys = opts.statisticsKeys[table];
+  const keys = statisticsKeysOf(opts.statisticsKeys, table);
   let level: string[] = [...inputs];
   const temporary: string[] = [];
   for (let round = 0; level.length > fanoutOf(round); round++) {
@@ -923,6 +936,8 @@ export async function compactPartitions(
   };
   try {
     for (const table of TABLES) {
+      // `widget_traces` is derived from a partition's spans, never merged from its inputs.
+      if (table === 'widget_traces') continue;
       const rollupTable = table === 'span_rollups' || table === 'log_rollups' ? table : null;
       const plan = rollupTable === null ? undefined : plans[rollupTable];
       if (rollupTable !== null && plan === undefined) continue;

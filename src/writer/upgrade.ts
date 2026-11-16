@@ -195,9 +195,9 @@ async function upgradePartitioned(
   );
   await fs.writeTextAtomic(at(dir, '.nojekyll'), '');
   const engine = { version: ENGINE_VERSION, format, assetsBase };
-  // 5 to 6 rewrites the manifest only: it drops `epochUnixNano`, and no partition file changes.
-  const toSix = manifest.formatVersion === 5;
-  if (toSix || JSON.stringify(engine) !== JSON.stringify(manifest.engine)) {
+  // 5 or 6 to 7 rewrites the manifest only (5 also drops `epochUnixNano`); no partition file changes.
+  const toSeven = manifest.formatVersion !== PARTITION_FORMAT_VERSION;
+  if (toSeven || JSON.stringify(engine) !== JSON.stringify(manifest.engine)) {
     await writeManifest(fs, dir, { ...manifest, engine, formatVersion: PARTITION_FORMAT_VERSION });
   }
   // Also for a site report that is already site: an earlier upgrade may have died after its manifest write.

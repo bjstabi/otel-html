@@ -112,11 +112,11 @@ const jobEntry = (plan: { state: RunReportState }) => {
 describe('newRunManifest', () => {
   test('is a format-6 manifest that stores no epoch', async () => {
     const m = await newManifest();
-    expect(m.formatVersion).toBe(6);
+    expect(m.formatVersion).toBe(7);
     const w = createTestWriter();
     await writeRunReport(w.deps, 'site/run', m);
     expect(w.fs.snapshot().get('site/run/data/manifest.js')).not.toContain('epochUnixNano');
-    expect((await readRunManifest(w.fs, 'site/run'))?.formatVersion).toBe(6);
+    expect((await readRunManifest(w.fs, 'site/run'))?.formatVersion).toBe(7);
   });
   test('is an empty incomplete v4 site manifest with the CI statistics keys', async () => {
     const m = await newManifest();
@@ -495,24 +495,24 @@ describe('format 6 in a run report', () => {
       { source: 'job:7#flush:0', files: traces('partitions/0/traces.parquet', shares), carried: true },
     ]);
 
-  test('an added traces file with serviceShare makes the report format 6, the entry keeps it', async () => {
+  test('an added traces file with serviceShare makes the report format 7, the entry keeps it', async () => {
     const plan = sync(await legacyManifest(), emptyRunState(1), [ju(upd(true))]);
-    expect(plan.manifest.formatVersion).toBe(6);
+    expect(plan.manifest.formatVersion).toBe(7);
     expect(plan.manifest.partitions[0]?.files.traces?.serviceShare).toBe(true);
     // the manifest as written (no epoch) is valid, and parses back to the same partitions
     const w = createTestWriter();
     await writeRunReport(w.deps, 'site/run', plan.manifest);
     expect(w.fs.snapshot().get('site/run/data/manifest.js')).not.toContain('epochUnixNano');
     const back = await readRunManifest(w.fs, 'site/run');
-    expect(back?.formatVersion).toBe(6);
+    expect(back?.formatVersion).toBe(7);
     expect(back?.partitions).toEqual(plan.manifest.partitions);
   });
-  test('without shares a format-5 report stays format 5, and a format-6 report stays format 6', async () => {
+  test('without shares a format-5 report stays format 5, and a format-7 report stays format 7', async () => {
     const m = await legacyManifest();
     expect(sync(m, emptyRunState(1), [ju(upd(false))]).manifest.formatVersion).toBe(5);
     const six = sync(m, emptyRunState(1), [ju(upd(true))]);
     const later = sync(six.manifest, six.state, [ju({ ...upd(false), sequence: 2 })]);
-    expect(later.manifest.formatVersion).toBe(6);
+    expect(later.manifest.formatVersion).toBe(7);
   });
   test('renumbering a format-6 manifest keeps serviceShare', async () => {
     const six = sync(await newManifest(), emptyRunState(1), [ju(upd(true))]);

@@ -10,9 +10,9 @@ import {
   pushRow,
 } from '../format/parquet/batch.js';
 import { checkRow, encodeColumns } from '../format/parquet/codec.js';
-import { type RollupTable, TABLES, type Table } from '../format/parquet/columns.js';
+import { type RollupTable, type StatisticsTable, TABLES, type Table } from '../format/parquet/columns.js';
 import type { Row } from '../format/parquet/rows.js';
-import { fileStatistics, hasTimeEndMax, timeEndMaxOf } from '../format/parquet/stats.js';
+import { fileStatistics, hasTimeEndMax, statisticsKeysOf, timeEndMaxOf } from '../format/parquet/stats.js';
 import { partitionDir, partitionFilePath, partitionKey, partitionWrapperPath } from '../format/paths.js';
 import { at } from './checkpoint.js';
 import type { FileSystem } from './ports.js';
@@ -21,7 +21,7 @@ import { writeWrapper } from './wrapper-file.js';
 export interface PartitionWriterOptions {
   out: string;
   rowGroupRows: number;
-  statisticsKeys: Record<Table, string[]>;
+  statisticsKeys: Record<StatisticsTable, string[]>;
   facetValueCap: number;
   nextPartition: number;
   /** `local` also writes each Parquet file's base64 script (`<table>.parquet.js`) after the file. */
@@ -164,7 +164,12 @@ export class PartitionWriter {
         files[table] = {
           path,
           bytes: bytes.length,
-          ...fileStatistics(table, batch, this.#opts.statisticsKeys[table], this.#opts.facetValueCap),
+          ...fileStatistics(
+            table,
+            batch,
+            statisticsKeysOf(this.#opts.statisticsKeys, table),
+            this.#opts.facetValueCap,
+          ),
           ...(hasTimeEndMax(table) ? { timeEndMax: timeEndMaxOf(batch) } : {}),
           ...(rollup === undefined ? {} : { rollup }),
           ...(table === 'traces' ? { serviceShare: true as const } : {}),

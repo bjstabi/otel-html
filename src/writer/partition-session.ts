@@ -7,12 +7,21 @@ import {
 } from '../format/manifest.js';
 import { batchFromRows, type ColumnBatch } from '../format/parquet/batch.js';
 import { checkRow, encodeColumns } from '../format/parquet/codec.js';
-import { ROLLUP_OF, type RollupTable, TABLE_COLUMNS, TABLES, type Table } from '../format/parquet/columns.js';
+import {
+  ROLLUP_OF,
+  type RollupTable,
+  STATISTICS_TABLES,
+  type StatisticsTable,
+  TABLE_COLUMNS,
+  TABLES,
+  type Table,
+} from '../format/parquet/columns.js';
 import { applyNormalization, logRow, pointRow, type Row, spanRow } from '../format/parquet/rows.js';
 import {
   completeStatistics,
   fileStatistics,
   statisticsKeysFor,
+  statisticsKeysOf,
   widgetOnlyKeysFor,
 } from '../format/parquet/stats.js';
 import { type PanicGuard, readColumns } from '../format/parquet/stream.js';
@@ -242,9 +251,9 @@ class PartitionSession implements WriterSession {
   /** The state `release` serialised before it dropped the live structures; the final checkpoint writes these. */
   #frozen: { dedupe: string; metricStreams: string; drain: string } | null = null;
   readonly #writer: PartitionWriter;
-  readonly #statisticsKeys: Record<Table, string[]>;
+  readonly #statisticsKeys: Record<StatisticsTable, string[]>;
   /** The statistics keys only a widget condition asked for, per table: a rollup keeps one while it is cheap (`rollupKeyAllowed`). */
-  readonly #widgetKeys: Record<Table, string[]>;
+  readonly #widgetKeys: Record<StatisticsTable, string[]>;
   /** The (table, key) pairs a widget key was left out of a rollup for, already warned about this session. */
   readonly #toldKeys = new Set<string>();
   readonly #createdAt: string;
@@ -297,14 +306,12 @@ class PartitionSession implements WriterSession {
     this.#dedupe = r.dedupe;
     this.#normalizer = r.normalizer;
     this.#drain = r.drain;
-    this.#statisticsKeys = Object.fromEntries(TABLES.map((t) => [t, statisticsKeysFor(t, config)])) as Record<
-      Table,
-      string[]
-    >;
-    this.#widgetKeys = Object.fromEntries(TABLES.map((t) => [t, widgetOnlyKeysFor(t, config)])) as Record<
-      Table,
-      string[]
-    >;
+    this.#statisticsKeys = Object.fromEntries(
+      STATISTICS_TABLES.map((t) => [t, statisticsKeysFor(t, config)]),
+    ) as Record<StatisticsTable, string[]>;
+    this.#widgetKeys = Object.fromEntries(
+      STATISTICS_TABLES.map((t) => [t, widgetOnlyKeysFor(t, config)]),
+    ) as Record<StatisticsTable, string[]>;
     this.#writer = new PartitionWriter(deps.fs, {
       out,
       rowGroupRows: deps.rowGroupRows ?? config.writer.rowGroupRows,
@@ -1137,7 +1144,7 @@ class PartitionSession implements WriterSession {
         const done = await completeStatistics(
           table,
           f,
-          this.#statisticsKeys[table],
+          statisticsKeysOf(this.#statisticsKeys, table),
           this.#config.writer.facetValueCap,
           () => Promise.resolve(bytes),
           watch.guard,
@@ -1146,7 +1153,7 @@ class PartitionSession implements WriterSession {
           string,
           string[] | null
         >;
-        for (const k of this.#statisticsKeys[table]) values[k] = done.values[k] ?? null;
+        for (const k of statisticsKeysOf(this.#statisticsKeys, table)) values[k] = done.values[k] ?? null;
         files[table] = {
           path,
           bytes: f.bytes,

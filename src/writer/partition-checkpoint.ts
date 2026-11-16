@@ -1,7 +1,7 @@
 import type { ResolvedConfig } from '../config/schema.js';
 import { ENGINE_VERSION } from '../format/engine.js';
 import type { ManifestV4, PartitionEntry } from '../format/manifest.js';
-import type { Table } from '../format/parquet/columns.js';
+import type { StatisticsTable } from '../format/parquet/columns.js';
 import type { PointNormalization } from '../format/parquet/rows.js';
 import type { Signal, StateSlot } from '../format/paths.js';
 import type { SessionStateV2 } from '../format/state.js';
@@ -32,7 +32,7 @@ interface StateInputs {
   nextPartition: number;
   flushed: readonly number[];
   drain: ReturnType<Drain['toJSON']>;
-  statisticsKeys: Record<Table, string[]>;
+  statisticsKeys: Record<StatisticsTable, string[]>;
 }
 
 export function buildState(
@@ -61,7 +61,7 @@ interface ManifestInputs {
   createdAt: string;
   /** Committed and pending, in ascending n. */
   partitions: readonly PartitionEntry[];
-  statisticsKeys: Record<Table, string[]>;
+  statisticsKeys: Record<StatisticsTable, string[]>;
   config: ResolvedConfig;
   /** The format of the manifest written: 6 unless a caller names another. */
   formatVersion?: ManifestV4['formatVersion'];

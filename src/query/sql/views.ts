@@ -101,9 +101,10 @@ export function viewStatements(
   resolve: (path: string) => string,
   set: 'all' | 'base' | 'rollups' = 'all',
 ): string[] {
-  return TABLES.filter((t) => set === 'all' || isRollup(t) === (set === 'rollups')).map((table) =>
-    viewStatement(manifest, table, resolve, 'CREATE OR REPLACE VIEW'),
-  );
+  // `widget_traces` has no view: its files carry per-report `var:` columns, which one `union_by_name = false` view cannot read.
+  return TABLES.filter(
+    (t) => t !== 'widget_traces' && (set === 'all' || isRollup(t) === (set === 'rollups')),
+  ).map((table) => viewStatement(manifest, table, resolve, 'CREATE OR REPLACE VIEW'));
 }
 
 /**

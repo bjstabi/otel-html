@@ -123,7 +123,7 @@ export function Shell(props: {
   const manifest = dataSource.manifest;
   const epoch = BigInt(manifest.epochUnixNano);
   // a format-6 report's URLs carry absolute unix nanoseconds against its anchor (frozen at load, also across a Refresh)
-  const absolute = manifest.formatVersion === 6;
+  const absolute = manifest.formatVersion >= 6;
   // the report's range as of the committed render (a Refresh grows it): the selection aligns a long window against it
   const rangeRef = useRef<TimeWindow | null>(manifestRange(manifest));
   useLayoutEffect(() => {

@@ -7,8 +7,8 @@ import { relTime } from '../../src/viewer/data/span-results.js';
 const YEAR = 365n * 86_400n * 1_000_000_000n;
 const START = 1_700_000_000_000_000_000n;
 
-const body = (range: { start: bigint; end: bigint } | null): unknown => ({
-  formatVersion: 6,
+const body = (range: { start: bigint; end: bigint } | null, formatVersion = 6): unknown => ({
+  formatVersion,
   otelHtmlVersion: '0.3.0',
   title: 't',
   createdAt: '2026-11-06T00:00:00.000Z',
@@ -47,4 +47,16 @@ test('a refresh keeps the first load anchor of a format-6 report even when older
   expect(kept.epochUnixNano).toBe(String(START));
   // the older range is then a negative start, relative to the kept anchor
   expect(manifestRange(kept)).toEqual({ start: -Number(YEAR), end: Number(YEAR) });
+});
+
+test('a refresh keeps the first load anchor of a format-7 report as it does a format-6 one', () => {
+  const first = parseAnyManifest(body({ start: START, end: START + YEAR }, 7));
+  const grown = parseAnyManifest(body({ start: START - YEAR, end: START + YEAR }, 7));
+  if (first.formatVersion !== 7 || grown.formatVersion !== 7) throw new Error('not format 7');
+  expect(grown.epochUnixNano).toBe(String(START - YEAR));
+  expect(keepAnchor(grown, first).epochUnixNano).toBe(String(START));
+  // a 6 then 7 pair (an upgrade between refreshes) keeps the anchor too
+  const six = parseAnyManifest(body({ start: START, end: START + YEAR }, 6));
+  if (six.formatVersion !== 6) throw new Error('not format 6');
+  expect(keepAnchor(grown, six).epochUnixNano).toBe(String(START));
 });

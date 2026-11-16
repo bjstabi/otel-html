@@ -7,7 +7,7 @@ import { wrapBinaryDataFilePieces } from '../../src/format/data-file.js';
 import { type PartitionEntry, ROLLUP_GRAIN_NS, type RollupDescription } from '../../src/format/manifest.js';
 import { batchFromRows } from '../../src/format/parquet/batch.js';
 import { decodeTable, encodeColumnsUnfiltered, encodeTable } from '../../src/format/parquet/codec.js';
-import type { Table } from '../../src/format/parquet/columns.js';
+import type { StatisticsTable, Table } from '../../src/format/parquet/columns.js';
 import type { Row } from '../../src/format/parquet/rows.js';
 import { completeStatistics, fileStatistics } from '../../src/format/parquet/stats.js';
 import { partitionKey, partitionWrapperPath } from '../../src/format/paths.js';
@@ -44,7 +44,7 @@ import { manifestOf, tableRowsOf } from './helpers.js';
 
 const OUT = '/out';
 const ROW_GROUP = 5;
-const KEYS: Record<Table, string[]> = {
+const KEYS: Record<StatisticsTable, string[]> = {
   spans: ['scope_name', 'service_name'],
   logs: ['scope_name', 'service_name', 'attr:k'],
   points: ['metric_name'],

@@ -136,7 +136,7 @@ export async function loadPartitionCheckpoint(
     // A format-4 report is refused by the reader; for an append it is a version mismatch like any other format.
     if (e instanceof OtelHtmlError && e.code === 'invalid-report' && e.message === oldFormatMessage(4)) {
       throw new OtelHtmlError('version-mismatch', {
-        message: `cannot append: the report at ${out} is format 4; writer.format local or site writes format 6`,
+        message: `cannot append: the report at ${out} is format 4; writer.format local or site writes format 7`,
         path: 'manifest.formatVersion',
         hint: 'pass --replace to overwrite it; nothing converts a format 4 report',
       });
@@ -145,7 +145,7 @@ export async function loadPartitionCheckpoint(
   });
   if (!isPartitioned(manifest)) {
     throw new OtelHtmlError('version-mismatch', {
-      message: `cannot append: the report at ${out} is format ${manifest.formatVersion}; writer.format local or site writes format 6`,
+      message: `cannot append: the report at ${out} is format ${manifest.formatVersion}; writer.format local or site writes format 7`,
       path: 'manifest.formatVersion',
       hint: `use merge to convert: \`otel-html merge ${out} -o <dir> --format ${format}\``,
     });
@@ -166,7 +166,7 @@ export async function loadPartitionCheckpoint(
     // Format 6 derives the manifest's epoch from the range (or createdAt), which the session's own epoch need not equal.
     (s) =>
       s.nextPartition === next &&
-      (manifest.formatVersion === 6 || (s.epochUnixNano ?? '0') === manifest.epochUnixNano),
+      (manifest.formatVersion >= 6 || (s.epochUnixNano ?? '0') === manifest.epochUnixNano),
     (s) => s.checkpoint,
   );
   return { manifest, state, slot };

@@ -4,7 +4,13 @@ import type { AnyValue, Attributes } from '../../model/anyvalue.js';
 import { attributesFromJson } from '../columns.js';
 import type { PartitionFile } from '../manifest.js';
 import type { ColumnBatch } from './batch.js';
-import { FIXED_STATISTICS_COLUMNS, TABLE_COLUMNS, type Table, TIME_COLUMN } from './columns.js';
+import {
+  FIXED_STATISTICS_COLUMNS,
+  type StatisticsTable,
+  TABLE_COLUMNS,
+  type Table,
+  TIME_COLUMN,
+} from './columns.js';
 import { type PanicGuard, readColumns } from './stream.js';
 
 export interface FileStatistics {
@@ -65,8 +71,9 @@ const PARSE_CACHE_CAP = 4_096;
 const OBSERVED = 'observed_time_unix_nano';
 
 function effectiveTime(table: Table, batch: ColumnBatch, i: number): bigint | null {
-  const t =
-    batch.cells[TIME_COLUMN[table]]?.[i] ?? (table === 'logs' ? batch.cells[OBSERVED]?.[i] : undefined);
+  const column = TIME_COLUMN[table];
+  if (column === null) return null;
+  const t = batch.cells[column]?.[i] ?? (table === 'logs' ? batch.cells[OBSERVED]?.[i] : undefined);
   return typeof t === 'bigint' ? t : null;
 }
 
@@ -154,6 +161,10 @@ export function timeEndMaxOf(batch: ColumnBatch): string | null {
   return max === null ? null : max.toString();
 }
 
+/** The recorded statistics keys of `table`; `widget_traces` has none. */
+export const statisticsKeysOf = (keys: Record<StatisticsTable, string[]>, table: Table): string[] =>
+  table === 'widget_traces' ? [] : keys[table];
+
 /** The keys the writer is told to keep for `table`: dashboard variables and `writer.statisticsKeys`. */
 function explicitKeysFor(
   table: Table,
@@ -174,6 +185,7 @@ export function statisticsKeysFor(
   table: Table,
   config: { dashboards: readonly ResolvedDashboard[]; writer: { statisticsKeys: readonly string[] } },
 ): string[] {
+  if (table === 'widget_traces') return [];
   const out = explicitKeysFor(table, config);
   for (const k of widgetConditionKeys(config.dashboards)) out.add(k);
   return [...out].filter((k) => sourceOf(table, k) !== null);
@@ -187,6 +199,7 @@ export function widgetOnlyKeysFor(
   table: Table,
   config: { dashboards: readonly ResolvedDashboard[]; writer: { statisticsKeys: readonly string[] } },
 ): string[] {
+  if (table === 'widget_traces') return [];
   const explicit = explicitKeysFor(table, config);
   return widgetConditionKeys(config.dashboards).filter(
     (k) => !explicit.has(k) && sourceOf(table, k) !== null,

@@ -25,6 +25,8 @@ const TABLE_NOTES: Readonly<Record<Table, string>> = {
   span_rollups: 'Spans counted per time grain and dimension combination (format 5; optional per partition).',
   log_rollups:
     'Log records counted per time grain and dimension combination (format 5; optional per partition).',
+  widget_traces:
+    'The traces each indexed dashboard traces widget matches, one row per condition and trace (format 7; optional per partition).',
 };
 
 const MANIFEST_FIELDS = {
@@ -60,6 +62,8 @@ const PARTITION_FILE_FIELDS = {
     'format 5, rollup tables only, required: `{ grainNs, dimensions, durationBuckets? }`, what the file groups by',
   serviceShare:
     'format 6, `traces` files only, optional: `true` when the file has the `service_share` column, so its rows may carry a share (a row that does not, such as a trace compacted from a format-5 input, is null and a reader falls back to the spans; see [`service_share`](#service_share))',
+  widgetIndex:
+    'format 7, `widget_traces` files only, required: `{ conditions, variables }`, the sorted condition hashes and `var:` keys the file covers',
 } satisfies Record<keyof PartitionFile, string>;
 
 const fieldRows = (fields: Readonly<Record<string, string>>): string =>
@@ -84,7 +88,9 @@ function tableSection(table: Table): string {
     TABLE_NOTES[table],
     '',
     `- Sorted by: ${list(SORT_COLUMNS[table])}`,
-    `- Time column (for the partition's \`timeMin\` and \`timeMax\`): \`${TIME_COLUMN[table]}\`${table === 'logs' ? ', or `observed_time_unix_nano` for a row where it is null' : ''}`,
+    TIME_COLUMN[table] === null
+      ? '- Time column: none (`timeMin` and `timeMax` are null)'
+      : `- Time column (for the partition's \`timeMin\` and \`timeMax\`): \`${TIME_COLUMN[table]}\`${table === 'logs' ? ', or `observed_time_unix_nano` for a row where it is null' : ''}`,
     `- Fixed statistics columns: ${list(fixed)}`,
     '',
     '| column | Arrow type | logical type | nullable |',
@@ -141,7 +147,7 @@ spans, so none of them is the trace's share; a reader must not use one as the wh
     `## The views
 
 The viewer reads the data only through seven views, one per table (\`spans\`, \`logs\`, \`points\`, \`traces\`,
-\`patterns\`, \`span_rollups\`, \`log_rollups\`). Each view has the name of its table and is the union of that table's file in every partition that lists
+\`patterns\`, \`span_rollups\`, \`log_rollups\`; \`widget_traces\` has none, its columns differ per report). Each view has the name of its table and is the union of that table's file in every partition that lists
 one, in manifest order. It has the table's columns, in the order above, then two virtual columns:
 
 | column | type | meaning |
