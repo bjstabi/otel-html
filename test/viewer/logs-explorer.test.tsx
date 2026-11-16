@@ -101,7 +101,16 @@ function landingBuckets(): TimeBuckets<LogSeverityKey> {
 
 function logsResult(rows: LogRow[], total = rows.length): LogQueryResult {
   const r = rollupsOf(rows);
-  return { mode: 'logs', rows, total, matched: total, facets: r.facets, buckets: r.buckets, residual: null };
+  return {
+    mode: 'logs',
+    rows,
+    total,
+    matched: total,
+    facets: r.facets,
+    buckets: r.buckets,
+    residual: null,
+    next: null,
+  };
 }
 
 const DECLINED: PatternRow = {
@@ -140,6 +149,7 @@ function tracesResult(): LogQueryResult {
     facets: r.facets,
     buckets: r.buckets,
     residual: null,
+    next: null,
   };
 }
 

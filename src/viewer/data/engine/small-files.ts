@@ -43,6 +43,8 @@ export function smallFiles(deps: SmallFilesDeps): SmallFiles {
   const threshold = deps.threshold ?? SMALL_FILE_BYTES;
   const concurrency = Math.max(1, deps.concurrency ?? DEFAULT_CONCURRENCY);
   const entries = new Map<string, Entry>();
+  /** path -> the manifest size a fresh fetch still disagreed with: it stays on range reads until forgotten or resized */
+  const mismatched = new Map<string, number>();
   let running = 0;
   const waiting: (() => void)[] = [];
 
@@ -70,6 +72,8 @@ export function smallFiles(deps: SmallFilesDeps): SmallFiles {
           // a stale cache entry or a host's error page: ask the server once, and keep range reads if it still differs
           bytes = await deps.fetchWhole(path, true);
           if (bytes.length !== expected) {
+            // forgotten while in flight: the next prepare must fetch again
+            if (entries.get(path) === entry) mismatched.set(path, expected);
             throw new Error(`${path}: fetched ${bytes.length} bytes, the manifest says ${expected}`);
           }
         }
@@ -95,6 +99,7 @@ export function smallFiles(deps: SmallFilesDeps): SmallFiles {
       for (const path of new Set(paths)) {
         const size = deps.bytesOf(path);
         if (size === undefined || size > threshold) continue;
+        if (mismatched.get(path) === size) continue;
         let entry = entries.get(path);
         if (entry?.swapped) continue;
         if (!entry) {
@@ -118,7 +123,10 @@ export function smallFiles(deps: SmallFilesDeps): SmallFiles {
       }
     },
     forget(paths) {
-      for (const path of paths) entries.delete(path);
+      for (const path of paths) {
+        entries.delete(path);
+        mismatched.delete(path);
+      }
     },
   };
 }

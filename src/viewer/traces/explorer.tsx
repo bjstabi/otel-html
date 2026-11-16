@@ -4,7 +4,16 @@ import { parseUnixNanos, type SpanId, type TraceId } from '../../model/ids.js';
 import { Chart } from '../components/chart.js';
 import { ColumnPicker } from '../components/column-picker.js';
 import { ExplorerControls } from '../components/explorer-controls.js';
-import { ErrorCard, NoMatch, PILL, parseSort, QueryNote, sortableOf } from '../components/explorer-states.js';
+import {
+  ErrorCard,
+  LoadingNote,
+  NoMatch,
+  PageStatus,
+  PILL,
+  parseSort,
+  QueryNote,
+  sortableOf,
+} from '../components/explorer-states.js';
 import {
   downloadBlob,
   type ExportFormat,
@@ -20,11 +29,14 @@ import { HistogramCard, SPAN_STATUS_SERIES } from '../components/histogram-card.
 import { ResultsTable, type SortState } from '../components/results-table.js';
 import { copyWidgetItem } from '../dashboards/copy-widget.js';
 import type { DataSource } from '../data/data-source.js';
+import { pagesSpanList, residualOf } from '../data/list-paging.js';
 import { manifestRange } from '../data/manifest-range.js';
 import {
   CORE_SPAN_FACET_KEYS,
   type DurationBin,
+  type SpanPointsQuery,
   type SpanQuery,
+  type SpanQueryResult,
   type SpanRow,
   type TraceRow,
 } from '../data/results.js';
@@ -32,6 +44,7 @@ import { isLongWindow } from '../data/time-window.js';
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome, useWidgetCopy } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
+import { pageSize, useListPages } from '../state/list-pages.js';
 import {
   PAGE_OPTIONS,
   type PageMode,
@@ -45,13 +58,14 @@ import { useTheme } from '../theme/theme-provider.js';
 import { attributeColumn, SPAN_COLUMNS_UI, TRACE_COLUMNS_UI } from './columns.js';
 import { RedStrip } from './red-strip.js';
 import { TracePanel } from './trace-panel.js';
-import { useSpanQuery } from './use-span-query.js';
+import { useSpanPoints, useSpanQuery } from './use-span-query.js';
 import {
   type ChartView,
   cssTokenReader,
   GROUPED_VIEWS,
   type Measure,
   paddedAxis,
+  pointplotOf,
   resolveCssVars,
   VIEW_BUILDERS,
 } from './views.js';
@@ -139,6 +153,48 @@ export function TracesExplorer(props: { dataSource: DataSource }): JSX.Element {
   return <ExplorerBody dataSource={props.dataSource} />;
 }
 
+/**
+ * The Point plot view: duration against start for up to `listCap` spans or traces, from a statement of its own (the
+ * list loads 200 at a time, which is too few points). It runs only while the view shows, and asks for points alone.
+ */
+function PointCard(props: {
+  dataSource: DataSource;
+  query: SpanPointsQuery;
+  listCap: number;
+  total: number;
+  mode: string;
+}): JSX.Element {
+  const { query, listCap } = props;
+  const { resolved } = useTheme();
+  const own = useMemo<SpanPointsQuery>(
+    () => ({
+      condition: query.condition,
+      text: query.text,
+      window: query.window,
+      mode: query.mode,
+      sort: query.sort,
+      limit: listCap,
+    }),
+    [query, listCap],
+  );
+  const { state } = useSpanPoints(props.dataSource, own);
+  const shown = state.status === 'ready' ? state.result : state.status === 'loading' ? state.previous : null;
+  const option = useMemo(() => {
+    if (shown === null) return null;
+    // `resolved` re-reads the theme tokens when light/dark changes.
+    void resolved;
+    return resolveCssVars(pointplotOf(shown.slice(0, listCap)), cssTokenReader());
+  }, [shown, listCap, resolved]);
+  if (state.status === 'error')
+    return <ErrorCard title="The point plot could not run" message={state.message} gone={state.gone} />;
+  if (option === null) return <LoadingNote />;
+  return (
+    <div className="rounded-card border border-hairline bg-surface p-3">
+      <Chart option={option} height={320} ariaLabel={`Point plot of ${props.total} ${props.mode}`} />
+    </div>
+  );
+}
+
 function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const { dataSource } = props;
   const manifest = dataSource.manifest;
@@ -173,7 +229,16 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       window: sel.window,
       mode,
       sort: { column: sort.column, dir: sort.dir },
-      limit: manifest.config.viewer.listCap,
+      // a start-sorted list reads a page and loads the next on scroll; any other is one statement
+      limit: pagesSpanList({
+        mode,
+        sortColumn: sort.column,
+        residual: residualOf(sel.condition, 'span'),
+        idTable: false,
+        longWindow: long && sel.window !== null,
+      })
+        ? pageSize(manifest.config.viewer.listCap)
+        : manifest.config.viewer.listCap,
       // Grouping is a presentation concern in M1: group-by views are built from the result's facets.
       groupBy: null,
       measureBy: null,
@@ -210,10 +275,17 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       ).facets,
     shown?.facets ?? null,
   );
-  const result = useMemo(
-    () => (shown === null || loadedFacets === null ? shown : { ...shown, facets: loadedFacets }),
-    [shown, loadedFacets],
+  const pages = useListPages(shown, JSON.stringify(query), manifest.config.viewer.listCap, (cursor, signal) =>
+    // facets, the timeline and the durations belong to the first page and stay as they are while scrolling
+    dataSource.querySpans({ ...query, cursor, needs: ['rows'] }, signal),
   );
+  const result = useMemo(() => {
+    if (shown === null) return null;
+    const rows = pages.rows === shown.rows ? shown.rows : pages.rows;
+    return loadedFacets === null && rows === shown.rows
+      ? shown
+      : { ...shown, rows, facets: loadedFacets ?? shown.facets };
+  }, [shown, loadedFacets, pages.rows]);
 
   const clearFilters = (): void => {
     sel.clear('condition');
@@ -235,7 +307,19 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
             : `Export is unavailable because the last query failed: ${state.message}`,
         );
       }
-      const all = state.result.rows;
+      // the list holds the pages scrolled to; the export is the list up to `listCap`, as one statement of its own
+      let all: SpanQueryResult['rows'] = pages.rows;
+      if (all.length < Math.min(state.result.total, manifest.config.viewer.listCap)) {
+        all = (
+          await dataSource.querySpans({
+            ...query,
+            limit: manifest.config.viewer.listCap,
+            cursor: null,
+            needs: ['rows'],
+            facetKeys: [],
+          })
+        ).rows;
+      }
       const exportedSpans = all.filter(isSpanRow);
       let ctx: Parameters<typeof exportRows>[2];
       if (format === 'otlp-json') {
@@ -277,6 +361,8 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
 
   const chartOption = useMemo(() => {
     if (result === null || view === 'list' || view === 'table') return null;
+    // the point plot draws from its own statement (`PointCard`), not from the pages of the list
+    if (view === 'pointplot') return null;
     const chart: ChartView = view;
     // `resolved` re-reads the theme tokens when light/dark changes.
     void resolved;
@@ -408,6 +494,14 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                 <div className="min-w-0">
                   {result.total === 0 ? (
                     <NoMatch noun={mode === 'spans' ? 'spans' : 'traces'} onClear={clearFilters} />
+                  ) : view === 'pointplot' ? (
+                    <PointCard
+                      dataSource={dataSource}
+                      query={query}
+                      listCap={manifest.config.viewer.listCap}
+                      total={result.total}
+                      mode={mode}
+                    />
                   ) : chartOption !== null ? (
                     <div className="rounded-card border border-hairline bg-surface p-3">
                       <Chart
@@ -441,6 +535,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                           selectedId={sel.spanId}
                           epoch={epoch}
                           colors={colors}
+                          onEndReached={pages.loadMore}
                         />
                       ) : (
                         <ResultsTable
@@ -455,8 +550,10 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                           epoch={epoch}
                           colors={colors}
                           serviceShare={dataSource.serviceShare}
+                          onEndReached={pages.loadMore}
                         />
                       )}
+                      <PageStatus loading={pages.loading} error={pages.error} />
                     </div>
                   )}
                 </div>

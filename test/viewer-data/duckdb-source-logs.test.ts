@@ -6,7 +6,7 @@ import type { DataSource } from '../../src/viewer/data/data-source.js';
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { type LogRef, type LogRow, type LogTraceRow, logRef } from '../../src/viewer/data/log-query.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
-import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
+import { type QueryEngine, sequentialBatch } from '../../src/viewer/data/query-engine.js';
 import type { LogQuery } from '../../src/viewer/data/results.js';
 import type { TestDb } from '../../test-support/duckdb-node.js';
 import {
@@ -198,8 +198,8 @@ describe('queryLogs', () => {
     expect(q.buckets.total('error')).toBe(2);
     expect(q.buckets.total('fatal')).toBe(2);
     expect(q.buckets.total('info')).toBe(0);
-    // rows, core facets, attribute facets, timeline
-    expect(r.arrow).toBe(4);
+    // rows, their count, core facets, attribute facets, timeline
+    expect(r.arrow).toBe(5);
     expect(r.exec).toBe(0);
   });
 
@@ -266,7 +266,7 @@ describe('queryLogs', () => {
     expect(alone.value.total).toBe(rows.total);
     expect(alone.value.matched).toBe(rows.total);
     const both = await counted(() => fresh().queryLogs(query({ needs: ['rows', 'total'] })));
-    expect(both.arrow).toBe(1);
+    expect(both.arrow).toBe(2); // the page and its count
     expect(both.value.total).toBe(rows.total);
     const traces = await counted(() =>
       fresh().queryLogs(query({ mode: 'traces', needs: ['total'], sort: { column: 'first', dir: 'asc' } })),
@@ -280,7 +280,7 @@ describe('queryLogs', () => {
   test('traceId narrows to one trace, pruned through the traces partitions', async () => {
     const r = await counted(() => fresh().queryLogs(query({ traceId: T1, needs: ['rows'] })));
     expect(ids(r.value.rows as LogRow[])).toEqual(['a2', 'b2', 'b3']);
-    expect(r.arrow).toBe(2); // trace partitions, rows
+    expect(r.arrow).toBe(3); // trace partitions, rows, count
     const none = await ds.queryLogs(query({ traceId: parseTraceId(hex(99, 32), 'test'), needs: ['rows'] }));
     expect(none.rows).toEqual([]);
   });
@@ -322,7 +322,7 @@ describe('queryLogs', () => {
       { value: 'warn', count: 1 },
     ]);
     expect(all.value.buckets.total('error')).toBe(2);
-    expect(all.arrow).toBe(5); // candidates, rows, core and attribute facets, timeline
+    expect(all.arrow).toBe(6); // candidates, rows, their count, core and attribute facets, timeline
     expect(all.exec).toBe(2); // the id table: created, dropped
     expect(db.rows("SELECT table_name FROM duckdb_tables() WHERE table_name LIKE 'otel_residual%'")).toEqual(
       [],
@@ -365,7 +365,7 @@ describe('queryLogs', () => {
       `"CREATE TEMP TABLE otel_residual_N AS SELECT * FROM read_csv('otel_residual_N.csv', header = true, columns = {'filename': 'VARCHAR', 'file_row_number': 'BIGINT'})"`,
     );
     expect(residual.find((s) => s.includes('file_row_number) IN (SELECT'))).toMatchInlineSnapshot(
-      `"SELECT ("time_unix_nano" - 1700000000000123456::BIGINT) AS "time_ns", ("observed_time_unix_nano" - 1700000000000123456::BIGINT) AS "observed_ns", "severity_number", "severity_text", "event_name", "body", "attributes", "dropped_attributes_count", "flags", "trace_id", "span_id", "resource_attributes", "resource_schema_url", "resource_dropped_attributes_count", "scope_name", "scope_version", "scope_attributes", "scope_schema_url", "scope_dropped_attributes_count", "service_name", "host_name", (coalesce(time_unix_nano, observed_time_unix_nano, 1700000000000123456::BIGINT) - 1700000000000123456::BIGINT) AS "time_rel", "filename", "file_row_number", (SELECT count(*) AS "n" FROM "logs" WHERE (filename, file_row_number) IN (SELECT "filename", "file_row_number" FROM "otel_residual_N")) AS "total" FROM "logs" WHERE (filename, file_row_number) IN (SELECT "filename", "file_row_number" FROM "otel_residual_N") ORDER BY "time_rel" ASC, time_rel ASC, "filename" ASC, "file_row_number" ASC LIMIT 100"`,
+      `"SELECT ("time_unix_nano" - 1700000000000123456::BIGINT) AS "time_ns", ("observed_time_unix_nano" - 1700000000000123456::BIGINT) AS "observed_ns", "severity_number", "severity_text", "event_name", "body", "attributes", "dropped_attributes_count", "flags", "trace_id", "span_id", "resource_attributes", "resource_schema_url", "resource_dropped_attributes_count", "scope_name", "scope_version", "scope_attributes", "scope_schema_url", "scope_dropped_attributes_count", "service_name", "host_name", (coalesce(time_unix_nano, observed_time_unix_nano, 1700000000000123456::BIGINT) - 1700000000000123456::BIGINT) AS "time_rel", "filename", "file_row_number" FROM "logs" WHERE (filename, file_row_number) IN (SELECT "filename", "file_row_number" FROM "otel_residual_N") ORDER BY "time_rel" ASC, time_rel ASC, "filename" ASC, "file_row_number" ASC LIMIT 101"`,
     );
   });
 
@@ -378,7 +378,7 @@ describe('queryLogs', () => {
   });
 
   test('needs restricts the work', async () => {
-    expect((await counted(() => fresh().queryLogs(query({ needs: ['rows'], text: 'user' })))).arrow).toBe(1);
+    expect((await counted(() => fresh().queryLogs(query({ needs: ['rows'], text: 'user' })))).arrow).toBe(2); // rows, count
     expect((await counted(() => fresh().queryLogs(query({ needs: ['timeline'], text: 'user' })))).arrow).toBe(
       1,
     );
@@ -479,6 +479,7 @@ describe('traceLogs', () => {
     const base = mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db);
     const engine: QueryEngine = {
       ...base,
+      queryBatch: (items) => sequentialBatch(engine)(items),
       query: (q, signal) => {
         texts.push(q.toString());
         return base.query(q, signal);
@@ -671,7 +672,7 @@ describe('resourceValues', () => {
     const ctl = new AbortController();
     await source.traceLogs(T1, ctl.signal);
     await source.queryLogs(query({ traceId: T1, needs: ['rows'] }), ctl.signal);
-    expect(signals).toHaveLength(4);
+    expect(signals).toHaveLength(5);
     expect(signals.every((x) => x === ctl.signal)).toBe(true);
   });
 });

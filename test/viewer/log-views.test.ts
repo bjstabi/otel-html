@@ -29,6 +29,7 @@ function result(rows: LogRow[]): LogQueryResult {
     facets: new FacetCounts(10, 10),
     buckets,
     residual: null,
+    next: null,
   };
 }
 

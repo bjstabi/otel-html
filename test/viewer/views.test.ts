@@ -45,6 +45,7 @@ function result(services: number, spans: Partial<Record<string, number>> = {}): 
     durations: { summary: null, bins: [] },
     groups: null,
     residual: null,
+    next: null,
     tables: { resources: [], scopes: [] },
   };
 }

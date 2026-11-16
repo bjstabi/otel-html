@@ -1,5 +1,12 @@
 import type { DataSource } from '../data/data-source.js';
-import type { LogQuery, LogQueryResult, PatternQuery, PatternsResult } from '../data/results.js';
+import type {
+  LogPoint,
+  LogPointsQuery,
+  LogQuery,
+  LogQueryResult,
+  PatternQuery,
+  PatternsResult,
+} from '../data/results.js';
 import { type QueryHandle, type QueryRunner, useQuery } from '../state/use-query.js';
 
 /** What the Logs page asks: rows (logs or traces mode) through `queryLogs`, or the patterns (D9). */
@@ -24,4 +31,15 @@ const runLogs: QueryRunner<LogQuery, LogQueryResult> = (ds, q, signal) => ds.que
 /** `useQuery` over `queryLogs`, for the widgets that ask for rows or counts only. */
 export function useLogQuery(dataSource: DataSource, query: LogQuery): QueryHandle<LogQueryResult> {
   return useQuery(dataSource, query, runLogs);
+}
+
+const runLogPoints: QueryRunner<LogPointsQuery, readonly LogPoint[]> = (ds, q, signal) =>
+  ds.logPoints(q, signal);
+
+/** `useQuery` over `logPoints`: the scatter's own statement. */
+export function useLogPoints(
+  dataSource: DataSource,
+  query: LogPointsQuery,
+): QueryHandle<readonly LogPoint[]> {
+  return useQuery(dataSource, query, runLogPoints);
 }

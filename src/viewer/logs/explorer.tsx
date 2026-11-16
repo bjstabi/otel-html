@@ -6,7 +6,15 @@ import { DEFAULT_LOG_FACETS } from '../../semconv/default-facets.js';
 import { Chart } from '../components/chart.js';
 import { ColumnPicker } from '../components/column-picker.js';
 import { ExplorerControls } from '../components/explorer-controls.js';
-import { ErrorCard, NoMatch, parseSort, QueryNote, sortableOf } from '../components/explorer-states.js';
+import {
+  ErrorCard,
+  LoadingNote,
+  NoMatch,
+  PageStatus,
+  parseSort,
+  QueryNote,
+  sortableOf,
+} from '../components/explorer-states.js';
 import { downloadBlob, type ExportFormat, exportFileName, exportLogs } from '../components/export.js';
 import { FacetPanel, useAttributeFacets } from '../components/facet-panel.js';
 import { withToken } from '../components/filter-tokens.js';
@@ -16,12 +24,20 @@ import { LogList } from '../components/log-list.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
 import { copyWidgetItem } from '../dashboards/copy-widget.js';
 import type { DataSource } from '../data/data-source.js';
+import { pagesLogList, residualOf } from '../data/list-paging.js';
 import type { LogMode, LogRef, LogRow, LogTraceRow, PatternRow } from '../data/log-query.js';
 import { manifestRange } from '../data/manifest-range.js';
-import { CORE_LOG_FACET_KEYS, type PatternQuery, type PatternsResult } from '../data/results.js';
+import {
+  CORE_LOG_FACET_KEYS,
+  type LogPointsQuery,
+  type LogQueryResult,
+  type PatternQuery,
+  type PatternsResult,
+} from '../data/results.js';
 import { isLongWindow } from '../data/time-window.js';
 import { PageChrome, useWidgetCopy } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
+import { pageSize, useListPages } from '../state/list-pages.js';
 import {
   PAGE_OPTIONS,
   type PageMode,
@@ -37,8 +53,8 @@ import { cssTokenReader, GROUPED_VIEWS, resolveCssVars } from '../traces/views.j
 import { LOG_COLUMNS_UI, LOG_TRACE_COLUMNS_UI } from './columns.js';
 import { LogPanel } from './log-panel.js';
 import { PATTERN_COLUMNS_UI, PatternsTable } from './patterns-table.js';
-import { type LogsPageQuery, useLogsPage } from './use-log-query.js';
-import { LOG_VIEW_BUILDERS, type LogChartView } from './views.js';
+import { type LogsPageQuery, useLogPoints, useLogsPage } from './use-log-query.js';
+import { LOG_VIEW_BUILDERS, type LogChartView, scatterOf } from './views.js';
 
 const LOGS = PAGE_OPTIONS.logs;
 const DEFAULT_MODE = LOGS.modes[0];
@@ -91,6 +107,47 @@ function patternQuery(
 ): PatternQuery {
   const column = PATTERN_SORTS.has(sortColumn) ? (sortColumn as PatternQuery['sort']['column']) : 'count';
   return { window, sort: { column, dir }, limit };
+}
+
+/**
+ * The Scatter view: severity against time for up to `listCap` logs, from a statement of its own (the list loads 200 at a
+ * time, which is too few points). It runs only while the view shows, and asks for rows alone.
+ */
+function ScatterCard(props: {
+  dataSource: DataSource;
+  query: LogPointsQuery;
+  listCap: number;
+  matched: number;
+  colors: ReturnType<typeof useColorAssigner>;
+}): JSX.Element {
+  const { query, listCap, colors } = props;
+  const { resolved } = useTheme();
+  const own = useMemo<LogPointsQuery>(
+    () => ({
+      condition: query.condition,
+      text: query.text,
+      window: query.window,
+      sort: query.sort,
+      limit: listCap,
+    }),
+    [query, listCap],
+  );
+  const { state } = useLogPoints(props.dataSource, own);
+  const shown = state.status === 'ready' ? state.result : state.status === 'loading' ? state.previous : null;
+  const option = useMemo(() => {
+    if (shown === null) return null;
+    // `resolved` re-reads the theme tokens when light/dark changes.
+    void resolved;
+    return resolveCssVars(scatterOf(shown, { groupBy: null, colors, listCap }), cssTokenReader());
+  }, [shown, colors, listCap, resolved]);
+  if (state.status === 'error')
+    return <ErrorCard title="The scatter could not run" message={state.message} gone={state.gone} />;
+  if (option === null) return <LoadingNote />;
+  return (
+    <div className="rounded-card border border-hairline bg-surface p-3">
+      <Chart option={option} height={320} ariaLabel={`Scatter of ${props.matched} logs`} />
+    </div>
+  );
 }
 
 const CORE_FACET_KEYS: ReadonlySet<string> = new Set(DEFAULT_LOG_FACETS.map((f) => f.key));
@@ -167,7 +224,15 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
               window: sel.window,
               mode,
               sort: { column: sort.column, dir: sort.dir },
-              limit: listCap,
+              // a time-sorted logs list reads a page and loads the next on scroll; any other is one statement
+              limit: pagesLogList({
+                mode,
+                sortColumn: sort.column,
+                residual: residualOf(sel.condition, 'log_record'),
+                idTable: false,
+              })
+                ? pageSize(listCap)
+                : listCap,
               needs: ['rows', 'total', 'facets', 'timeline'],
               facetKeys: long ? CORE_LOG_FACET_KEYS : null,
             },
@@ -194,10 +259,27 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     },
     shownRows?.facets ?? null,
   );
-  const result = useMemo(
-    () => (shownRows === null || loadedFacets === null ? shownRows : { ...shownRows, facets: loadedFacets }),
-    [shownRows, loadedFacets],
+  const queryKey = JSON.stringify(query);
+  const pages = useListPages(
+    shownRows?.mode === 'logs' ? shownRows : null,
+    queryKey,
+    listCap,
+    async (cursor, signal) => {
+      if (query.kind !== 'rows')
+        throw new OtelHtmlError('usage', { message: 'The Patterns view has no further pages.' });
+      // facets, the timeline and the total belong to the first page and stay as they are while scrolling
+      const r = await dataSource.queryLogs({ ...query.query, cursor, needs: ['rows'] }, signal);
+      if (r.mode !== 'logs')
+        throw new OtelHtmlError('usage', { message: 'Only the logs list has further pages.' });
+      return r;
+    },
   );
+  const result = useMemo((): LogQueryResult | null => {
+    if (shownRows === null) return null;
+    const withFacets = loadedFacets === null ? shownRows : { ...shownRows, facets: loadedFacets };
+    if (withFacets.mode !== 'logs' || pages.rows === withFacets.rows) return withFacets;
+    return { ...withFacets, rows: pages.rows as readonly LogRow[] };
+  }, [shownRows, loadedFacets, pages.rows]);
   const patterns = shown?.kind === 'patterns' && mode === 'patterns' ? shown.result : null;
   const counted = result ?? patterns;
 
@@ -241,7 +323,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     );
   };
 
-  const runExport = (format: ExportFormat): void => {
+  const runExport = async (format: ExportFormat): Promise<void> => {
     try {
       setActionError(null);
       // Only a finished query is exported; the previous result shown while loading is stale.
@@ -253,9 +335,21 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
         );
       }
       const r = state.result.kind === 'rows' ? state.result.result : null;
-      if (r === null || r.mode !== 'logs')
+      if (r === null || r.mode !== 'logs' || query.kind !== 'rows')
         throw new Error('Export lists logs; switch Group into back to Logs.');
-      downloadBlob(exportLogs(r.rows, format, epoch), exportFileName('logs', r.rows.length, r.total, format));
+      // the list holds the pages scrolled to; the export is the list up to `listCap`, as one statement of its own
+      let rows: readonly LogRow[] = pages.rows as readonly LogRow[];
+      if (rows.length < Math.min(r.total, listCap)) {
+        const all = await dataSource.queryLogs({
+          ...query.query,
+          limit: listCap,
+          cursor: null,
+          needs: ['rows'],
+          facetKeys: [],
+        });
+        if (all.mode === 'logs') rows = all.rows;
+      }
+      downloadBlob(exportLogs(rows, format, epoch), exportFileName('logs', rows.length, r.total, format));
     } catch (e) {
       fail('The export failed', e);
     }
@@ -264,9 +358,9 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const exportItems = [
     ...(mode === 'logs'
       ? [
-          { label: 'Export CSV', onSelect: () => runExport('csv') },
-          { label: 'Export JSON', onSelect: () => runExport('json') },
-          { label: 'Export OTLP JSON', onSelect: () => runExport('otlp-json') },
+          { label: 'Export CSV', onSelect: () => void runExport('csv') },
+          { label: 'Export JSON', onSelect: () => void runExport('json') },
+          { label: 'Export OTLP JSON', onSelect: () => void runExport('otlp-json') },
         ]
       : []),
     copyWidgetItem('logs', sel, widgetCopy.copy),
@@ -283,7 +377,8 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
 
   const chartOption = useMemo(() => {
     if (result === null || view === 'list' || view === 'table') return null;
-    if (view === 'scatter' && result.mode !== 'logs') return null;
+    // the scatter draws from its own statement (`ScatterCard`), not from the pages of the list
+    if (view === 'scatter') return null;
     const chart: LogChartView = view;
     // `resolved` re-reads the theme tokens when light/dark changes.
     void resolved;
@@ -331,6 +426,16 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
           Scatter plots individual logs; switch Group into back to Logs.
         </p>
       );
+    if (view === 'scatter' && query.kind === 'rows')
+      return (
+        <ScatterCard
+          dataSource={dataSource}
+          query={query.query}
+          listCap={listCap}
+          matched={result.matched}
+          colors={colors}
+        />
+      );
     if (chartOption !== null) {
       return (
         <div className="rounded-card border border-hairline bg-surface p-3">
@@ -360,7 +465,9 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
               extraColumns={extraColumns}
               moveEnabled={moveEnabled}
               hasTrace={dataSource.hasTrace}
+              onEndReached={pages.loadMore}
             />
+            <PageStatus loading={pages.loading} error={pages.error} />
           </div>
         );
       case 'traces':

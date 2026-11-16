@@ -2,7 +2,7 @@ import type { EChartsOption } from 'echarts';
 import { severityKey } from '../../semconv/severity.js';
 import { bar, type FacetViewContext, pie, toplist, treemap } from '../components/facet-views.js';
 import { SEVERITY_SERIES, seconds } from '../components/histogram-card.js';
-import type { LogQueryResult } from '../data/results.js';
+import type { LogPoint, LogQueryResult } from '../data/results.js';
 import type { PageView } from '../state/page-options.js';
 
 export type LogChartView = Exclude<PageView<'logs'>, 'list' | 'table'>;
@@ -46,7 +46,15 @@ export function timeseries(result: LogQueryResult): EChartsOption {
  * note in the other modes.
  */
 export function scatter(result: LogQueryResult, ctx: LogViewContext): EChartsOption {
-  const rows = result.mode === 'logs' ? result.rows.slice(0, ctx.listCap) : [];
+  return scatterOf(
+    result.mode === 'logs' ? result.rows.map((r) => ({ time: r.time, severity: r.log.severityNumber })) : [],
+    ctx,
+  );
+}
+
+/** `scatter` over the points of `logPoints`: time and severity are all it plots. */
+export function scatterOf(points: readonly LogPoint[], ctx: LogViewContext): EChartsOption {
+  const shown = points.slice(0, ctx.listCap);
   const series = SEVERITY_SERIES.series.map((s) => ({
     name: s.label,
     type: 'scatter' as const,
@@ -54,9 +62,9 @@ export function scatter(result: LogQueryResult, ctx: LogViewContext): EChartsOpt
     symbol: s.hatch === true ? 'diamond' : 'circle',
     symbolSize: s.hatch === true ? 9 : 6,
     itemStyle: { color: s.color },
-    data: rows
-      .filter((r) => severityKey(r.log.severityNumber) === s.key)
-      .map((r): [number, number] => [r.time, r.log.severityNumber]),
+    data: shown
+      .filter((p) => severityKey(p.severity) === s.key)
+      .map((p): [number, number] => [p.time, p.severity]),
   }));
   return {
     animation: false,

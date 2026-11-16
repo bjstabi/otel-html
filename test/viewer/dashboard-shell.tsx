@@ -66,6 +66,7 @@ export const emptySpanResult = (): SpanQueryResult => ({
   durations: { summary: null, bins: [] },
   groups: null,
   residual: null,
+  next: null,
   tables: { resources: [], scopes: [] },
 });
 
@@ -77,6 +78,7 @@ export const emptyLogResult = (): LogQueryResult => ({
   facets: new FacetCounts(10, 10),
   buckets: new TimeBuckets(LOG_SEVERITY_KEYS, 8),
   residual: null,
+  next: null,
 });
 
 /**
@@ -97,6 +99,8 @@ export function dataSourceOf(
     serviceShare: unused,
     services: () => Promise.resolve({ services: [], total: 0 }),
     queryLogs: () => Promise.resolve(emptyLogResult()),
+    logPoints: () => Promise.resolve([]),
+    spanPoints: () => Promise.resolve([]),
     getLog: unused,
     traceLogs: unused,
     surroundingLogs: unused,

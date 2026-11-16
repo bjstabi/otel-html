@@ -36,6 +36,11 @@ interface ResultsTableBase<R> {
   rowHeight?: number;
   /** Marks a row: `match` gets `data-match` and an accent left rule, `muted` is dimmed (`data-muted`). */
   rowMark?(row: R): 'match' | 'muted' | null;
+  /**
+   * Called when one of the last `END_REACHED_ROWS` rows is rendered (scrolled to, or the list is that short), and again
+   * when the rows grow and it still holds; the caller ignores it while a page is on its way or nothing more exists.
+   */
+  onEndReached?(): void;
 }
 
 /**
@@ -51,6 +56,9 @@ const noShare: ServiceShareLoader = () => Promise.resolve([]);
 /** Default row height in px. */
 const ROW_HEIGHT = 36;
 const features = tableFeatures({});
+
+/** How near the end a rendered row must be to ask for more rows. */
+const END_REACHED_ROWS = 50;
 
 /** react-table wants object rows; the wrapper keeps the table generic over any row type. */
 interface Entry<R> {
@@ -111,6 +119,13 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
   // TanStack Virtual's measurement memo does not key on `estimateSize`, so a new row height needs a re-measure.
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure only when the row height changes
   useEffect(() => virtual.measure(), [rowHeight]);
+
+  const lastRendered = virtual.getVirtualItems().at(-1)?.index ?? -1;
+  const onEndReached = props.onEndReached;
+  useEffect(() => {
+    if (onEndReached !== undefined && lastRendered >= 0 && lastRendered >= rows.length - END_REACHED_ROWS)
+      onEndReached();
+  }, [lastRendered, rows.length, onEndReached]);
 
   const latest = useRef({ rows, selectedId, props });
   latest.current = { rows, selectedId, props };

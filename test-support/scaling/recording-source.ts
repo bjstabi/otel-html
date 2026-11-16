@@ -206,6 +206,10 @@ export function entryIdsOf(call: RecordedCall, long: boolean): string[] {
       return call.needs
         .filter((n) => !(n === 'total' && call.needs.includes('rows')))
         .map((n) => logId(call, n, s));
+    case 'spanPoints':
+      return [`spans.points.${s}`];
+    case 'logPoints':
+      return [`logs.points.${s}`];
     case 'services':
       return [`spans.services.${s}`];
     case 'percentileOf':

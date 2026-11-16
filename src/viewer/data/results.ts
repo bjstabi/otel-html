@@ -1,6 +1,7 @@
 import type { ServiceShare } from '../../format/service-share.js';
 import type { TraceId } from '../../model/ids.js';
 import type { ResourceRecord, ScopeRecord, SpanRecord } from '../../model/records.js';
+import type { RowCursor } from '../../query/sql/cursor.js';
 import type { FacetCounts } from '../../rollups/facets.js';
 import type { SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
@@ -93,10 +94,31 @@ export interface LogQuery {
   limit: number;
   /** Only this trace's logs (on top of `condition`). */
   traceId?: TraceId | null;
+  /** The last row of the page before (`LogQueryResult.next`): a time-sorted list continues after it. The page asks rows only: `total` is the first page's and is 0 here. */
+  cursor?: RowCursor | null;
   /** What to compute; absent parts are empty. */
   needs: readonly LogNeed[];
   /** Restrict facets to these keys; null means every core facet plus attributes. */
   facetKeys: readonly string[] | null;
+}
+
+/** The logs `logPoints` plots: the filter of a `LogQuery`, one sorted statement of up to `limit` logs. */
+export type LogPointsQuery = Pick<LogQuery, 'condition' | 'text' | 'window' | 'sort' | 'limit'>;
+
+/** One log of a scatter: its time (relative ns) and severity number. */
+export interface LogPoint {
+  time: number;
+  severity: number;
+}
+
+/** The spans or traces `spanPoints` plots: the filter of a `SpanQuery`, one sorted statement of up to `limit` rows. */
+export type SpanPointsQuery = Pick<SpanQuery, 'condition' | 'text' | 'window' | 'mode' | 'sort' | 'limit'>;
+
+/** One span or trace of a point plot: its start (relative ns), duration, and whether it errored. */
+export interface SpanPoint {
+  start: number;
+  durationNs: number;
+  error: boolean;
 }
 
 export type LogQueryResult = {
@@ -108,6 +130,8 @@ export type LogQueryResult = {
   buckets: TimeBuckets<LogSeverityKey>;
   /** The residual OTTL text (D5) evaluated in the browser; null when the whole condition ran in SQL. */
   residual: string | null;
+  /** Where the next page of a time-sorted logs list starts; null when this page is the last, or the list does not page. */
+  next: RowCursor | null;
 } & ({ mode: 'logs'; rows: readonly LogRow[] } | { mode: 'traces'; rows: readonly LogTraceRow[] });
 
 export interface ServiceStats {
@@ -142,6 +166,8 @@ export interface SpanQuery {
   needs: readonly SpanNeed[];
   /** Restrict facets to these keys; null means every core facet plus attributes. */
   facetKeys: readonly string[] | null;
+  /** The last row of the page before (`SpanQueryResult.next`): a start-sorted list continues after it. The page asks rows only: `total` is the first page's and is 0 here. */
+  cursor?: RowCursor | null;
   /**
    * Contiguous `[fromNs, toNs)` bins the `durations` need counts into (exact per bin); absent, the bins span the
    * matching spans' own min to max.
@@ -191,6 +217,8 @@ export interface SpanQueryResult {
   /** The residual OTTL text (D5) evaluated in the browser; null when the whole condition ran in SQL. */
   residual: string | null;
   tables: RowTables;
+  /** Where the next page of a start-sorted list starts; null when this page is the last, or the list does not page. */
+  next: RowCursor | null;
 }
 
 /** Up to `n` same-stream logs on each side of `log`, in time order with the ref tiebreak. */

@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, test } from 'vitest';
 import { OtelHtmlError } from '../../../src/model/errors.js';
 import { parseTraceId } from '../../../src/model/ids.js';
+import type { RowCursor } from '../../../src/query/sql/cursor.js';
 import { buildFilter } from '../../../src/query/sql/filter.js';
 import type { SurroundingTarget } from '../../../src/query/sql/logs.js';
 import {
@@ -8,6 +9,7 @@ import {
   logCountQuery,
   logRowsQuery,
   logTimelineQuery,
+  logTotalQuery,
   logTracesQuery,
   patternsQuery,
   pointsTimelineQuery,
@@ -213,7 +215,7 @@ describe('logRowsQuery', () => {
     expect(num(rows[8]?.time_rel)).toBe(rel(55));
     expect(Object.keys(rows[0] ?? {})).not.toContain('time_unix_nano');
     expect(Object.keys(rows[0] ?? {})).toEqual(
-      expect.arrayContaining(['filename', 'file_row_number', 'body', 'total']),
+      expect.arrayContaining(['filename', 'file_row_number', 'body']),
     );
   });
 
@@ -233,19 +235,37 @@ describe('logRowsQuery', () => {
     expect(w.filter.files.files).toEqual([logFile(1)]);
     const rows = run(logRowsQuery(w.filter, { column: 'time', dir: 'asc' }, 100));
     expect(labels(rows)).toEqual(['a3', 'b3', 'b4', 'c2']);
-    expect(num(rows[0]?.total)).toBe(4);
+    expect(num(run(logTotalQuery(w.filter))[0]?.total)).toBe(4);
   });
 
   test('a condition narrows rows and total alike', () => {
     const c = filter({ condition: 'severity_number >= 17' });
     const rows = run(logRowsQuery(c.filter, { column: 'time', dir: 'asc' }, 2));
     expect(labels(rows)).toEqual(['a2', 'c1']);
-    expect(num(rows[0]?.total)).toBe(4);
+    expect(num(run(logTotalQuery(c.filter))[0]?.total)).toBe(4);
   });
 
-  test('the total is a scalar subquery, not a window over every row', () => {
+  test('a time sort does not select total, and neither uses a window; a non-time sort keeps the scalar total', () => {
     const sql = logRowsQuery(filter().filter, { column: 'time', dir: 'asc' }, 10).toString();
     expect(sql).not.toMatch(/OVER\s*\(/);
+    expect(sql).not.toMatch(/total/);
+    expect(logRowsQuery(filter().filter, { column: 'severity', dir: 'asc' }, 10).toString()).toMatch(/total/);
+  });
+
+  test('the cursor is a keyset predicate matching the ORDER BY', () => {
+    const cur: RowCursor = { time: 7n, filename: 'f', row: 3n };
+    const asc = logRowsQuery(filter().filter, { column: 'time', dir: 'asc' }, 2, cur).toString();
+    const desc = logRowsQuery(filter().filter, { column: 'time', dir: 'desc' }, 2, cur).toString();
+    expect(asc).toMatch(/> 7/);
+    expect(desc).toMatch(/< 7/);
+    for (const q of [asc, desc]) expect(q).toMatch(/\("filename", "file_row_number"\) > \('f', 3::BIGINT\)/);
+    expect(logRowsQuery(filter().filter, { column: 'severity', dir: 'asc' }, 2, cur).toString()).not.toMatch(
+      /'f'/,
+    );
+  });
+
+  test('logTotalQuery is count(*) only', () => {
+    expect(run(logTotalQuery(filter().filter))).toEqual([{ total: 11n }]);
   });
 });
 
@@ -498,5 +518,57 @@ describe('logCountQuery', () => {
     expect(run(q).map((r) => num(r.n))).toEqual([withTrace.length]);
     expect(run(q).map((r) => num(r.matched))).toEqual([logs.filter((r) => r.trace_id != null).length]);
     expect(String(q)).toContain('trace_id IS NOT NULL');
+  });
+});
+
+describe('logRowsQuery cursor over ties', () => {
+  const tie = (id: string, ms: number): L => ({
+    id,
+    svc: 'svc-a',
+    host: 'host-1',
+    ms,
+    sev: 9,
+    body: user(1),
+  });
+  let g: Format4Fixture;
+  let gdb: TestDb;
+  beforeAll(async () => {
+    g = await buildFormat4Report(
+      [
+        logsOf([tie('t1', 0), tie('t2', 0), tie('t3', 0)]),
+        logsOf([tie('t4', 0), tie('t5', 0), tie('t6', 5)]),
+      ],
+      { close: false },
+    );
+    gdb = await openFixtureDb(g);
+  });
+  const gf = () =>
+    buildFilter({ manifest: g.manifest, table: 'logs', condition: null, text: '', window: null }).filter;
+  const pages = (dir: 'asc' | 'desc', size: number): string[][] => {
+    const out: string[][] = [];
+    let cursor: RowCursor | null = null;
+    for (let i = 0; i < 10; i++) {
+      const rows = gdb.rows(logRowsQuery(gf(), { column: 'time', dir }, size, cursor).toString()) as Row[];
+      const last = rows[rows.length - 1];
+      if (last === undefined) break;
+      out.push(labels(rows));
+      cursor = {
+        time: BigInt(num(last.time_rel)),
+        filename: String(last.filename),
+        row: BigInt(num(last.file_row_number)),
+      };
+    }
+    return out;
+  };
+
+  test('pages of 2 return all six logs exactly once, in order, both directions', () => {
+    const all = (dir: 'asc' | 'desc') =>
+      (gdb.rows(logRowsQuery(gf(), { column: 'time', dir }, 100).toString()) as Row[]).map(labelOf);
+    for (const dir of ['asc', 'desc'] as const) {
+      const got = pages(dir, 2).flat();
+      expect(got).toHaveLength(6);
+      expect(new Set(got).size).toBe(6);
+      expect(got).toEqual(all(dir));
+    }
   });
 });

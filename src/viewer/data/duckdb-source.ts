@@ -1,3 +1,4 @@
+import type { Table } from '@uwdata/flechette';
 import { and, column, type ExprNode, eq, literal, type Query, sql } from '@uwdata/mosaic-sql';
 import type { ManifestV4 } from '../../format/manifest.js';
 import type { Table as TableName } from '../../format/parquet/columns.js';
@@ -7,6 +8,8 @@ import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId, UnixNanos } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../model/records.js';
 import { type CompiledCondition, compileCondition } from '../../ottl/compile.js';
+import type { RowCursor } from '../../query/sql/cursor.js';
+import { countsFromRows, rollupCounts } from '../../query/sql/cutoff.js';
 import {
   attributeFacetsQuery,
   CORE_LOG_FACETS,
@@ -20,8 +23,10 @@ import {
   type LogTraceSort,
   logByRefQuery,
   logCountQuery,
+  logPointsQuery,
   logRowsQuery,
   logTimelineQuery,
+  logTotalQuery,
   logTracesQuery,
   type PatternSort,
   patternsQuery,
@@ -66,7 +71,9 @@ import {
   serviceBucketsQuery,
   servicesQuery,
   spanCountQuery,
+  spanPointsQuery,
   spanRowsQuery,
+  spanTotalQuery,
   type TraceSort,
   timelineQuery,
   traceBoundOf,
@@ -84,8 +91,11 @@ import { FacetCounts } from '../../rollups/facets.js';
 import { TimeBuckets } from '../../rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS } from '../../semconv/severity.js';
 import { durationAxis } from '../traces/views.js';
+import { batcherFor } from './batcher.js';
 import type { DataSource, TraceDetail } from './data-source.js';
 import { metricMethods } from './duckdb-metrics.js';
+import { afterCursor, inReadOrder, readPage } from './list-pages.js';
+import { pagesLogList, pagesSpanList } from './list-paging.js';
 import { checkSurroundingCount, type LogRef, type LogRow, refParts } from './log-query.js';
 import {
   type LogRowEntry,
@@ -103,6 +113,8 @@ import type { QueryEngine } from './query-engine.js';
 import { dropResidualTable, idTable, residualRows, servedResidual } from './residual.js';
 import type {
   LogNeed,
+  LogPoint,
+  LogPointsQuery,
   LogQuery,
   LogQueryResult,
   PatternQuery,
@@ -110,6 +122,8 @@ import type {
   RowTables,
   ServicesResult,
   SpanNeed,
+  SpanPoint,
+  SpanPointsQuery,
   SpanQuery,
   SpanQueryResult,
   SpanRow,
@@ -123,6 +137,7 @@ import {
   facetCounts,
   groupStats,
   internRows,
+  relTime,
   rowsOf,
   type SpanEntry,
   serviceStats,
@@ -205,6 +220,7 @@ function emptyResult(caps: typeof DEFAULT_FACET_CAPS, residual: string | null): 
     groups: null,
     residual,
     tables: { resources: [], scopes: [] },
+    next: null,
   };
 }
 
@@ -226,6 +242,7 @@ function emptyLogResult(caps: FacetCaps, residual: string | null, mode: LogQuery
     facets: new FacetCounts(caps.facetValueCap, caps.facetKeyCap, [...CORE_LOG_KEYS]),
     buckets: new TimeBuckets(LOG_SEVERITY_KEYS),
     residual,
+    next: null,
   };
   return mode === 'traces' ? { ...base, mode, rows: [] } : { ...base, mode: 'logs', rows: [] };
 }
@@ -261,6 +278,13 @@ function checkLimit(limit: number): void {
 /** The newest data source made over each engine: the one whose manifest the rollup views follow. */
 const generations = new WeakMap<QueryEngine, number>();
 
+/** The absolute time of the `need`-th row of a page (its `column`, relative to `epoch`); null when the page is short or the cell empty. */
+function edgeOf(table: Table, column: string, epoch: bigint, need: number): bigint | null {
+  const row = rowsOf(table)[need - 1];
+  const v = row === undefined ? null : cell(row, column);
+  return typeof v === 'bigint' || typeof v === 'number' ? epoch + BigInt(v) : null;
+}
+
 /** The data source over a query engine (D19): no Mosaic type appears here. `close()` is `engine.close()`. */
 export function createDuckDbDataSource(opts: {
   engine: QueryEngine;
@@ -273,6 +297,7 @@ export function createDuckDbDataSource(opts: {
   replaceRollupViews?: boolean;
 }): DataSource {
   const { engine, manifest } = opts;
+  const sink = batcherFor(engine);
   // A newer source over the same engine owns the rollup views: this one may not bind them any more (a Refresh happened).
   const generation = (generations.get(engine) ?? 0) + 1;
   generations.set(engine, generation);
@@ -302,7 +327,7 @@ export function createDuckDbDataSource(opts: {
     pruned: Pruned | undefined,
     q: Query,
     signal?: AbortSignal,
-  ): ReturnType<QueryEngine['query']> => runPrepared(engine, q, filesFor(manifest, tables, pruned), signal);
+  ): ReturnType<QueryEngine['query']> => runPrepared(sink, q, filesFor(manifest, tables, pruned), signal);
 
   /**
    * The views of the rollup tables are bound by the first statement that reads a rollup file: binding reads every
@@ -335,7 +360,7 @@ export function createDuckDbDataSource(opts: {
       await engine.prepare(split.rollup, signal);
       await ensureRollupViews();
     }
-    return runPrepared(engine, q, [...split.rollup, ...split.raw], signal);
+    return runPrepared(sink, q, [...split.rollup, ...split.raw], signal);
   };
 
   /**
@@ -550,6 +575,216 @@ export function createDuckDbDataSource(opts: {
       return read(['spans', 'traces'], own.files, windowTraceRowsQuery(own, traces, sort, limit), signal);
     };
 
+    /** A start-sorted trace list that pages: any list the trace-by-start rules of a long window do not take over. */
+    const pagesTraces = (sort: TraceSort): boolean =>
+      pagesSpanList({
+        mode: 'traces',
+        sortColumn: sort.column,
+        residual,
+        idTable: useIds,
+        longWindow: rule.long && filter.window !== null,
+      });
+
+    /**
+     * A page of the start-sorted trace list (no long window, no browser condition): `q.limit` traces. The first page
+     * reads the `traces` files the cutoff keeps (no condition: those files; a condition: the spans files it keeps and
+     * every `traces` file of the matching traces); a page after a cursor reads every file, since the cursor decides.
+     * The count is its own statement, `traceTotal`.
+     */
+    const tracePage = async (
+      f: SqlFilter,
+      sort: TraceSort,
+    ): Promise<{ table: Table; next: RowCursor | null }> => {
+      const need = q.limit + 1;
+      const cursor = q.cursor ?? null;
+      const none = unconditioned(f);
+      const table =
+        cursor !== null
+          ? await (none
+              ? read(['traces'], undefined, allTraceRowsQuery(f, sort, need, null, { cursor }), signal)
+              : read(['spans', 'traces'], f.files, traceRowsQuery(f, sort, need, { cursor }), signal))
+          : (
+              await readPage({
+                manifest,
+                table: none ? 'traces' : 'spans',
+                pruned: none ? prunePartitions(manifest, 'traces', new Map(), null) : f.files,
+                need,
+                dir: sort.dir,
+                // a trace's rank is its earliest span's, which may lie in a file that does not overlap the newest ones
+                // in time, so every file is read: a cutoff by time overlap cannot say which trace rows are complete
+                cutoff: false,
+                read: async (files) => {
+                  const t = none
+                    ? await read(['traces'], files, allTraceRowsQuery(f, sort, need, null, { files }), signal)
+                    : await read(
+                        ['spans', 'traces'],
+                        files,
+                        traceRowsQuery({ ...f, files }, sort, need, {}),
+                        signal,
+                      );
+                  return { rows: t.numRows, value: t, edge: edgeOf(t, 'start_ns', epoch, need) };
+                },
+              })
+            ).value;
+      const rows = rowsOf(table);
+      const last = rows[q.limit - 1];
+      const start = last === undefined ? null : cell(last, 'start_ns');
+      return {
+        table,
+        next:
+          rows.length > q.limit && last !== undefined
+            ? start != null
+              ? {
+                  time: BigInt(start as bigint | number),
+                  filename: String(cell(last, 'trace_id')),
+                  row: 0n,
+                }
+              : { time: 0n, filename: String(cell(last, 'trace_id')), row: 0n, untimed: true }
+            : null,
+      };
+    };
+
+    /** The traces the list of `f` holds, which a page does not count. */
+    const traceTotal = async (f: SqlFilter): Promise<number> => {
+      const split = unconditioned(f) ? null : plan(f, 'total', [], false);
+      const t = unconditioned(f)
+        ? await read(['traces'], undefined, allTraceCountQuery(null), signal)
+        : split === null
+          ? await read(['spans'], f.files, spanCountQuery(f, 'traces'), signal)
+          : await readMeasures(
+              split,
+              rollupTotalQuery(measuresRelation(f, 'spans', split, [], false)),
+              signal,
+            );
+      return toNumber(cell(rowsOf(t)[0] ?? {}, 'total') ?? 0n, 'total');
+    };
+
+    /**
+     * Per-file match counts for the cutoff, from the rollups where they answer the filter exactly (`rollupCounts`);
+     * undefined when the filter has no condition (the files' own `rows` are the counts) or no rollup can say.
+     */
+    const matchCounts = async (
+      table: 'spans' | 'logs',
+      f: SqlFilter,
+      pruned: Pruned,
+    ): Promise<ReadonlyMap<string, number> | undefined> => {
+      // a browser condition's id table is no rollup dimension: the files' own `rows` stand for the counts
+      if (browser || (f.predicate === null && f.text === null)) return undefined;
+      const rc = rollupCounts(manifest, table, pruned, f, reads);
+      if (rc.query === null) return undefined;
+      const t = await readMeasures({ rollup: [...rc.baseOf.keys()], raw: [] }, rc.query, signal);
+      return countsFromRows(
+        rc,
+        rowsOf(t).map((r) => ({
+          filename: String(cell(r, 'filename')),
+          n: cell(r, 'n') as number | bigint,
+        })),
+      );
+    };
+
+    /**
+     * Whether any other statement of this query reads the raw spans files, by the router's own answer (`plan` gives null
+     * for a need it sends to today's statement). The first page then reads every file, as `main` did: the statements share
+     * what the rows statement fetched. A page after a cursor never asks.
+     */
+    const siblingsReadRaw = (f: SqlFilter): boolean => {
+      // the match count rides with every rows page
+      if (
+        q.mode === 'traces'
+          ? unconditioned(f) || plan(f, 'total', [], false) === null
+          : plan(f, 'total', [], false) === null
+      )
+        return true;
+      if (needs.has('facets')) {
+        const keys =
+          q.facetKeys === null
+            ? CORE_SPAN_FACETS
+            : CORE_SPAN_FACETS.filter((c) => q.facetKeys?.includes(c.key));
+        if (q.facetKeys === null || q.facetKeys.some((k) => !CORE_KEYS.has(k))) return true;
+        if (keys.some((k) => plan(f, 'facets', [k.reads], false) === null)) return true;
+      }
+      if (needs.has('timeline') && plan(f, 'timeline', readsOf([STATUS_KEY]), true) === null) return true;
+      if (
+        !needs.has('timeline') &&
+        needs.has('buckets') &&
+        plan(f, 'buckets', readsOf([STATUS_KEY]), false) === null
+      )
+        return true;
+      if (needs.has('durations') && plan(f, 'durations', [], true) === null) return true;
+      if (
+        needs.has('groups') &&
+        q.measureBy !== null &&
+        plan(f, 'groups', readsOf([groupKeyOf(q.measureBy), STATUS_KEY]), true) === null
+      )
+        return true;
+      return false;
+    };
+
+    /**
+     * A page of a start-sorted spans list: `limit` rows, from the newest (oldest, ascending) files that can fill it,
+     * after `q.cursor`. One row more than the page is asked, which says whether `next` exists.
+     */
+    const spanPage = async (
+      f: SqlFilter,
+      sort: SpanSort,
+    ): Promise<{ table: Table; shown: number; next: RowCursor | null }> => {
+      const need = q.limit + 1;
+      const cursor = q.cursor ?? null;
+      const pruned =
+        cursor === null ? f.files : afterCursor(manifest, 'spans', f.files, cursor.time, sort.dir);
+      const page = await readPage({
+        manifest,
+        table: 'spans',
+        pruned,
+        need,
+        dir: sort.dir,
+        cutoff: cursor !== null || !siblingsReadRaw(f),
+        counts: () => matchCounts('spans', f, pruned),
+        read: async (files, complete) => {
+          // every file read ascending is what the shared view does (oldest first, footers already bound): its own list
+          // would only bind them again; a cutoff, or a descending read, lists its files itself
+          const view = complete;
+          const own: SqlFilter = view ? { ...f, files } : { ...f, files: { ...files, all: true } };
+          const table = await read(
+            ['spans'],
+            files,
+            spanRowsQuery(own, sort, need, cursor, view ? undefined : inReadOrder(files, sort.dir)),
+            signal,
+          );
+          return { rows: table.numRows, value: table, edge: edgeOf(table, 'start_ns', epoch, need) };
+        },
+      });
+      const rows = rowsOf(page.value);
+      const last = rows[q.limit - 1];
+      const more = rows.length > q.limit && last !== undefined;
+      return {
+        table: page.value,
+        shown: q.limit,
+        next: more
+          ? {
+              time: epoch + BigInt(cell(last, 'start_ns') as bigint | number),
+              filename: String(cell(last, 'filename')),
+              row: BigInt(cell(last, 'file_row_number') as bigint | number),
+              spanId: String(cell(last, 'span_id')),
+            }
+          : null,
+      };
+    };
+
+    /** The match count a time-sorted rows statement no longer carries: routed to the rollups like the `total` need. */
+    const rowsTotal = async (f: SqlFilter): Promise<number> => {
+      const split = plan(f, 'total', [], false);
+      const t =
+        split === null
+          ? await read(['spans'], f.files, spanTotalQuery(f), signal)
+          : await readMeasures(
+              split,
+              rollupTotalQuery(measuresRelation(f, 'spans', split, [], false)),
+              signal,
+            );
+      return toNumber(cell(rowsOf(t)[0] ?? {}, 'total') ?? 0n, 'total');
+    };
+
     const run = async (f: SqlFilter): Promise<SpanQueryResult> => {
       const result = emptyResult(caps, residual);
       const spec = bucketSpec(rule.window, range, undefined, rule.bucketLong);
@@ -558,7 +793,14 @@ export function createDuckDbDataSource(opts: {
       if (needs.has('rows')) {
         parts.push(
           (async () => {
-            if (traceSort !== null) {
+            if (traceSort !== null && pagesTraces(traceSort)) {
+              const [paged, total] = await Promise.all([
+                tracePage(f, traceSort),
+                // the count is the first page's: a page after a cursor asks the rows only
+                q.cursor == null ? traceTotal(f) : 0,
+              ]);
+              Object.assign(result, { rows: traceRows(paged.table, q.limit).rows, total, next: paged.next });
+            } else if (traceSort !== null) {
               const r = traceRows(await traceList(f, traceSort));
               Object.assign(result, r);
             } else if (spanSort !== null && !useIds && test !== null) {
@@ -575,17 +817,33 @@ export function createDuckDbDataSource(opts: {
                 },
                 test,
               });
+              // a start-sorted statement carries no total; it is only needed when the scan stopped early
+              if (spanSort.column === 'start' && !exhausted) candidates = await rowsTotal(f);
               const interned = internRows(rows);
               Object.assign(result, {
                 rows: interned.rows,
                 tables: interned.tables,
                 total: exhausted ? rows.length : Math.max(candidates, rows.length),
               });
+            } else if (
+              spanSort !== null &&
+              pagesSpanList({
+                mode: 'spans',
+                sortColumn: spanSort.column,
+                residual,
+                idTable: useIds,
+                longWindow: false,
+              })
+            ) {
+              const [paged, total] = await Promise.all([
+                spanPage(f, spanSort),
+                q.cursor == null ? rowsTotal(f) : 0,
+              ]);
+              const decoded = spanRows(paged.table, epoch, paged.shown);
+              Object.assign(result, { ...decoded, total, next: paged.next });
             } else if (spanSort !== null) {
-              Object.assign(
-                result,
-                spanRows(await read(['spans'], f.files, spanRowsQuery(f, spanSort, q.limit), signal), epoch),
-              );
+              const page = await read(['spans'], f.files, spanRowsQuery(f, spanSort, q.limit), signal);
+              Object.assign(result, spanRows(page, epoch));
             }
           })(),
         );
@@ -854,6 +1112,66 @@ export function createDuckDbDataSource(opts: {
     p.files.logs === undefined ? [] : [p.files.logs.path],
   );
 
+  async function logPoints(q: LogPointsQuery, signal?: AbortSignal): Promise<readonly LogPoint[]> {
+    throwIfAborted(signal);
+    checkLimit(q.limit);
+    const sort = sortOf(LOG_SORTS, q.sort, 'logs');
+    const rule = rules(q.window);
+    const { filter, residual } = buildFilter({
+      manifest,
+      table: 'logs',
+      condition: q.condition,
+      text: q.text,
+      window: rule.window,
+      long: rule.long,
+    });
+    if (residual !== null) {
+      // terms only the browser can evaluate need whole rows: the list's own statement, reduced to its two fields
+      const r = await queryLogs({ ...q, mode: 'logs', needs: ['rows'], facetKeys: [] }, signal);
+      return r.mode === 'logs' ? r.rows.map((x) => ({ time: x.time, severity: x.log.severityNumber })) : [];
+    }
+    if (filter.files.files.length === 0) return [];
+    const table = await read(['logs'], filter.files, logPointsQuery(filter, sort, q.limit), signal);
+    return rowsOf(table).map((r) => ({
+      time: relTime(cell(r, 'time_rel'), 'time_rel'),
+      severity: toNumber(cell(r, 'severity_number') ?? 0, 'severity_number'),
+    }));
+  }
+
+  async function spanPoints(q: SpanPointsQuery, signal?: AbortSignal): Promise<readonly SpanPoint[]> {
+    throwIfAborted(signal);
+    checkLimit(q.limit);
+    const rule = rules(q.window);
+    const { filter, residual } = buildFilter({
+      manifest,
+      table: 'spans',
+      condition: q.condition,
+      text: q.text,
+      window: rule.window,
+      long: rule.long,
+    });
+    if (q.mode === 'spans' && residual === null) {
+      if (filter.files.files.length === 0) return [];
+      const sort = sortOf(SPAN_SORTS, q.sort, 'spans');
+      const table = await read(['spans'], filter.files, spanPointsQuery(filter, sort, q.limit), signal);
+      return rowsOf(table).map((r) => ({
+        start: relTime(cell(r, 'start_ns'), 'start_ns'),
+        durationNs: toNumber(cell(r, 'duration_ns') ?? 0, 'duration_ns'),
+        error: toNumber(cell(r, 'status_code') ?? 0, 'status_code') === 2,
+      }));
+    }
+    // traces are aggregates, and terms only the browser can evaluate need whole rows: the list's own statement
+    const r = await querySpans(
+      { ...q, needs: ['rows'], facetKeys: [], groupBy: null, measureBy: null, cursor: null },
+      signal,
+    );
+    return r.rows.map((x) =>
+      'span' in x
+        ? { start: x.span.start, durationNs: x.durationNs, error: x.span.status.code === 2 }
+        : { start: x.start, durationNs: x.durationNs, error: x.errors > 0 },
+    );
+  }
+
   async function queryLogs(q: LogQuery, signal?: AbortSignal): Promise<LogQueryResult> {
     throwIfAborted(signal);
     checkLimit(q.limit);
@@ -901,6 +1219,116 @@ export function createDuckDbDataSource(opts: {
     const useIds = browser && (aggregates || (q.mode === 'traces' && needs.has('rows')));
     const test = residual === null ? null : logResidualTest(compileCondition(residual, 'log_record'), epoch);
 
+    /** Per-file match counts for the cutoff (see `querySpans`' `matchCounts`). */
+    const matchCounts = async (
+      f: SqlFilter,
+      pruned: Pruned,
+    ): Promise<ReadonlyMap<string, number> | undefined> => {
+      // a browser condition's id table is no rollup dimension: the files' own `rows` stand for the counts
+      if (browser || (f.predicate === null && f.text === null)) return undefined;
+      const rc = rollupCounts(manifest, 'logs', pruned, f, reads);
+      if (rc.query === null) return undefined;
+      const t = await readMeasures({ rollup: [...rc.baseOf.keys()], raw: [] }, rc.query, signal);
+      return countsFromRows(
+        rc,
+        rowsOf(t).map((r) => ({
+          filename: String(cell(r, 'filename')),
+          n: cell(r, 'n') as number | bigint,
+        })),
+      );
+    };
+
+    /** Whether another statement of this query reads the raw logs files, by the router's answer (see `querySpans`). */
+    const siblingsReadRaw = (f: SqlFilter): boolean => {
+      if (plan(f, 'total', []) === null) return true;
+      if (needs.has('facets')) {
+        const keys =
+          q.facetKeys === null
+            ? CORE_LOG_FACETS
+            : CORE_LOG_FACETS.filter((c) => q.facetKeys?.includes(c.key));
+        if (q.facetKeys === null || q.facetKeys.some((k) => !CORE_LOG_KEYS.has(k))) return true;
+        if (keys.some((k) => plan(f, 'facets', [k.reads]) === null)) return true;
+      }
+      return needs.has('timeline') && plan(f, 'timeline', readsOf([BAND_KEY])) === null;
+    };
+
+    /** A page of a time-sorted logs list: `q.limit` rows after `q.cursor`, from the newest (oldest, ascending) files that can fill it. */
+    const logPage = async (
+      f: SqlFilter,
+      sort: LogSort,
+    ): Promise<{ table: Table; next: RowCursor | null }> => {
+      const need = q.limit + 1;
+      const cursor = q.cursor ?? null;
+      const pruned =
+        cursor === null ? f.files : afterCursor(manifest, 'logs', f.files, epoch + cursor.time, sort.dir);
+      const page = await readPage({
+        manifest,
+        table: 'logs',
+        pruned,
+        need,
+        dir: sort.dir,
+        cutoff: cursor !== null || !siblingsReadRaw(f),
+        // a log without a time sorts at the epoch, which no file's statistics cover
+        floor: epoch,
+        counts: () => matchCounts(f, pruned),
+        read: async (files, complete) => {
+          // every file read ascending is what the shared view does (oldest first, footers already bound): its own list
+          // would only bind them again; a cutoff, or a descending read, lists its files itself
+          const view = complete;
+          const own: SqlFilter = view ? { ...f, files } : { ...f, files: { ...files, all: true } };
+          const table = await read(
+            ['logs'],
+            files,
+            logRowsQuery(own, sort, need, cursor, view ? undefined : inReadOrder(files, sort.dir)),
+            signal,
+          );
+          return { rows: table.numRows, value: table, edge: edgeOf(table, 'time_rel', epoch, need) };
+        },
+      });
+      // The cursor dropped the files whose times all lie beyond it, but a log without a time sorts last of a descending
+      // list, at the epoch, and any file may hold one: a page that reaches the epoch (or ends the list) reads them too.
+      let table = page.value;
+      const dropped = cursor !== null && pruned.files.length < f.files.files.length;
+      if (dropped && sort.dir === 'desc') {
+        const edge = edgeOf(table, 'time_rel', epoch, need);
+        if (edge === null || edge <= epoch) {
+          table = await read(
+            ['logs'],
+            f.files,
+            logRowsQuery(f, sort, need, cursor, inReadOrder(f.files, sort.dir)),
+            signal,
+          );
+        }
+      }
+      const rows = rowsOf(table);
+      const last = rows[q.limit - 1];
+      return {
+        table,
+        next:
+          rows.length > q.limit && last !== undefined
+            ? {
+                time: BigInt(cell(last, 'time_rel') as bigint | number),
+                filename: String(cell(last, 'filename')),
+                row: BigInt(cell(last, 'file_row_number') as bigint | number),
+              }
+            : null,
+      };
+    };
+
+    /** The match count a time-sorted rows statement no longer carries: routed to the rollups like the `total` need. */
+    const rowsTotal = async (f: SqlFilter): Promise<number> => {
+      const split = plan(f, 'total', []);
+      const t =
+        split === null
+          ? await read(['logs'], f.files, logTotalQuery(f), signal)
+          : await readMeasures(
+              split,
+              rollupTotalQuery(measuresRelation(f, 'logs', split, [], false)),
+              signal,
+            );
+      return toNumber(cell(rowsOf(t)[0] ?? {}, 'total') ?? 0n, 'total');
+    };
+
     const run = async (f: SqlFilter): Promise<LogQueryResult> => {
       const result = emptyLogResult(caps, residual, q.mode);
       const spec = bucketSpec(rule.window, range, undefined, rule.bucketLong);
@@ -927,8 +1355,23 @@ export function createDuckDbDataSource(opts: {
                 },
                 test,
               });
+              if (logSort.column === 'time' && !exhausted) candidates = await rowsTotal(f);
               const total = exhausted ? rows.length : Math.max(candidates, rows.length);
               Object.assign(result, { rows: rows.map((e) => e.row), total, matched: total });
+            } else if (
+              logSort !== null &&
+              pagesLogList({ mode: 'logs', sortColumn: logSort.column, residual, idTable: useIds })
+            ) {
+              const [paged, total] = await Promise.all([
+                logPage(f, logSort),
+                q.cursor == null ? rowsTotal(f) : 0,
+              ]);
+              Object.assign(result, {
+                rows: logRows(paged.table, q.limit).rows,
+                total,
+                matched: total,
+                next: paged.next,
+              });
             } else if (logSort !== null) {
               const { rows, total } = logRows(
                 await read(['logs'], f.files, logRowsQuery(f, logSort, q.limit), signal),
@@ -1090,7 +1533,7 @@ export function createDuckDbDataSource(opts: {
     if (files?.length === 0) return [];
     return logRows(
       await runPrepared(
-        engine,
+        sink,
         traceLogsQuery(traceId, files, epoch),
         files ?? filesFor(manifest, ['logs']),
         signal,
@@ -1292,6 +1735,8 @@ export function createDuckDbDataSource(opts: {
     },
     services,
     queryLogs,
+    logPoints,
+    spanPoints,
     getLog,
     traceLogs,
     surroundingLogs,
@@ -1342,7 +1787,7 @@ export function createDuckDbDataSource(opts: {
         }
         return resourceValueResult(
           await runPrepared(
-            engine,
+            sink,
             rollupResourceValuesQuery([spans.rel, logs.rel], key, caps.facetValueCap, points),
             [
               ...rollups,
@@ -1361,7 +1806,7 @@ export function createDuckDbDataSource(opts: {
           ? filesFor(manifest, ['spans', 'logs', 'points'])
           : (['spans', 'logs', 'points'] as const).flatMap((t) => filesFor(manifest, [t], windowed[t].files));
       return resourceValueResult(
-        await runPrepared(engine, resourceValuesQuery(key, caps.facetValueCap, windowed), files, signal),
+        await runPrepared(sink, resourceValuesQuery(key, caps.facetValueCap, windowed), files, signal),
         caps.facetValueCap,
       );
     },

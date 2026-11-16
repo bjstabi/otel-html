@@ -54,6 +54,7 @@ function spanResult(): SpanQueryResult {
     durations: { summary: null, bins: [] },
     groups: null,
     residual: null,
+    next: null,
     tables: { resources: [], scopes: [] },
   };
 }
@@ -68,6 +69,7 @@ function logResult(): LogQueryResult {
     facets,
     buckets: new TimeBuckets<LogSeverityKey>(LOG_SEVERITY_KEYS, 8),
     residual: null,
+    next: null,
   };
 }
 

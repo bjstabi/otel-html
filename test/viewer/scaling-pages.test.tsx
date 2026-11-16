@@ -117,10 +117,26 @@ describe('the pages ask only catalogued requests', () => {
 const PAGE_SERIAL_MAX: Readonly<Record<string, number>> = {
   '#/dashboards/ci': 95,
   '#/traces?mode=traces': 54,
-  '#/traces': 28,
+  // 29 measured: the first page asks 201 rows, which DuckDB plans as a TOP_N with a dynamic filter pushed into the scan
+  // (the 10,001 rows of the one statement before paging were a full sort); the same bytes, read in an order that breaks
+  // four read-ahead streams on these small files. 29 + 10 % rounded up.
+  '#/traces': 32,
   '#/logs': 31,
   '#/metrics': 14,
   [TRACE_PAGE]: 54,
+};
+/**
+ * The `queryBatch` calls one page makes on the mixed shape (production small-file limit), an exact count: the statements
+ * of one microtask leave together, so a server answers a page in this many requests. A change in either direction is a
+ * change to how the page asks and is made on purpose.
+ */
+const PAGE_BATCH_MAX: Readonly<Record<string, number>> = {
+  '#/dashboards/ci': 3,
+  '#/traces?mode=traces': 3,
+  '#/traces': 2,
+  '#/logs': 2,
+  '#/metrics': 3,
+  [TRACE_PAGE]: 7,
 };
 const PAGE_REQUESTS_MAX: Readonly<Record<string, number>> = {
   '#/dashboards/ci': 18,
@@ -151,6 +167,7 @@ describe('a page asks no more requests than pinned on the mixed shape (+10 % of 
       expect(prepared.serial + prepared.parallel, `${hash}: requests`).toBeLessThanOrEqual(
         PAGE_REQUESTS_MAX[hash] ?? 0,
       );
+      expect(prepared.batches, `${hash}: queryBatch calls`).toBe(PAGE_BATCH_MAX[hash] ?? 0);
     },
     120_000,
   );

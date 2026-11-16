@@ -90,11 +90,21 @@ export function manifestWithCi(base: ManifestV4, metric: string): ManifestV4 {
 }
 
 /** A page in a cold counting engine over an existing report: what its file reads cost. */
-export async function pageOn(live: ScalingReport, hash: string, threshold: number): Promise<Cost> {
+export async function pageOn(
+  live: ScalingReport,
+  hash: string,
+  threshold: number,
+): Promise<Cost & { batches: number }> {
   const counting = await openCountingEngine(live.dir, live.manifest, { threshold });
   try {
     const manifest = manifestWithCi(live.manifest, live.ids.metric);
     await counting.cold();
+    let batches = 0;
+    const send = counting.engine.queryBatch;
+    counting.engine.queryBatch = (items) => {
+      batches++;
+      return send.call(counting.engine, items);
+    };
     const recording = recordingDataSource(
       createDuckDbDataSource({ engine: counting.engine, manifest: live.manifest }),
       manifest,
@@ -108,7 +118,7 @@ export async function pageOn(live: ScalingReport, hash: string, threshold: numbe
     await recording.settled(PAGE_CALLS[hash] ?? []);
     const cost = costWith(await counting.take(), counting.prepared());
     cleanup();
-    return cost;
+    return { ...cost, batches };
   } finally {
     cleanup();
     await counting.close();

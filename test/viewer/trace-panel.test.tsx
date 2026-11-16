@@ -349,6 +349,7 @@ describe('j/k ownership', () => {
       durations: { summary: null, bins: [] },
       groups: null,
       residual: null,
+      next: null,
       tables: { resources: [], scopes: [] },
     };
     const ds = source({

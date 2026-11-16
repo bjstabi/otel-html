@@ -148,12 +148,13 @@ describe('smallFiles', () => {
     expect(t.swapped).toEqual(['a']);
   });
 
-  test('a body that still differs swaps nothing and the file is retried by the next prepare', async () => {
+  test('a body that still differs swaps nothing and the file is retried after a forget', async () => {
     const t = setup({ a: 10 });
     t.lengths.set('a', [7, 7]);
     await expect(t.s.prepare(['a'])).resolves.toBeUndefined();
     expect(t.fetched).toEqual(['a', 'a']);
     expect(t.swapped).toEqual([]);
+    t.s.forget(['a']);
     await t.s.prepare(['a']);
     expect(t.swapped).toEqual(['a']);
   });
@@ -175,5 +176,57 @@ describe('smallFiles', () => {
     release();
     await p;
     expect(seen).toEqual([false]);
+  });
+
+  test('a mismatch the fresh fetch confirms is not refetched by later prepares until forget or a size change', async () => {
+    const sizes: { a: number } = { a: 10 };
+    const t = setup(sizes);
+    t.lengths.set('a', [7, 7]);
+    await t.s.prepare(['a']);
+    expect(t.fetched).toEqual(['a', 'a']);
+    await t.s.prepare(['a']);
+    await t.s.prepare(['a']);
+    expect(t.fetched).toEqual(['a', 'a']);
+    expect(t.swapped).toEqual([]);
+    sizes.a = 7;
+    await t.s.prepare(['a']);
+    expect(t.swapped).toEqual(['a']);
+    expect(t.fetched).toHaveLength(3);
+  });
+
+  test('forget makes a remembered mismatch fetchable again', async () => {
+    const t = setup({ a: 10 });
+    t.lengths.set('a', [7, 7]);
+    await t.s.prepare(['a']);
+    t.s.forget(['a']);
+    await t.s.prepare(['a']);
+    expect(t.fetched).toEqual(['a', 'a', 'a']);
+    expect(t.swapped).toEqual(['a']);
+  });
+
+  test('a forget during the fresh fetch leaves the mismatch unrecorded, so a later prepare fetches again', async () => {
+    const fetched: boolean[] = [];
+    let release: () => void = () => undefined;
+    const s = smallFiles({
+      bytesOf: () => 10,
+      fetchWhole: async (_p, isFresh) => {
+        fetched.push(isFresh === true);
+        if (isFresh) await new Promise<void>((r) => (release = r));
+        return new Uint8Array(7);
+      },
+      swap: async () => undefined,
+    });
+    const first = s.prepare(['a']);
+    await tick();
+    expect(fetched).toEqual([false, true]);
+    s.forget(['a']);
+    release();
+    await first;
+    const second = s.prepare(['a']);
+    await tick();
+    // the new entry fetches twice (whole, then fresh); a path left marked as a mismatch would fetch nothing
+    expect(fetched).toHaveLength(4);
+    release();
+    await second;
   });
 });

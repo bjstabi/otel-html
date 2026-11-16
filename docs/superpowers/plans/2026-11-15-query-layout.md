@@ -24,7 +24,7 @@ vitest, Playwright, mise.
 
 | #   | branch                  | PR title                                                                | closes            | status |
 | --- | ----------------------- | ----------------------------------------------------------------------- | ----------------- | ------ |
-| 1   | `perf/rollup-keys`      | `perf(writer): rollups carry the keys dashboard widgets test` |  |        |
+| 1   | `perf/rollup-keys`      | `perf(writer): rollups carry the keys dashboard widgets test` |  | merged #337 |
 | 2   | `perf/paged-lists`      | `perf(viewer): lists page by cursor from the newest files; batched statements` | #290 |        |
 | 3   | `docs/query-layout-record` | `docs: query-layout live record`                                     | #281; #229/#287 per record |        |
 
@@ -79,6 +79,11 @@ Task 1 (commits af20c0c3..b5b6a6b5) measured 4 sorts × 3 row-group sizes on the
 **Maintainer, 2026-11-16:** skip format 7 and keep the rest. Tasks 2 and 3 are dropped. Task 5 keeps the
 newest-first view order only. #291 (`trace.get`) stays open. #284 and #240 are out of this plan. The tables are in
 PR 1's body.
+
+**Maintainer, 2026-11-16 (after #337):** the Task 1 numbers read every file in ranges. Measured with small files
+fetched whole, as the viewer does, the passing layout saves 123 → 92 (−25 %), not 110. The decision: do PR 2 first,
+then re-measure format 7 on top of it with a shape whose spans files are live-sized (above the small-file limit), and
+decide then (Task 13, Step 0).
 
 ## PR 1: rollup keys, ratchet
 
@@ -398,6 +403,12 @@ direction.
 ## PR 3: live record (after the maintainer releases PR 1 and PR 2)
 
 ### Task 13: record
+
+- [ ] **Step 0 (before the release): re-measure format 7.**
+  - Build a scaling shape whose spans files are live-sized (1.1–1.6 MB, above the small-file limit).
+  - Run `mise run measure:layout` (prepare on) on top of PR 2's statements for main's layout and the passing
+    candidate (hour bucket, scope, service, time DESC; 50,000-row groups; no spans bloom).
+  - Bring the numbers to the maintainer for the format-7 decision.
 
 - [ ] **Step 1: measure live, cold, three times.**
   - The pages are: site root, `#/dashboards/ci`, the traces list, the logs list's first and next page, a 1-span

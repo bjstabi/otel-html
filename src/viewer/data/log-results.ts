@@ -51,8 +51,11 @@ function entryOf(r: ResultRow): LogRowEntry {
 }
 
 /** Decodes the rows of the log queries (`logColumns`: times relative as `time_ns` / `observed_ns`); `total` is the first row's `total`, else the row count. */
-export function logEntries(t: Table): { entries: LogRowEntry[]; total: number } {
-  const rows = rowsOf(t);
+export function logEntries(
+  t: Table,
+  take = Number.POSITIVE_INFINITY,
+): { entries: LogRowEntry[]; total: number } {
+  const rows = rowsOf(t).slice(0, take);
   const entries = rows.map(entryOf);
   const first = rows[0];
   return {
@@ -65,8 +68,8 @@ export function logEntries(t: Table): { entries: LogRowEntry[]; total: number } 
 }
 
 /** `logEntries` as the rows the viewer shows (the SQL already made times relative). */
-export function logRows(t: Table): { rows: LogRow[]; total: number } {
-  const { entries, total } = logEntries(t);
+export function logRows(t: Table, take = Number.POSITIVE_INFINITY): { rows: LogRow[]; total: number } {
+  const { entries, total } = logEntries(t, take);
   return { rows: entries.map((e) => e.row), total };
 }
 
