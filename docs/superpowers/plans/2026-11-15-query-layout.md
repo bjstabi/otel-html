@@ -6,10 +6,9 @@
 number of requests. Lists page by a cursor. Each page's statements leave the viewer in batches a future server can
 answer in one request each.
 
-**Architecture:** PR 1 writes format 7. Files are sorted so DuckDB's row-group statistics (its zone maps over Parquet)
-can skip by time. Spans get a `trace_id` bloom filter, unique ids lose dictionary encoding, and rollups carry the
-attribute keys that dashboard widget conditions test. The sort and row-group size are picked by a measurement that
-runs first. PR 2 changes the viewer's list reads: a newest-first file cutoff, keyset pages of 200 rows loaded on
+**Architecture:** PR 1 keeps the format. It holds the layout measurement tool (Task 1), makes rollups carry the
+attribute keys that dashboard widget conditions test, lists files newest first in the views, and adds a per-page
+ratchet. Format 7 was dropped after Task 1's measurement (see "Amendment 2026-11-16"). PR 2 changes the viewer's list reads: a newest-first file cutoff, keyset pages of 200 rows loaded on
 scroll, totals out of the rows statement, and a `queryBatch` seam on the engine. A docs PR records the live numbers
 after a release.
 
@@ -21,28 +20,23 @@ vitest, Playwright, mise.
 **PR process:** unattended (`docs/agents/process-unattended.md`).
 - One PR per row, in order. Each starts from `main` after the previous one merged.
 - Implementers and task reviewers run on Sonnet 5.5; the branch review runs on Opus 5.5.
-- The maintainer approved format 7 (2026-11-15). That covers the files these tasks list under `src/format/`,
-  `src/writer/`, `src/cli/` and `src/host/`.
+- The maintainer approved the writer changes these tasks list under `src/format/` and `src/writer/` (2026-11-15).
 - Every workflow and action file is still a stop, as is any other file the deployer runs.
 
 | #   | branch                  | PR title                                                                | closes            | status |
 | --- | ----------------------- | ----------------------------------------------------------------------- | ----------------- | ------ |
-| 1   | `perf/format-7-layout`  | `feat(format): format 7 lays files out for newest-first reads`          | #291 (+ #284, #240 if measured) |        |
-| 2   | `perf/paged-lists`      | `perf(viewer): lists page by cursor from the newest files; batched statements` | #290 (+ #239 if it falls out) |        |
+| 1   | `perf/rollup-keys`      | `perf(writer): rollups carry the keys dashboard widgets test; views read newest first` |  |        |
+| 2   | `perf/paged-lists`      | `perf(viewer): lists page by cursor from the newest files; batched statements` | #290 |        |
 | 3   | `docs/query-layout-record` | `docs: query-layout live record`                                     | #281; #229/#287 per record |        |
 
 ## Global Constraints
 
 - **No answer changes.** Every catalogue entry and page returns the same rows, totals, facets and buckets as on
   `main`, except the rows a page has not loaded yet.
-- **Formats.** Readers accept formats 6 and 7. Nothing writes format 7 until Task 2 (readers) is committed on the
-  branch. Format-6 reports keep opening.
-- **Measurement.** The unit is modelled serial requests (`test-support/scaling/cost.ts`), and the live-shaped report
-  is the `rolling` shape (`test-support/scaling/shapes/rolling.json`).
-- **Pick rule (spec §6.1).** The chosen layout must meet both:
-  - no §7 path is worse than `main`;
-  - no other catalogue entry is worse by more than 10 %, except raw full scans that a rollup answers in the viewer.
-    Those are listed in the PR body.
+- **Format.** No format change: the report stays format 6.
+- **Measurement.** The unit is modelled serial requests (`test-support/scaling/cost.ts`). The `rolling` shape is a
+  model-only snapshot that cannot be built, so the built live-like report is Task 1's `mixed` shape.
+- **No regression.** No §7 path gets worse than `main`; no other catalogue entry gets worse by more than 10 %.
 - **List pages.** Page size is 200 rows. `viewer.listCap` (default 10,000) caps the rows held.
 - **Non-time sorts.** A list sorted by anything but time keeps today's single statement capped at `listCap`.
 - **Trace lists.** Rows already shown never change or move. The cutoff pulls in every older file whose `timeEndMax`
@@ -50,7 +44,7 @@ vitest, Playwright, mise.
 - **Rollup size.** A widget-condition rollup key that makes a rollup larger than 15 % of its spans/logs file stays
   raw, and the PR names it.
 - **Gates.** The §7 targets (spec) are recorded live, not gated. CI gates the catalogue classes as today, plus a
-  per-page ratchet of modelled serial requests on `rolling`, pinned at the measured value + 10 %.
+  per-page ratchet of modelled serial requests on `mixed`, pinned at the measured value + 10 %.
 - **No new dependency.** No workflow or action file changes. Run `mise run check` after every task and
   `mise run verify` before each PR.
 - **Commits and PR bodies** follow `docs/agents/conventions.md`. PR bodies carry the measurement tables the tasks
@@ -62,8 +56,8 @@ vitest, Playwright, mise.
    a duplicate or a gap, through the `(time, filename, file_row_number)` cursor. Test: Task 7.
 2. **A trace that crosses partitions.** It appears once on the trace list's first page, whole (true start, span
    count), and does not move when the next page joins older files. Test: Task 8.
-3. **A rolling report mixing format-6 and format-7 partitions.** Lists stay newest first and correct, and trace
-   lookups work on both layouts. Test: Tasks 6 and 8.
+3. **Partitions copied in by a merge without the new rollup keys.** Widgets route those partitions to raw files and
+   the others to rollups, and the answer is the same as all-raw. Test: Task 4.
 4. **Filter, window or sort changes while a next page is in flight.** The stale page is dropped and never appended
    to the new list. Test: Task 10.
 5. **Residual (non-SQL) conditions.** They keep paging through `residualRows` with the same rows and totals as on
@@ -71,7 +65,23 @@ vitest, Playwright, mise.
 
 ---
 
-## PR 1: format 7
+## Amendment 2026-11-16: format 7 dropped
+
+Task 1 (commits af20c0c3..b5b6a6b5) measured 4 sorts × 3 row-group sizes on the `mixed` shape (6 partitions ×
+150,000 spans), cold, in modelled serial requests:
+
+- With the spans bloom filter, every candidate makes opening a trace worse: 27 requests becomes 33–41, because
+  each row group's filter is its own range request.
+- Without it, one candidate passes: hour bucket, scope, service, time DESC, 50,000-row groups. But the §7 sum
+  only falls from 123 to 110. The CI dashboard toplist is unchanged (33 → 32).
+- The dashboard's cost is the widget conditions that rollups cannot answer, plus opening every partition. That
+  is Task 4 and PR 2, and neither needs a format change.
+
+**Maintainer, 2026-11-16:** skip format 7 and keep the rest. Tasks 2 and 3 are dropped. Task 5 keeps the
+newest-first view order only. #291 (`trace.get`) stays open. #284 and #240 are out of this plan. The tables are in
+PR 1's body.
+
+## PR 1: rollup keys, newest-first views, ratchet
 
 ### Task 1: measure the layout candidates (decides Tasks 3–5's values)
 
@@ -126,7 +136,7 @@ vitest, Playwright, mise.
   - **Stop and ask** if no candidate meets the rule.
 - [ ] **Step 7:** commit `test(scaling): measure:layout compares format-7 layout candidates`.
 
-### Task 2: readers accept format 7
+### Task 2: readers accept format 7 — DROPPED (amendment 2026-11-16)
 
 **Files:**
 - Modify:
@@ -148,7 +158,7 @@ vitest, Playwright, mise.
   - **Stop** if any path in the deployer would refuse instead.
 - [ ] **Step 6:** commit `feat(format): read format 7`.
 
-### Task 3: the writer writes format 7
+### Task 3: the writer writes format 7 — DROPPED (amendment 2026-11-16)
 
 **Files:**
 - Modify:
@@ -199,24 +209,23 @@ vitest, Playwright, mise.
     `attr:cicd.pipeline.task.run.id` and `attr:cicd.pipeline.task.run.result`.
   - A metric widget's `where` contributes nothing.
   - A key whose rollup passes 15 % is dropped with a warning naming it.
+  - A merged report whose older partition's rollup lacks a new key: a toplist on that key reads the older
+    partition raw and the newer one from its rollup, and the answer equals an all-raw read. This is Review Focus 3.
 - [ ] **Step 2:** → FAIL. **Step 3:** implement. **Step 4:** → PASS.
 - [ ] **Step 5: check the route.** `pnpm exec vitest run test/viewer/scaling-pages.test.tsx` shows the *Steps*
   toplists routed to rollups. Assert it in `test/viewer-data/route.test.ts` with the CI config.
 - [ ] **Step 6:** commit `perf(writer): rollups carry the attribute keys dashboard widgets test`.
 
-### Task 5: views read newest first; trace spans use the bloom and time bound
+### Task 5: views read newest first
 
 **Files:**
-- Modify: `src/query/sql/views.ts:89` (files listed by partition descending), `src/query/sql/spans.ts`
-  (`traceSpansQuery` keeps its time bound; nothing else should need to change: check), `src/viewer/data/catalogue.ts`
-  (`KNOWN_DEBT`: set the #291 line `measured: true`, run the class test, delete the line)
+- Modify: `src/query/sql/views.ts:89` (files listed by partition descending)
 - Test: `test/query/sql/views.test.ts`, `test/scaling/classes.test.ts`
 
 - [ ] **Step 1: failing test.** `viewStatements` lists `data/partitions/000023/...` before `000022`.
-- [ ] **Step 2:** → FAIL. **Step 3:** implement. **Step 4:** `mise run test:scaling` passes.
-  - `trace.get` is no longer in the `density`/`matched` debt.
-  - Any catalogue class that moves follows the pick rule. Re-derive the declared classes for moves that improve.
-- [ ] **Step 5:** commit `perf(viewer): views read the newest partitions first; trace.get debt paid`.
+- [ ] **Step 2:** → FAIL. **Step 3:** implement. **Step 4:** `mise run test:scaling` passes. A catalogue class
+  that gets worse is a stop. Re-derive the declared classes for moves that improve.
+- [ ] **Step 5:** commit `perf(viewer): views read the newest partitions first`.
 
 ### Task 6: the page ratchet, and PR 1
 
@@ -224,21 +233,18 @@ vitest, Playwright, mise.
 - Modify:
   - `test/viewer/scaling-pages-support.tsx`: `PAGES` gains `'#/traces/<traceId>'`, a trace view on the CI run
     trace of the shape, and `PAGE_CALLS` gains its calls.
-  - `test/viewer/scaling-pages.test.tsx`: a `rolling` assertion per page, with
+  - `test/viewer/scaling-pages.test.tsx`: a `mixed`-shape assertion per page, with
     `PAGE_SERIAL_MAX: Record<Page, number>` set to the measured value + 10 %.
-- Test: the same files, plus a mixed report (three format-6 partitions written by a `layout` matching format 6,
-  then four format-7 ones): the trace list and logs list are newest first and equal to an all-format-6 build of
-  the same rows.
+- Test: the same files.
 
 - [ ] **Step 1:** write the ratchet and the mixed-report test. **Step 2:** run them → PASS on the branch. Record
   the before (on `main`) and after per page.
 - [ ] **Step 3:** run `mise run verify` → PASS.
 - [ ] **Step 4: open PR 1.**
   - Title as in the table.
-  - The body carries: Task 1's table and pick; Task 3's merge memory numbers; Task 4's dropped keys, if any; the
-    page ratchet before and after; the catalogue class moves.
-  - `Fixes #291`. Add `Fixes #284` and `Fixes #240` only if the table shows their entries fixed; otherwise comment
-    the numbers on them.
+  - The body carries: Task 1's tables and why format 7 was dropped; Task 4's dropped keys, if any; the page ratchet
+    before and after; the catalogue class moves.
+  - Comment Task 1's trace.byId numbers on #291 (a spans bloom filter costs requests; it stays open).
 - [ ] **Step 5:** branch review on Opus 5.5 → fix → CI green → merge.
 
 ## PR 2: paged lists, totals apart, batches
@@ -293,7 +299,6 @@ vitest, Playwright, mise.
   - 10 partitions of 100 rows with `need` 200 keep the newest 2.
   - With `counts` showing 0 matches in the newest 3, it keeps partitions 4–6.
   - A trace whose `timeEndMax` reaches into an older partition pulls that partition in. This is Review Focus 2.
-  - Mixed format-6 and format-7 partitions give the same answer.
   - Two partitions overlapping in time both join; `dir: 'asc'` keeps the oldest.
   - (Task 9) A filter without rollup counts whose matches lie only in older partitions fills the page by extending
     the cutoff.
@@ -375,13 +380,10 @@ vitest, Playwright, mise.
   `fetchWhole` calls for the path.
 - [ ] **Step 2:** → FAIL. **Step 3:** implement. **Step 4:** → PASS. Commit
   `fix(viewer): a confirmed size mismatch is not refetched per statement`.
-- [ ] **Step 5: #239.**
-  - If format 7's points stats now hold the metric identity columns, answer `metricIdentitiesQuery` from the
-    manifest. Test: `metricCatalog` makes 0 statements against points. Commit.
-  - Otherwise comment on #239 with why, and leave it.
+- [ ] **Step 5:** (dropped with format 7: #239 stays out of this plan.)
 - [ ] **Step 6:** run `mise run verify` → PASS.
 - [ ] **Step 7: open PR 2.** The body carries the page ratchet before and after, batches per page, `Fixes #290`,
-  and `Fixes #239` if Step 5 did it. Branch review on Opus 5.5 → CI green → merge.
+  and nothing for #239. Branch review on Opus 5.5 → CI green → merge.
 
 ## PR 3: live record (after the maintainer releases PR 1 and PR 2)
 

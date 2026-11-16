@@ -88,6 +88,17 @@ calibrated cost model):
 
 ### 6.1 Format 7: files laid out for newest-first reads (writer)
 
+> **Amendment 2026-11-16: dropped.** The measurement this section asks for (plan Task 1, `mixed` shape, 4 sorts ×
+> 3 row-group sizes) found the following:
+>
+> - A spans bloom filter makes opening a trace worse: 27 requests becomes 33–41, one range request per row group's
+>   filter.
+> - The one passing layout, without that filter, saves 10 % on the §7 paths (123 → 110) and leaves the CI dashboard
+>   unchanged.
+>
+> The maintainer chose to skip format 7 and keep §6.2–§6.5. The report stays format 6, and #291 stays open. The rest
+> of this section is kept as the record of what was tried.
+
 - **Sort.**
   - Today's leading `scope_name` (and `service_name`) clustering is what lets
     `instrumentation_scope.name == "otel-html-ci"` read 3 requests instead of the whole file. A pure time sort
