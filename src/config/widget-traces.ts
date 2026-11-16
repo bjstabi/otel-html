@@ -105,9 +105,12 @@ export function widgetTraceConditions(dashboards: readonly ResolvedDashboard[]):
       } catch {
         continue;
       }
+      if ([...calls].some((name) => CONVERTERS.get(name)?.rowLocal === false)) {
+        notRowLocal.add(source);
+        continue;
+      }
+      byId.set(conditionId(source), source);
       for (const v of d.dashboard.variables) variables.add(v.key);
-      if ([...calls].some((name) => CONVERTERS.get(name)?.rowLocal === false)) notRowLocal.add(source);
-      else byId.set(conditionId(source), source);
     }
   }
   return {

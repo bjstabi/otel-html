@@ -126,5 +126,13 @@ describe('widgetTraceConditions', () => {
       expect(spec.notRowLocal).toEqual(['TestAcrossRows() and attributes["a"] == "1"']);
       expect(spec.conditions.map((c) => c.source)).toEqual(['attributes["b"] == "2"']);
     });
+
+    test('a dashboard whose only traces widget is not row local contributes no variables', () => {
+      converters.set('TestAcrossRows', { arity: 0, returns: 'bool', rowLocal: false, call: () => true });
+      const spec = widgetTraceConditions(
+        dashboardWith([{ type: 'traces', query: 'TestAcrossRows()' }], [{ key: 'k' }]),
+      );
+      expect(spec).toEqual({ conditions: [], variables: [], notRowLocal: ['TestAcrossRows()'] });
+    });
   });
 });
