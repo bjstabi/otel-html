@@ -3,7 +3,7 @@ import type { DataSource } from '../../src/viewer/data/data-source.js';
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { pagesLogList, pagesSpanList, residualOf } from '../../src/viewer/data/list-paging.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
-import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
+import { type QueryEngine, sequentialBatch } from '../../src/viewer/data/query-engine.js';
 import type { LogQuery } from '../../src/viewer/data/results.js';
 import type { TestDb } from '../../test-support/duckdb-node.js';
 import {
@@ -27,6 +27,7 @@ function recording() {
   const statements: string[] = [];
   const engine: QueryEngine = {
     ...inner,
+    queryBatch: (qs, signal) => sequentialBatch(engine)(qs, signal),
     query: (q, signal) => {
       statements.push(String(q));
       return inner.query(q, signal);

@@ -90,6 +90,7 @@ import { FacetCounts } from '../../rollups/facets.js';
 import { TimeBuckets } from '../../rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS } from '../../semconv/severity.js';
 import { durationAxis } from '../traces/views.js';
+import { batcherFor } from './batcher.js';
 import type { DataSource, TraceDetail } from './data-source.js';
 import { metricMethods } from './duckdb-metrics.js';
 import { afterCursor, inReadOrder, readPage } from './list-pages.js';
@@ -285,6 +286,7 @@ export function createDuckDbDataSource(opts: {
   replaceRollupViews?: boolean;
 }): DataSource {
   const { engine, manifest } = opts;
+  const sink = batcherFor(engine);
   // A newer source over the same engine owns the rollup views: this one may not bind them any more (a Refresh happened).
   const generation = (generations.get(engine) ?? 0) + 1;
   generations.set(engine, generation);
@@ -314,7 +316,7 @@ export function createDuckDbDataSource(opts: {
     pruned: Pruned | undefined,
     q: Query,
     signal?: AbortSignal,
-  ): ReturnType<QueryEngine['query']> => runPrepared(engine, q, filesFor(manifest, tables, pruned), signal);
+  ): ReturnType<QueryEngine['query']> => runPrepared(sink, q, filesFor(manifest, tables, pruned), signal);
 
   /**
    * The views of the rollup tables are bound by the first statement that reads a rollup file: binding reads every
@@ -347,7 +349,7 @@ export function createDuckDbDataSource(opts: {
       await engine.prepare(split.rollup, signal);
       await ensureRollupViews();
     }
-    return runPrepared(engine, q, [...split.rollup, ...split.raw], signal);
+    return runPrepared(sink, q, [...split.rollup, ...split.raw], signal);
   };
 
   /**
@@ -1457,7 +1459,7 @@ export function createDuckDbDataSource(opts: {
     if (files?.length === 0) return [];
     return logRows(
       await runPrepared(
-        engine,
+        sink,
         traceLogsQuery(traceId, files, epoch),
         files ?? filesFor(manifest, ['logs']),
         signal,
@@ -1710,7 +1712,7 @@ export function createDuckDbDataSource(opts: {
         }
         return resourceValueResult(
           await runPrepared(
-            engine,
+            sink,
             rollupResourceValuesQuery([spans.rel, logs.rel], key, caps.facetValueCap, points),
             [
               ...rollups,
@@ -1729,7 +1731,7 @@ export function createDuckDbDataSource(opts: {
           ? filesFor(manifest, ['spans', 'logs', 'points'])
           : (['spans', 'logs', 'points'] as const).flatMap((t) => filesFor(manifest, [t], windowed[t].files));
       return resourceValueResult(
-        await runPrepared(engine, resourceValuesQuery(key, caps.facetValueCap, windowed), files, signal),
+        await runPrepared(sink, resourceValuesQuery(key, caps.facetValueCap, windowed), files, signal),
         caps.facetValueCap,
       );
     },

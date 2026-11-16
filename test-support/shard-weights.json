@@ -179,6 +179,7 @@
     "test/test-support/report-dir.test.ts": 0.3,
     "test/test-support/shard-weights-table.test.ts": 0.1,
     "test/test-support/shard.test.ts": 0.1,
+    "test/viewer-data/batcher.test.ts": 0.1,
     "test/viewer-data/duckdb-source-logs.test.ts": 4.4,
     "test/viewer-data/duckdb-source-metrics.test.ts": 18.2,
     "test/viewer-data/duckdb-source-paging-long.test.ts": 3,

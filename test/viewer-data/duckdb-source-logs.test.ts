@@ -6,7 +6,7 @@ import type { DataSource } from '../../src/viewer/data/data-source.js';
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { type LogRef, type LogRow, type LogTraceRow, logRef } from '../../src/viewer/data/log-query.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
-import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
+import { type QueryEngine, sequentialBatch } from '../../src/viewer/data/query-engine.js';
 import type { LogQuery } from '../../src/viewer/data/results.js';
 import type { TestDb } from '../../test-support/duckdb-node.js';
 import {
@@ -479,6 +479,7 @@ describe('traceLogs', () => {
     const base = mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db);
     const engine: QueryEngine = {
       ...base,
+      queryBatch: (qs, signal) => sequentialBatch(engine)(qs, signal),
       query: (q, signal) => {
         texts.push(q.toString());
         return base.query(q, signal);

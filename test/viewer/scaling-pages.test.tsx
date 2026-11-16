@@ -125,6 +125,19 @@ const PAGE_SERIAL_MAX: Readonly<Record<string, number>> = {
   '#/metrics': 14,
   [TRACE_PAGE]: 54,
 };
+/**
+ * The `queryBatch` calls one page makes on the mixed shape (production small-file limit), an exact count: the statements
+ * of one microtask leave together, so a server answers a page in this many requests. A change in either direction is a
+ * change to how the page asks and is made on purpose.
+ */
+const PAGE_BATCH_MAX: Readonly<Record<string, number>> = {
+  '#/dashboards/ci': 3,
+  '#/traces?mode=traces': 3,
+  '#/traces': 2,
+  '#/logs': 2,
+  '#/metrics': 3,
+  [TRACE_PAGE]: 7,
+};
 const PAGE_REQUESTS_MAX: Readonly<Record<string, number>> = {
   '#/dashboards/ci': 18,
   '#/traces?mode=traces': 9,
@@ -154,6 +167,7 @@ describe('a page asks no more requests than pinned on the mixed shape (+10 % of 
       expect(prepared.serial + prepared.parallel, `${hash}: requests`).toBeLessThanOrEqual(
         PAGE_REQUESTS_MAX[hash] ?? 0,
       );
+      expect(prepared.batches, `${hash}: queryBatch calls`).toBe(PAGE_BATCH_MAX[hash] ?? 0);
     },
     120_000,
   );

@@ -1,3 +1,4 @@
+import type { Table } from '@uwdata/flechette';
 import { describe, expect, test } from 'vitest';
 import type { ManifestV4 } from '../../src/format/manifest.js';
 import { ROLLUP_GRAIN_NS } from '../../src/format/manifest.js';
@@ -5,7 +6,7 @@ import { partitionFilePath, partitionWrapperPath } from '../../src/format/paths.
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { toBase64 } from '../../src/viewer/data/engine/bytes.js';
 import type { Engine } from '../../src/viewer/data/engine/start.js';
-import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
+import { type QueryEngine, sequentialBatch } from '../../src/viewer/data/query-engine.js';
 import { isGoneFile, refreshReport } from '../../src/viewer/data/refresh-report.js';
 import type { ScriptLoader } from '../../src/viewer/data/script-loader.js';
 
@@ -72,20 +73,21 @@ function fakes(format: 'local' | 'site', failStatement?: (statement: string, nth
       },
     },
   } as unknown as Engine;
-  const queryEngine = {
+  const queryEngine: QueryEngine = {
     tempTables: true,
     prepare: async () => {},
     query: async () => {
       calls.queries += 1;
-      return { numRows: 0, toArray: () => [] };
+      return { numRows: 0, toArray: () => [] } as unknown as Table;
     },
+    queryBatch: (qs, signal) => sequentialBatch(queryEngine)(qs, signal),
     exec: async () => {},
     registerText: async () => {},
     close: async () => {},
     clearCache() {
       calls.clearCache += 1;
     },
-  } as unknown as QueryEngine;
+  };
   return { calls, engine, queryEngine };
 }
 

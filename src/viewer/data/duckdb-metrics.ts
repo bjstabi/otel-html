@@ -26,6 +26,7 @@ import {
 } from '../../query/sql/points.js';
 import { absWindow, type Pruned, type RelWindow } from '../../query/sql/prune.js';
 import { bucketSpec } from '../../query/sql/time.js';
+import { batcherFor } from './batcher.js';
 import { resourceKey } from './metric-catalog.js';
 import {
   chartFrom,
@@ -95,10 +96,11 @@ interface Scope {
 /** The metric data layer over `points` (D20, D30). */
 export function metricMethods(ctx: MetricContext): MetricMethods {
   const { engine, epoch, range, manifest } = ctx;
+  const sink = batcherFor(engine);
   let catalog: Promise<CatalogRows> | null = null;
   /** Runs `q` after the engine prepared the points files it reads: `files`, or every one. */
   const read = (files: Pruned | undefined, q: Query, signal?: AbortSignal) =>
-    runPrepared(engine, q, filesFor(manifest, ['points'], files), signal);
+    runPrepared(sink, q, filesFor(manifest, ['points'], files), signal);
 
   const load = async (): Promise<CatalogRows> => {
     const spec = bucketSpec(null, range, SPARK_BUCKETS);

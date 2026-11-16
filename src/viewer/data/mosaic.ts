@@ -4,7 +4,7 @@ import { type Connector, Coordinator, type QueryResult, restConnector } from '@u
 import type { Query } from '@uwdata/mosaic-sql';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { FileGate } from './engine/file-gate.js';
-import type { EngineFiles, QueryEngine } from './query-engine.js';
+import { type EngineFiles, type QueryEngine, sequentialBatch } from './query-engine.js';
 
 export type Logger = Pick<Console, 'debug' | 'info' | 'warn' | 'error'>;
 
@@ -87,8 +87,12 @@ export function mosaicQueryEngine(
   describe?: (error: unknown) => string | undefined,
   prepare?: (paths: readonly string[], signal?: AbortSignal) => Promise<void>,
 ): QueryEngine {
-  return {
+  const engine: QueryEngine = {
     tempTables,
+    // through `this`: a wrapper that spreads this engine and replaces `query` is batched through its own `query`
+    queryBatch(qs, signal) {
+      return sequentialBatch(this)(qs, signal);
+    },
     async query(q: Query, signal?: AbortSignal): Promise<Table> {
       if (signal?.aborted) throw abortError();
       const result: QueryResult<Table> = coordinator.query(q);
@@ -133,6 +137,7 @@ export function mosaicQueryEngine(
       await files.close();
     },
   };
+  return engine;
 }
 
 /** The ruled wording, then the host's own words when it sent any (each status has more than one cause on the host). */
@@ -186,6 +191,7 @@ export function restQueryEngine(endpoint: string, logger: Logger, fetchImpl?: ty
     false,
     describeHostFailure,
   );
+  // seam: POST /query/batch. The host takes one statement per request; a page's batch is sent as one POST each until it answers a batch.
   return {
     ...engine,
     exec() {
