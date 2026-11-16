@@ -143,7 +143,22 @@ plan measures the CI dashboard on the live-data rebuild against spec §6.
 
 ## Amendments
 
-(none yet)
+1. **Nanoseconds past 2^53 (Task 3, CodeRabbit on #342).**
+   - Rebasing keeps nanoseconds only while a chunk's offsets stay within `Number.MAX_SAFE_INTEGER`, about 104 days.
+   - `WidgetTraceSet.add` marks the set `exact = false` when a chunk's latest start or end lies more than
+     `Number.MAX_SAFE_INTEGER` ns after its smallest start.
+   - A set that is not exact is never written; the partition scans. Task 3 adds the test, and Task 4 treats it like
+     a refusal by the guard, with its own warning.
+2. **The index-only count (Task 8, CodeRabbit on #342).**
+   - Under `UNION` the arms are deduplicated together. With the scan arm omitted, though, the index relation alone
+     can repeat a trace: one row per variable tuple and per partition.
+   - So `spanCountQuery(f, 'traces', route)` keeps `count(DISTINCT trace_id)` over the relation. Task 8 tests that
+     an index-only count over two rows of one trace gives 1.
+3. **`traceTotal` under a long window.** CodeRabbit's third comment on #342 is answered without a change:
+   - `traceTotal` runs only on the paged path, and `pagesTraces` excludes a long window.
+   - The long-window total goes through `traceList`, which is aggregated by trace start.
+   - A routed `spanCountQuery` therefore only ever sees no window.
+   - Task 9 asserts that the long-window total equals the scan's.
 
 ## PR 1: format 7 and the writer
 
