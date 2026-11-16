@@ -137,6 +137,7 @@ import {
   facetCounts,
   groupStats,
   internRows,
+  relTime,
   rowsOf,
   type SpanEntry,
   serviceStats,
@@ -1130,7 +1131,7 @@ export function createDuckDbDataSource(opts: {
     if (filter.files.files.length === 0) return [];
     const table = await read(['logs'], filter.files, logPointsQuery(filter, sort, q.limit), signal);
     return rowsOf(table).map((r) => ({
-      time: toNumber(cell(r, 'time_rel'), 'time_rel'),
+      time: relTime(cell(r, 'time_rel'), 'time_rel'),
       severity: toNumber(cell(r, 'severity_number') ?? 0, 'severity_number'),
     }));
   }
@@ -1152,7 +1153,7 @@ export function createDuckDbDataSource(opts: {
       const sort = sortOf(SPAN_SORTS, q.sort, 'spans');
       const table = await read(['spans'], filter.files, spanPointsQuery(filter, sort, q.limit), signal);
       return rowsOf(table).map((r) => ({
-        start: toNumber(cell(r, 'start_ns'), 'start_ns'),
+        start: relTime(cell(r, 'start_ns'), 'start_ns'),
         durationNs: toNumber(cell(r, 'duration_ns') ?? 0, 'duration_ns'),
         error: toNumber(cell(r, 'status_code') ?? 0, 'status_code') === 2,
       }));
