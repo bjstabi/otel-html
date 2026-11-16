@@ -203,4 +203,30 @@ describe('smallFiles', () => {
     expect(t.fetched).toEqual(['a', 'a', 'a']);
     expect(t.swapped).toEqual(['a']);
   });
+
+  test('a forget during the fresh fetch leaves the mismatch unrecorded, so a later prepare fetches again', async () => {
+    const fetched: boolean[] = [];
+    let release: () => void = () => undefined;
+    const s = smallFiles({
+      bytesOf: () => 10,
+      fetchWhole: async (_p, isFresh) => {
+        fetched.push(isFresh === true);
+        if (isFresh) await new Promise<void>((r) => (release = r));
+        return new Uint8Array(7);
+      },
+      swap: async () => undefined,
+    });
+    const first = s.prepare(['a']);
+    await tick();
+    expect(fetched).toEqual([false, true]);
+    s.forget(['a']);
+    release();
+    await first;
+    const second = s.prepare(['a']);
+    await tick();
+    // the new entry fetches twice (whole, then fresh); a path left marked as a mismatch would fetch nothing
+    expect(fetched).toHaveLength(4);
+    release();
+    await second;
+  });
 });

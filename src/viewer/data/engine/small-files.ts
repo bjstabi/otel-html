@@ -72,7 +72,8 @@ export function smallFiles(deps: SmallFilesDeps): SmallFiles {
           // a stale cache entry or a host's error page: ask the server once, and keep range reads if it still differs
           bytes = await deps.fetchWhole(path, true);
           if (bytes.length !== expected) {
-            mismatched.set(path, expected);
+            // forgotten while in flight: the next prepare must fetch again
+            if (entries.get(path) === entry) mismatched.set(path, expected);
             throw new Error(`${path}: fetched ${bytes.length} bytes, the manifest says ${expected}`);
           }
         }
