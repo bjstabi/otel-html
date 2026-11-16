@@ -6,10 +6,12 @@ type ListTable = 'spans' | 'logs' | 'traces';
 
 /**
  * The first rows of a list ordered by time, read from the fewest files that can fill them. The files are the cutoff
- * of `newestFiles` (the newest for `dir: 'desc'`, the oldest for `asc`); when `counts` can say how many rows of each
- * match they come first, and a page the files cannot fill (a filter matched too little there) reads the next group
- * until it fills or every file is in. `read(files, complete)` runs the rows statement (`complete`: every file is in) and returns its row count with its result.
- * `counts` is asked at most once, and only when the files by `rows` alone would not be every file.
+ * of `newestFiles` (the newest for `dir: 'desc'`, the oldest for `asc`) by each file's `rows`. A page they cannot fill
+ * (a filter matched too little there) asks `counts` once, for how many rows of each file match (rollups), and cuts again
+ * by those; if that gives the same files, or the page is still short, it reads the next group until the page fills or
+ * every file is in. `read(files, complete)` runs the rows statement (`complete`: every file is in) and returns its row
+ * count with its result. `cutoff: false` reads every file in one statement (a page whose sibling statements read the raw
+ * files anyway shares their cache).
  */
 export async function readPage<T>(opts: {
   manifest: ManifestV4;
@@ -18,27 +20,39 @@ export async function readPage<T>(opts: {
   /** Rows wanted. */
   need: number;
   dir: 'asc' | 'desc';
+  cutoff?: boolean;
   counts?: () => Promise<ReadonlyMap<string, number> | undefined>;
   read: (files: Pruned, complete: boolean) => Promise<{ rows: number; value: T }>;
 }): Promise<{ value: T; files: Pruned; rows: number; complete: boolean }> {
   const { manifest, table, pruned, need, dir } = opts;
+  const reach = opts.cutoff === false ? Number.MAX_SAFE_INTEGER : need;
   let counts: ReadonlyMap<string, number> | undefined;
-  let cut = newestFiles(manifest, table, pruned, need, { dir });
-  if (!cut.complete && opts.counts !== undefined) {
-    counts = await opts.counts();
-    if (counts !== undefined) cut = newestFiles(manifest, table, pruned, need, { dir, counts });
-  }
+  let asked = false;
+  let cut = newestFiles(manifest, table, pruned, reach, { dir });
   for (;;) {
     const page = await opts.read(cut.files, cut.complete);
-    if (page.rows >= need || cut.complete) return { ...page, files: cut.files, complete: cut.complete };
-    const more = newestFiles(manifest, table, pruned, need, {
+    const done = { ...page, files: cut.files, complete: cut.complete };
+    if (page.rows >= need || cut.complete) return done;
+    if (!asked && opts.counts !== undefined) {
+      asked = true;
+      counts = await opts.counts();
+      if (counts !== undefined) {
+        const recut = newestFiles(manifest, table, pruned, reach, { dir, counts });
+        const same =
+          recut.files.files.length === cut.files.files.length &&
+          recut.files.files.every((p, i) => p === cut.files.files[i]);
+        if (!same) {
+          cut = recut;
+          continue;
+        }
+      }
+    }
+    const more = newestFiles(manifest, table, pruned, reach, {
       dir,
       after: cut.files,
       ...(counts === undefined ? {} : { counts }),
     });
-    if (more.files.files.length <= cut.files.files.length) {
-      return { ...page, files: cut.files, complete: cut.complete };
-    }
+    if (more.files.files.length <= cut.files.files.length) return done;
     cut = more;
   }
 }

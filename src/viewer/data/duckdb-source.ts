@@ -587,6 +587,7 @@ export function createDuckDbDataSource(opts: {
                 pruned: none ? prunePartitions(manifest, 'traces', new Map(), null) : f.files,
                 need,
                 dir: sort.dir,
+                cutoff: !siblingsReadRaw(f),
                 ...(none ? {} : { counts: () => matchCounts('spans', f, f.files) }),
                 read: async (files) => {
                   const t = none
@@ -656,6 +657,44 @@ export function createDuckDbDataSource(opts: {
     };
 
     /**
+     * Whether any other statement of this query reads the raw spans files, by the router's own answer (`plan` gives null
+     * for a need it sends to today's statement). The first page then reads every file, as `main` did: the statements share
+     * what the rows statement fetched. A page after a cursor never asks.
+     */
+    const siblingsReadRaw = (f: SqlFilter): boolean => {
+      // the match count rides with every rows page
+      if (
+        q.mode === 'traces'
+          ? unconditioned(f) || plan(f, 'total', [], false) === null
+          : plan(f, 'total', [], false) === null
+      )
+        return true;
+      if (needs.has('facets')) {
+        const keys =
+          q.facetKeys === null
+            ? CORE_SPAN_FACETS
+            : CORE_SPAN_FACETS.filter((c) => q.facetKeys?.includes(c.key));
+        if (q.facetKeys === null || q.facetKeys.some((k) => !CORE_KEYS.has(k))) return true;
+        if (keys.some((k) => plan(f, 'facets', [k.reads], false) === null)) return true;
+      }
+      if (needs.has('timeline') && plan(f, 'timeline', readsOf([STATUS_KEY]), true) === null) return true;
+      if (
+        !needs.has('timeline') &&
+        needs.has('buckets') &&
+        plan(f, 'buckets', readsOf([STATUS_KEY]), false) === null
+      )
+        return true;
+      if (needs.has('durations') && plan(f, 'durations', [], true) === null) return true;
+      if (
+        needs.has('groups') &&
+        q.measureBy !== null &&
+        plan(f, 'groups', readsOf([groupKeyOf(q.measureBy), STATUS_KEY]), true) === null
+      )
+        return true;
+      return false;
+    };
+
+    /**
      * A page of a start-sorted spans list: `limit` rows, from the newest (oldest, ascending) files that can fill it,
      * after `q.cursor`. One row more than the page is asked, which says whether `next` exists.
      */
@@ -673,6 +712,7 @@ export function createDuckDbDataSource(opts: {
         pruned,
         need,
         dir: sort.dir,
+        cutoff: cursor !== null || !siblingsReadRaw(f),
         counts: () => matchCounts('spans', f, pruned),
         read: async (files, complete) => {
           // every file read ascending is what the shared view does (oldest first, footers already bound): its own list
@@ -1096,6 +1136,20 @@ export function createDuckDbDataSource(opts: {
       );
     };
 
+    /** Whether another statement of this query reads the raw logs files, by the router's answer (see `querySpans`). */
+    const siblingsReadRaw = (f: SqlFilter): boolean => {
+      if (plan(f, 'total', []) === null) return true;
+      if (needs.has('facets')) {
+        const keys =
+          q.facetKeys === null
+            ? CORE_LOG_FACETS
+            : CORE_LOG_FACETS.filter((c) => q.facetKeys?.includes(c.key));
+        if (q.facetKeys === null || q.facetKeys.some((k) => !CORE_LOG_KEYS.has(k))) return true;
+        if (keys.some((k) => plan(f, 'facets', [k.reads]) === null)) return true;
+      }
+      return needs.has('timeline') && plan(f, 'timeline', readsOf([BAND_KEY])) === null;
+    };
+
     /** A page of a time-sorted logs list: `q.limit` rows after `q.cursor`, from the newest (oldest, ascending) files that can fill it. */
     const logPage = async (
       f: SqlFilter,
@@ -1111,6 +1165,7 @@ export function createDuckDbDataSource(opts: {
         pruned,
         need,
         dir: sort.dir,
+        cutoff: cursor !== null || !siblingsReadRaw(f),
         counts: () => matchCounts(f, pruned),
         read: async (files, complete) => {
           // every file read ascending is what the shared view does (oldest first, footers already bound): its own list

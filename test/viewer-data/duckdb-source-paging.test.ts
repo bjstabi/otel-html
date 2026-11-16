@@ -112,7 +112,10 @@ function recording() {
       await inner.prepare(paths, signal);
     },
     query: (q, signal) => {
-      statements.push({ sql: String(q), prepared });
+      const text = String(q);
+      // the files a statement reads: its own list, else every file of the shared view (prepared races with siblings)
+      const listed = [...text.matchAll(/'([^']+\.parquet)'/g)].map((m) => m[1] as string);
+      statements.push({ sql: text, prepared: listed.length > 0 ? listed : prepared });
       return inner.query(q, signal);
     },
   };
@@ -265,11 +268,12 @@ describe('paging the lists to the end returns main`s answer', () => {
     const { source, statements } = recording();
     const main = await mainSpans({ sort: { column: 'start', dir: 'desc' }, text: 'commit' });
     expect(main).toHaveLength(5);
+    // a cursor after every span: a next page, which reads the newest files that can hold rows after it
+    const cursor: RowCursor = { time: BASE + ns(9000), filename: '', row: 0n, spanId: '' };
     const r = await source.querySpans(
-      spanQuery({ sort: { column: 'start', dir: 'desc' }, text: 'commit', limit: 3 }),
+      spanQuery({ sort: { column: 'start', dir: 'desc' }, text: 'commit', limit: 3, cursor }),
     );
     expect((r.rows as SpanRow[]).map(spanKey)).toEqual(main.slice(0, 3).map(spanKey));
-    expect(r.total).toBe(5);
     expect(r.next).not.toBeNull();
     // several statements for the rows: the newest files found nothing, the page was read again over older ones
     const rowsStatements = statements.filter((s) => s.sql.includes('LIMIT 4'));
@@ -301,9 +305,13 @@ describe('a first page reads only the files the cutoff keeps', () => {
   const spansPaths = (): string[] =>
     f.manifest.partitions.flatMap((p) => (p.files.spans === undefined ? [] : [p.files.spans.path]));
 
-  test('descending spans: the newest partitions only, in newest-first order', async () => {
+  const AFTER_ALL: RowCursor = { time: BASE + ns(9000), filename: '', row: 0n, spanId: '' };
+
+  test('descending spans, a next page: the newest partitions only, in newest-first order', async () => {
     const { source, statements } = recording();
-    const r = await source.querySpans(spanQuery({ sort: { column: 'start', dir: 'desc' }, limit: 2 }));
+    const r = await source.querySpans(
+      spanQuery({ sort: { column: 'start', dir: 'desc' }, limit: 2, cursor: AFTER_ALL }),
+    );
     expect(r.rows).toHaveLength(2);
     const [page] = rowsStatement(statements);
     expect(page).toBeDefined();
@@ -318,9 +326,25 @@ describe('a first page reads only the files the cutoff keeps', () => {
       expect(at(order[i] as string)).toBeLessThan(at(order[i - 1] as string));
   });
 
-  test('ascending logs: the oldest partition only', async () => {
+  test('a first page whose total or facets read the raw files reads the same files as main', async () => {
+    for (const needs of [['rows'], ['rows', 'facets']] as const) {
+      const { source, statements } = recording();
+      await source.querySpans(
+        spanQuery({ sort: { column: 'start', dir: 'desc' }, limit: 2, needs: [...needs] }),
+      );
+      const [page] = rowsStatement(statements);
+      // the shared view, every file: no list of its own and no `filename IN (...)`, as on main
+      expect(page?.sql).not.toContain('read_parquet');
+      expect(page?.sql).not.toMatch(/"?filename"? IN/);
+    }
+  });
+
+  test('ascending logs, a next page: the oldest partitions only', async () => {
     const { source, statements } = recording();
-    const r = await source.queryLogs(logQuery({ limit: 3 }));
+    const first = await source.queryLogs(logQuery({ limit: 3 }));
+    expect(first.next).not.toBeNull();
+    statements.length = 0;
+    const r = await source.queryLogs(logQuery({ limit: 3, cursor: first.next ?? null }));
     expect(r.rows).toHaveLength(3);
     const [page] = rowsStatement(statements);
     const logsPaths = f.manifest.partitions.flatMap((p) =>

@@ -135,6 +135,8 @@ const logQuery = (over: Partial<LogQuery>): LogQuery => ({
 
 interface SpanSpec {
   id: string;
+  /** Ask the first page, then the page after it (the entry measures both). */
+  next?: true;
   family: Family;
   needs: readonly SpanNeed[];
   builders: readonly string[];
@@ -156,15 +158,18 @@ function spanEntries(specs: readonly SpanSpec[]): Entry<'querySpans'>[] {
         builders: v === LONG || v === ALL_LONG ? (s.long ?? s.builders) : s.builders,
         spacing: v.spacing,
         window: v.window,
-        run: (ds, ctx) =>
-          ds.querySpans(
-            spanQuery({
-              ...(s.when?.(ctx.ids) ?? NONE),
-              ...s.over,
-              needs: s.needs,
-              window: v.window ? ctx.window : null,
-            }),
-          ),
+        run: async (ds, ctx) => {
+          const first = spanQuery({
+            ...(s.when?.(ctx.ids) ?? NONE),
+            ...s.over,
+            needs: s.needs,
+            window: v.window ? ctx.window : null,
+          });
+          const page = await ds.querySpans(first);
+          // a report too small for a second page (an empty one) answers with the first
+          if (s.next !== true || page.next == null) return page;
+          return ds.querySpans({ ...first, cursor: page.next });
+        },
       }),
     ),
   );
@@ -172,6 +177,8 @@ function spanEntries(specs: readonly SpanSpec[]): Entry<'querySpans'>[] {
 
 interface LogSpec {
   id: string;
+  /** Ask the first page, then the page after it (the entry measures both). */
+  next?: true;
   family: Family;
   needs: readonly LogNeed[];
   builders: readonly string[];
@@ -193,15 +200,18 @@ function logEntries(specs: readonly LogSpec[]): Entry<'queryLogs'>[] {
         builders: v === LONG || v === ALL_LONG ? (s.long ?? s.builders) : s.builders,
         spacing: v.spacing,
         window: v.window,
-        run: (ds, ctx) =>
-          ds.queryLogs(
-            logQuery({
-              ...(s.when?.(ctx.ids) ?? NONE),
-              ...s.over,
-              needs: s.needs,
-              window: v.window ? ctx.window : null,
-            }),
-          ),
+        run: async (ds, ctx) => {
+          const first = logQuery({
+            ...(s.when?.(ctx.ids) ?? NONE),
+            ...s.over,
+            needs: s.needs,
+            window: v.window ? ctx.window : null,
+          });
+          const page = await ds.queryLogs(first);
+          // a report too small for a second page (an empty one) answers with the first
+          if (s.next !== true || page.next == null) return page;
+          return ds.queryLogs({ ...first, cursor: page.next });
+        },
       }),
     ),
   );
@@ -297,6 +307,14 @@ const SPAN_ROWS: SpanSpec[] = [
     family: 'rows page',
     variants: [SHORT, LONG, ALL],
   },
+  {
+    ...span('spans.rows.next', ['rows'], ['spanRowsQuery', 'spanTotalQuery'], {
+      long: ['spanRowsQuery', 'rollupTotalQuery'],
+    }),
+    next: true,
+    family: 'rows page',
+    variants: [SHORT, LONG, ALL],
+  },
 ];
 
 /** The trace list of a condition under a long window: the partitions of the traces that start in it, then their spans. */
@@ -357,6 +375,10 @@ const LOG_QUERIES: LogSpec[] = [
   }),
   log('logs.rows', 'rows page', ['rows'], ['logRowsQuery', 'logTotalQuery'], {
     long: ['logRowsQuery', 'rollupTotalQuery'],
+  }),
+  log('logs.rows.next', 'rows page', ['rows'], ['logRowsQuery', 'logTotalQuery'], {
+    long: ['logRowsQuery', 'rollupTotalQuery'],
+    next: true,
   }),
   log('logs.traces', 'trace list', ['rows', 'total'], ['logTracesQuery', 'logCountQuery'], {
     over: { mode: 'traces', sort: { column: 'first', dir: 'asc' } },
@@ -793,6 +815,16 @@ const BASELINE: Record<string, Declared> = {
   // a page reads the newest files that fill it, so a wider window only adds files (it was a scan before paging)
   'spans.rows.long': decl(['fixed', 'scan', 'files'], { allowed: { density: ROWS_PAGE } }),
   'spans.rows.all': decl(['scan', 'scan', null], { allowed: { retention: ROWS_PAGE, density: ROWS_PAGE } }),
+  // the first page and the one after it: the page after a cursor adds no request over the first (its files are warm)
+  'spans.rows.next.short': decl(['fixed', 'scan', 'scan'], {
+    allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
+  }),
+  'spans.rows.next.long': decl(['fixed', 'scan', 'files'], { allowed: { density: ROWS_PAGE } }),
+  'spans.rows.next.all': decl(['scan', 'scan', null], {
+    allowed: { retention: ROWS_PAGE, density: ROWS_PAGE },
+  }),
+  'logs.rows.next.short': decl(['fixed', 'files', 'files']),
+  'logs.rows.next.long': decl(['fixed', 'files', 'files']),
   'percentile.short': decl(['scan', 'scan', null], {
     allowed: { retention: PERCENTILE_SHORT, density: PERCENTILE_SHORT },
   }),
