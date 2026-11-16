@@ -36,6 +36,7 @@ import {
   type DurationBin,
   type SpanPointsQuery,
   type SpanQuery,
+  type SpanQueryResult,
   type SpanRow,
   type TraceRow,
 } from '../data/results.js';
@@ -306,8 +307,19 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
             : `Export is unavailable because the last query failed: ${state.message}`,
         );
       }
-      // what the list holds: the first page and the pages scrolled to
-      const all = pages.rows;
+      // the list holds the pages scrolled to; the export is the list up to `listCap`, as one statement of its own
+      let all: SpanQueryResult['rows'] = pages.rows;
+      if (all.length < Math.min(state.result.total, manifest.config.viewer.listCap)) {
+        all = (
+          await dataSource.querySpans({
+            ...query,
+            limit: manifest.config.viewer.listCap,
+            cursor: null,
+            needs: ['rows'],
+            facetKeys: [],
+          })
+        ).rows;
+      }
       const exportedSpans = all.filter(isSpanRow);
       let ctx: Parameters<typeof exportRows>[2];
       if (format === 'otlp-json') {

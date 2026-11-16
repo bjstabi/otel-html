@@ -323,7 +323,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     );
   };
 
-  const runExport = (format: ExportFormat): void => {
+  const runExport = async (format: ExportFormat): Promise<void> => {
     try {
       setActionError(null);
       // Only a finished query is exported; the previous result shown while loading is stale.
@@ -335,9 +335,21 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
         );
       }
       const r = state.result.kind === 'rows' ? state.result.result : null;
-      if (r === null || r.mode !== 'logs')
+      if (r === null || r.mode !== 'logs' || query.kind !== 'rows')
         throw new Error('Export lists logs; switch Group into back to Logs.');
-      downloadBlob(exportLogs(r.rows, format, epoch), exportFileName('logs', r.rows.length, r.total, format));
+      // the list holds the pages scrolled to; the export is the list up to `listCap`, as one statement of its own
+      let rows: readonly LogRow[] = pages.rows as readonly LogRow[];
+      if (rows.length < Math.min(r.total, listCap)) {
+        const all = await dataSource.queryLogs({
+          ...query.query,
+          limit: listCap,
+          cursor: null,
+          needs: ['rows'],
+          facetKeys: [],
+        });
+        if (all.mode === 'logs') rows = all.rows;
+      }
+      downloadBlob(exportLogs(rows, format, epoch), exportFileName('logs', rows.length, r.total, format));
     } catch (e) {
       fail('The export failed', e);
     }
@@ -346,9 +358,9 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const exportItems = [
     ...(mode === 'logs'
       ? [
-          { label: 'Export CSV', onSelect: () => runExport('csv') },
-          { label: 'Export JSON', onSelect: () => runExport('json') },
-          { label: 'Export OTLP JSON', onSelect: () => runExport('otlp-json') },
+          { label: 'Export CSV', onSelect: () => void runExport('csv') },
+          { label: 'Export JSON', onSelect: () => void runExport('json') },
+          { label: 'Export OTLP JSON', onSelect: () => void runExport('otlp-json') },
         ]
       : []),
     copyWidgetItem('logs', sel, widgetCopy.copy),

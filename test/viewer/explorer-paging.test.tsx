@@ -26,8 +26,16 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
     return null;
   },
 }));
+const downloads: { blob: Blob; name: string }[] = [];
+vi.mock('../../src/viewer/components/export.js', async (importActual) => ({
+  ...(await importActual<typeof import('../../src/viewer/components/export.js')>()),
+  downloadBlob: (blob: Blob, name: string) => downloads.push({ blob, name }),
+}));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  downloads.length = 0;
+});
 
 const LIST_CAP = 1000;
 
@@ -226,5 +234,23 @@ describe('the Point plot', () => {
     const { pointCalls } = setup(() => Promise.resolve(page(spans('a', 200), CURSOR)));
     await waitFor(() => expect(rowCount()).toBe(200));
     expect(pointCalls).toHaveLength(0);
+  });
+});
+
+describe('exporting the Traces list', () => {
+  test('writes the list up to listCap, from one statement of its own, not the pages loaded', async () => {
+    const { calls } = setup((q) =>
+      Promise.resolve(q.limit === LIST_CAP ? page(spans('x', 700), null) : page(spans('a', 200), CURSOR)),
+    );
+    await waitFor(() => expect(rowCount()).toBe(200));
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Export CSV' }));
+    await waitFor(() => expect(downloads).toHaveLength(1));
+    const lines = ((await downloads[0]?.blob.text()) ?? '').split('\n').filter((l) => l !== '');
+    expect(lines.length).toBe(701);
+    const own = calls.at(-1);
+    expect(own?.limit).toBe(LIST_CAP);
+    expect(own?.cursor).toBeNull();
+    expect(own?.needs).toEqual(['rows']);
   });
 });
