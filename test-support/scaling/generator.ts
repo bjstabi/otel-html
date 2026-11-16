@@ -209,6 +209,11 @@ const traceIdOf = (n: number, t: number): string => {
   return hex64(splitMix64(seed * 2n)) + hex64(splitMix64(seed * 2n + 1n));
 };
 const hex64 = (v: bigint): string => v.toString(16).padStart(16, '0');
+/**
+ * The first trace of the first partition inside the window: the same id in every shape (a partition's content is a
+ * function of its slot), and in a `mixed` shape the trace of the `otel-html-ci` scope (trace 0 of the slot).
+ */
+export const CI_TRACE_ID = traceIdOf(FIRST_SLOT, 0);
 const spanIdOf = (n: number, k: number): string => hex(n * ID_STRIDE + k + 1, 16);
 const routeOf = (k: number): string => `/route/${k % 16}`;
 

@@ -11,12 +11,27 @@ import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { type Cost, costWith } from '../../test-support/scaling/cost.js';
 import { openCountingEngine } from '../../test-support/scaling/counting-engine.js';
-import { buildScalingReport, type ScalingReport, type Shape } from '../../test-support/scaling/generator.js';
+import {
+  buildScalingReport,
+  CI_TRACE_ID,
+  type ScalingReport,
+  type Shape,
+} from '../../test-support/scaling/generator.js';
 import { recordingDataSource } from '../../test-support/scaling/recording-source.js';
 
 // Shared by the two test files that render the pages; each has its own mocks and its own worker (its own heap).
 
-export const PAGES = ['#/dashboards/ci', '#/traces?mode=traces', '#/traces', '#/logs', '#/metrics'] as const;
+/** A trace view of the first trace inside the window: on a `mixed` shape the CI run trace. */
+export const TRACE_PAGE = `#/traces/trace/${CI_TRACE_ID}`;
+
+export const PAGES = [
+  '#/dashboards/ci',
+  '#/traces?mode=traces',
+  '#/traces',
+  '#/logs',
+  '#/metrics',
+  TRACE_PAGE,
+] as const;
 
 /**
  * Every method each page asks over a scaling report. The settle waits for all of them: the log list asks whether its traces exist, only once the rows have rendered.
@@ -35,6 +50,7 @@ export const PAGE_CALLS: Readonly<Record<string, readonly string[]>> = {
   '#/traces': ['querySpans'],
   '#/logs': ['queryLogs', 'hasTrace'],
   '#/metrics': ['metricCatalog', 'metricShowOptions', 'metricQuery'],
+  [TRACE_PAGE]: ['getTrace'],
 };
 
 /** `value` with the metric of every query set to `metric`: the report of the test holds one metric, not the CI's. */
@@ -74,7 +90,7 @@ export function manifestWithCi(base: ManifestV4, metric: string): ManifestV4 {
 }
 
 /** A page in a cold counting engine over an existing report: what its file reads cost. */
-async function pageOn(live: ScalingReport, hash: string, threshold: number): Promise<Cost> {
+export async function pageOn(live: ScalingReport, hash: string, threshold: number): Promise<Cost> {
   const counting = await openCountingEngine(live.dir, live.manifest, { threshold });
   try {
     const manifest = manifestWithCi(live.manifest, live.ids.metric);
@@ -112,7 +128,7 @@ const { OTEL_HTML_SCALING_THRESHOLD: LIMIT } = process.env;
 export const PAGE_THRESHOLD = Number(LIMIT ?? 524_288);
 
 /**
- * The five pages rendered whole on the report of `shape`, one cold engine each; the costs go to `<out>/pages` (small
+ * The pages rendered whole on the report of `shape`, one cold engine each; the costs go to `<out>/pages` (small
  * files prepared under `PAGE_THRESHOLD`) and to `<out>/pages-off` (none prepared: main before PR 3).
  */
 export async function measureShape(shape: Shape, out: string): Promise<void> {
