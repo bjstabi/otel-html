@@ -22,6 +22,7 @@ function arrowType(def: ColumnDef): DataType {
   }
 }
 
-export function arrowSchema(table: Table): Schema {
-  return new Schema(TABLE_COLUMNS[table].map((c) => new Field(c.name, arrowType(c), c.nullable)));
+/** The Arrow schema of a table; `columns` replaces its `TABLE_COLUMNS` entry (`widget_traces`' per-report columns). */
+export function arrowSchema(table: Table, columns: readonly ColumnDef[] = TABLE_COLUMNS[table]): Schema {
+  return new Schema(columns.map((c) => new Field(c.name, arrowType(c), c.nullable)));
 }

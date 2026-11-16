@@ -1,8 +1,10 @@
 import '../../../src/writer/parquet-wasm-source.js';
 import { describe, expect, test } from 'vitest';
-import { decodeTable, encodeTable } from '../../../src/format/parquet/codec.js';
-import { TABLE_COLUMNS, type Table } from '../../../src/format/parquet/columns.js';
+import { batchFromRows } from '../../../src/format/parquet/batch.js';
+import { checkRow, decodeTable, encodeColumns, encodeTable } from '../../../src/format/parquet/codec.js';
+import { TABLE_COLUMNS, type Table, widgetTracesColumns } from '../../../src/format/parquet/columns.js';
 import type { Row } from '../../../src/format/parquet/rows.js';
+import { openTestDb } from '../../../test-support/duckdb-node.js';
 import { parquetMetadata } from '../../../test-support/parquet-metadata.js';
 
 const SPAN_ID = 'span_id';
@@ -186,5 +188,37 @@ describe('parquet codec', () => {
       'd',
       'c',
     ]);
+  });
+
+  test('widget_traces takes its var: columns from the columns option, sorted by condition then trace id', async () => {
+    const columns = widgetTracesColumns(['k']);
+    expect(columns.map((c) => c.name)).toEqual(['condition', 'trace_id', 'var:k']);
+    const rows: Row[] = [
+      { condition: 'b', trace_id: 't1', 'var:k': 'x' },
+      { condition: 'a', trace_id: 't2', 'var:k': null },
+      { condition: 'a', trace_id: 't1', 'var:k': 'y' },
+    ];
+    expect(() => checkRow('widget_traces', rows[0] as Row, 0, columns)).not.toThrow();
+    expect(() => checkRow('widget_traces', rows[0] as Row, 0)).toThrow(/unknown column/);
+    const file = encodeColumns('widget_traces', batchFromRows('widget_traces', rows, columns), {
+      rowGroupRows: 50_000,
+      columns,
+    });
+    const db = await openTestDb();
+    try {
+      db.registerFile('wt.parquet', file);
+      expect(db.rows('SELECT condition, trace_id, "var:k" AS k FROM read_parquet(\'wt.parquet\')')).toEqual([
+        { condition: 'a', trace_id: 't1', k: 'y' },
+        { condition: 'a', trace_id: 't2', k: null },
+        { condition: 'b', trace_id: 't1', k: 'x' },
+      ]);
+      expect(
+        db
+          .rows("SELECT name FROM parquet_schema('wt.parquet') WHERE name NOT IN ('schema', 'arrow_schema')")
+          .map((r) => (r as { name: string }).name),
+      ).toEqual(['condition', 'trace_id', 'var:k']);
+    } finally {
+      db.close();
+    }
   });
 });

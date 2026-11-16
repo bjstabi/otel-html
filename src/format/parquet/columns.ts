@@ -220,6 +220,24 @@ const LOG_ROLLUPS: readonly ColumnDef[] = [
 
 const WIDGET_TRACES: readonly ColumnDef[] = [required('condition', 'utf8'), required('trace_id', 'utf8')];
 
+/** The column of a `widget_traces` file holding the value of the variable `key` (a resource attribute of the span). */
+export const VAR_COLUMN_PREFIX = 'var:';
+
+/** `widget_traces`' columns for a report: the two fixed ones, then one nullable dictionary utf8 column per variable key. */
+export function widgetTracesColumns(variables: readonly string[]): ColumnDef[] {
+  return [
+    ...WIDGET_TRACES,
+    ...variables.map(
+      (key): ColumnDef => ({
+        name: `${VAR_COLUMN_PREFIX}${key}`,
+        type: 'utf8',
+        nullable: true,
+        dictionary: true,
+      }),
+    ),
+  ];
+}
+
 export const TABLE_COLUMNS: Readonly<Record<Table, readonly ColumnDef[]>> = {
   spans: SPANS,
   logs: LOGS,

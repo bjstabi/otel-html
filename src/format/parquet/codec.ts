@@ -56,6 +56,8 @@ export interface LayoutOptions {
 
 export interface EncodeOptions {
   readonly rowGroupRows: number;
+  /** The table's columns when they are not its `TABLE_COLUMNS` entry (`widget_traces`, whose `var:` columns are the report's). */
+  readonly columns?: readonly ColumnDef[];
   readonly layout?: LayoutOptions;
 }
 
@@ -161,10 +163,16 @@ const COLUMN_NAMES = new Map<Table, ReadonlySet<string>>(
  * every cell the JS type and range its column stores. `encodeTable` runs it on every row; a session runs it on rows
  * it is about to accept, so a row that cannot be encoded never reaches a cut. `index` names the row in the error.
  */
-export function checkRow(table: Table, row: Row, index = 0): void {
-  const columns = TABLE_COLUMNS[table];
+export function checkRow(
+  table: Table,
+  row: Row,
+  index = 0,
+  columns: readonly ColumnDef[] = TABLE_COLUMNS[table],
+): void {
+  const names =
+    columns === TABLE_COLUMNS[table] ? COLUMN_NAMES.get(table) : new Set(columns.map((c) => c.name));
   for (const k of Object.keys(row)) {
-    if (!COLUMN_NAMES.get(table)?.has(k))
+    if (!names?.has(k))
       throw invalidCell(`${table}.${k}`, 'a column of the table', `unknown column in row ${index}`);
   }
   for (const def of columns) {
@@ -419,17 +427,22 @@ function encodeSorted(
   perm: readonly number[],
   opts: EncodeOptions,
 ): Uint8Array {
-  const arrow = columnsToArrow(table, batch, perm);
+  const arrow = columnsToArrow(table, batch, perm, opts.columns);
   ensureParquetWasm();
   const wasm = WasmTable.fromIPCStream(tableToIPC(arrow, 'stream'));
   return writeParquet(wasm, writerProperties(opts));
 }
 
 /** The Arrow table of a batch, its rows in `perm` order (every row once). No sorting and no cell checks. */
-export function columnsToArrow(table: Table, batch: ColumnBatch, perm: readonly number[]): ArrowTable {
-  const schema = arrowSchema(table);
+export function columnsToArrow(
+  table: Table,
+  batch: ColumnBatch,
+  perm: readonly number[],
+  columns: readonly ColumnDef[] = TABLE_COLUMNS[table],
+): ArrowTable {
+  const schema = arrowSchema(table, columns);
   const children: Data[] = [];
-  for (const [i, def] of TABLE_COLUMNS[table].entries()) {
+  for (const [i, def] of columns.entries()) {
     const field = schema.fields[i];
     if (field === undefined) throw new Error(`no arrow field for ${table}.${def.name}`);
     children.push(columnData(def, field.type, batch.cells[def.name] ?? [], perm));
@@ -457,8 +470,8 @@ export function writerProperties(opts: EncodeOptions): WriterProperties {
 /** Sorts `rows` by `SORT_COLUMNS[table]` (nulls last, stable) and encodes them as ZSTD Parquet. */
 export function encodeTable(table: Table, rows: readonly Row[], opts: EncodeOptions): Uint8Array {
   // Validate in the caller's row order, so the row index in an error is the caller's.
-  for (const [r, row] of rows.entries()) checkRow(table, row, r);
-  return encodeColumns(table, batchFromRows(table, rows), opts);
+  for (const [r, row] of rows.entries()) checkRow(table, row, r, opts.columns);
+  return encodeColumns(table, batchFromRows(table, rows, opts.columns), opts);
 }
 
 function plain(value: unknown): unknown {

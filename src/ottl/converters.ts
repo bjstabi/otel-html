@@ -7,6 +7,11 @@ export interface ConverterSpec {
   readonly contexts?: readonly OttlContextName[];
   readonly returns: 'bool' | 'int';
   /**
+   * `false` when the converter's result for a span depends on more than that span (other rows, the clock): a condition
+   * calling it cannot be evaluated once per span and stored. Row local when omitted.
+   */
+  readonly rowLocal?: false;
+  /**
    * Compile-time argument check. `constants[i]` is the argument's value when it is a
    * literal/enum, else undefined. Throws OtelHtmlError('invalid-ottl') using `col`.
    */
