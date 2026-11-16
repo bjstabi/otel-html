@@ -10,7 +10,8 @@ type ListTable = 'spans' | 'logs' | 'traces';
  * (a filter matched too little there) asks `counts` once, for how many rows of each file match (rollups), and cuts again
  * by those; if that gives the same files, or the page is still short, it reads the next group until the page fills or
  * every file is in. `read(files, complete)` runs the rows statement (`complete`: every file is in) and returns its row
- * count with its result. `cutoff: false` reads every file in one statement (a page whose sibling statements read the raw
+ * count with its result and, when it has `need` rows, `edge`, the absolute time of its last (`need`-th) row: a page is
+ * accepted only when `edge` lies strictly beyond every file the cutoff left out (`Cutoff.bound`), else it reads more files. `cutoff: false` reads every file in one statement (a page whose sibling statements read the raw
  * files anyway shares their cache).
  */
 export async function readPage<T>(opts: {
@@ -22,7 +23,7 @@ export async function readPage<T>(opts: {
   dir: 'asc' | 'desc';
   cutoff?: boolean;
   counts?: () => Promise<ReadonlyMap<string, number> | undefined>;
-  read: (files: Pruned, complete: boolean) => Promise<{ rows: number; value: T }>;
+  read: (files: Pruned, complete: boolean) => Promise<{ rows: number; value: T; edge?: bigint | null }>;
 }): Promise<{ value: T; files: Pruned; rows: number; complete: boolean }> {
   const { manifest, table, pruned, need, dir } = opts;
   const reach = opts.cutoff === false ? Number.MAX_SAFE_INTEGER : need;
@@ -31,8 +32,12 @@ export async function readPage<T>(opts: {
   let cut = newestFiles(manifest, table, pruned, reach, { dir });
   for (;;) {
     const page = await opts.read(cut.files, cut.complete);
-    const done = { ...page, files: cut.files, complete: cut.complete };
-    if (page.rows >= need || cut.complete) return done;
+    const done = { value: page.value, rows: page.rows, files: cut.files, complete: cut.complete };
+    // a full page is the page only when its last row lies beyond every left-out file (see `Cutoff.bound`)
+    const beyond =
+      cut.bound === null ||
+      (page.edge != null && (dir === 'desc' ? page.edge > cut.bound : page.edge < cut.bound));
+    if ((page.rows >= need && beyond) || cut.complete) return done;
     if (!asked && opts.counts !== undefined) {
       asked = true;
       counts = await opts.counts();

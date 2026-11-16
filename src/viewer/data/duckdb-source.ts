@@ -274,6 +274,13 @@ function checkLimit(limit: number): void {
 /** The newest data source made over each engine: the one whose manifest the rollup views follow. */
 const generations = new WeakMap<QueryEngine, number>();
 
+/** The absolute time of the `need`-th row of a page (its `column`, relative to `epoch`); null when the page is short or the cell empty. */
+function edgeOf(table: Table, column: string, epoch: bigint, need: number): bigint | null {
+  const row = rowsOf(table)[need - 1];
+  const v = row === undefined ? null : cell(row, column);
+  return typeof v === 'bigint' || typeof v === 'number' ? epoch + BigInt(v) : null;
+}
+
 /** The data source over a query engine (D19): no Mosaic type appears here. `close()` is `engine.close()`. */
 export function createDuckDbDataSource(opts: {
   engine: QueryEngine;
@@ -611,7 +618,7 @@ export function createDuckDbDataSource(opts: {
                         traceRowsQuery({ ...f, files }, sort, need, {}),
                         signal,
                       );
-                  return { rows: t.numRows, value: t };
+                  return { rows: t.numRows, value: t, edge: edgeOf(t, 'start_ns', epoch, need) };
                 },
               })
             ).value;
@@ -738,7 +745,7 @@ export function createDuckDbDataSource(opts: {
             spanRowsQuery(own, sort, need, cursor, view ? undefined : inReadOrder(files, sort.dir)),
             signal,
           );
-          return { rows: table.numRows, value: table };
+          return { rows: table.numRows, value: table, edge: edgeOf(table, 'start_ns', epoch, need) };
         },
       });
       const rows = rowsOf(page.value);
@@ -1226,7 +1233,7 @@ export function createDuckDbDataSource(opts: {
             logRowsQuery(own, sort, need, cursor, view ? undefined : inReadOrder(files, sort.dir)),
             signal,
           );
-          return { rows: table.numRows, value: table };
+          return { rows: table.numRows, value: table, edge: edgeOf(table, 'time_rel', epoch, need) };
         },
       });
       const rows = rowsOf(page.value);

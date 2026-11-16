@@ -11,6 +11,13 @@ export interface Cutoff {
   files: Pruned;
   /** Every file of `pruned` that may hold a matching row is in (a file `counts` gives 0 never is). */
   complete: boolean;
+  /**
+   * Where the left-out files end, in the list's direction: `desc` the largest `timeMax` among them (`timeEndMax` too for
+   * traces), `asc` the smallest `timeMin`. A page of the kept files is the page overall only when its last row lies
+   * strictly beyond it (above for `desc`, below for `asc`); a file kept for overlapping can fill a page with rows older
+   * than a left-out file's. Null when nothing was left out.
+   */
+  bound: bigint | null;
 }
 
 interface Entry {
@@ -93,7 +100,18 @@ export function newestFiles(
   }
   const files = entries.map((e) => e.path).filter((p) => kept.has(p));
   const complete = files.length === entries.length;
+  let edge: bigint | null = null;
+  for (const e of dated) {
+    if (kept.has(e.path)) continue;
+    const t = desc
+      ? table === 'traces' && e.end !== null && e.end > (e.max as bigint)
+        ? e.end
+        : (e.max as bigint)
+      : (e.min as bigint);
+    if (edge === null || (desc ? t > edge : t < edge)) edge = t;
+  }
   return {
+    bound: edge,
     files: { files, all: pruned.all && files.length === pruned.files.length, total: pruned.total },
     complete,
   };

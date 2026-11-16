@@ -195,6 +195,7 @@
     "test/viewer-data/format-5-open.test.ts": 2.2,
     "test/viewer-data/frozen-reports.test.ts": 4.5,
     "test/viewer-data/host-server.test.ts": 0.2,
+    "test/viewer-data/list-pages.test.ts": 0.3,
     "test/viewer-data/log-ref.test.ts": 0.1,
     "test/viewer-data/manifest-range.test.ts": 0.6,
     "test/viewer-data/metric-fn.test.ts": 0.1,

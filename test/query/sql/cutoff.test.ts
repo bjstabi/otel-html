@@ -66,6 +66,13 @@ describe('newestFiles', () => {
     expect(r.files.total).toBe(10);
   });
 
+  test('bound is where the left-out files end: the largest timeMax desc, the smallest timeMin asc, null when none', () => {
+    const m = manifestOf(ten());
+    expect(newestFiles(m, 'spans', all(m), 200).bound).toBe(79n);
+    expect(newestFiles(m, 'spans', all(m), 200, { dir: 'asc' }).bound).toBe(21n);
+    expect(newestFiles(m, 'spans', all(m), 5000).bound).toBeNull();
+  });
+
   test('is complete when every file is needed', () => {
     const m = manifestOf(ten());
     const r = newestFiles(m, 'spans', all(m), 5000);
