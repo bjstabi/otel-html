@@ -301,7 +301,7 @@ The manifest is a script that registers its JSON payload. Its fields:
 
 | field | meaning |
 |---|---|
-| `formatVersion` | `5` or `6` (this reader opens both; the writer produces 6) |
+| `formatVersion` | `5`, `6` or `7` (this reader opens all three; the writer produces 7) |
 | `otelHtmlVersion` | the version of otel-html that wrote the report |
 | `title` | the report title |
 | `epochUnixNano` | format 5 only: decimal nanoseconds of the report's epoch. A format-6 manifest stores none; a reader anchors on `range.start` (or `createdAt` when the report holds no data) and every stored time is absolute |

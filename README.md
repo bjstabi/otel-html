@@ -110,7 +110,7 @@ The root span is named after the command's basename (`.exe` stripped), has kind 
 
 ### `merge <reports...>`
 
-Combines report folders into one, for example the reports of parallel CI jobs. It reads reports of formats 1 to 3, 5 and 6, so it works across otel-html versions (see [Report format compatibility](#report-format-compatibility)). A cumulative metric series that appears in two reports is two runs: the second report's stream starts from its own start time and is not counted as a counter reset.
+Combines report folders into one, for example the reports of parallel CI jobs. It reads reports of formats 1 to 3 and 5 to 7, so it works across otel-html versions (see [Report format compatibility](#report-format-compatibility)). A cumulative metric series that appears in two reports is two runs: the second report's stream starts from its own start time and is not counted as a counter reset.
 
 ```sh
 otel-html merge ./job-1 ./job-2 -o ./combined
@@ -345,6 +345,8 @@ dashboards:
           legend:
             show: false
 ```
+
+A `traces` widget's condition is indexed per partition (format 7), so a dashboard lists its traces without scanning spans. A partition whose index would weigh more than 5 % of its spans file, or whose span times are more than 2^53 ns apart, is not indexed and is scanned.
 
 The grid has 12 columns. A widget is `timeline`, `traces`, `logs`, `metric`, `toplist` or `table`; `toplist` and `table` take `signal` (`spans` or `logs`), `groupBy` and an optional `measure`: `count` (the default), or `duration.sum`, `duration.avg`, `duration.max`, `duration.p95` or `duration.p99` for spans. A duration measure keeps the first 1,000 values of `groupBy`; the widget says how many spans had other values. A `groupBy` that is not a facet of the report says so in the widget and suggests the closest known keys. A `metric` widget without `queries` is a grid of the metrics of the selected trace's resources.
 
@@ -689,7 +691,7 @@ GitHub points a check run created with `GITHUB_TOKEN` at the Actions run page, s
 
 - `merge` re-renders any readable report with the current viewer, so reports from different otel-html versions combine into one report in the current format.
 - `--append` needs the same otel-html version as the report it appends to.
-- `merge` reads every version in `READABLE_FORMAT_VERSIONS`; `upgrade` and the viewer read formats 5 to 7. Frozen format-1 to format-3, format-5 and format-6 reports are in `fixtures/reports/` (format 4's left with its reader). The format-1 to format-3 ones are converted by `merge` and the result is opened by the tests; the format-5 and format-6 ones are read as is by `merge`, and by the viewer tests over their manifests and `.parquet.js` wrappers (the e2e opens them after `upgrade`); `otel-html host` serves them, to hold that.
+- `merge` reads every version in `READABLE_FORMAT_VERSIONS`; `upgrade` and the viewer read formats 5 to 7. Frozen format-1 to format-3 and format-5 to format-7 reports are in `fixtures/reports/` (format 4's left with its reader). The format-1 to format-3 ones are converted by `merge` and the result is opened by the tests; the format-5 to format-7 ones are read as is by `merge`, and by the viewer tests over their manifests and `.parquet.js` wrappers (the e2e opens them after `upgrade`); `otel-html host` serves them, to hold that.
 - Maintainers: every format version a release ships has a frozen report, written by that release, in `fixtures/reports/`, added with its compat test when the release is cut; a version leaves `READABLE_FORMAT_VERSIONS` only together with its fixture.
 
 ## Configuration

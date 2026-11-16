@@ -30,7 +30,7 @@ const TABLE_NOTES: Readonly<Record<Table, string>> = {
 };
 
 const MANIFEST_FIELDS = {
-  formatVersion: '`5` or `6` (this reader opens both; the writer produces 6)',
+  formatVersion: '`5`, `6` or `7` (this reader opens all three; the writer produces 7)',
   otelHtmlVersion: 'the version of otel-html that wrote the report',
   title: 'the report title',
   epochUnixNano:

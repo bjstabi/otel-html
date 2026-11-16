@@ -155,6 +155,7 @@ export type ReportName =
   | 'frozen-format-3'
   | 'frozen-format-5'
   | 'frozen-format-6'
+  | 'frozen-format-7'
   | 'wide-format-6';
 
 /**

@@ -34,6 +34,7 @@ describe.each([
   ['format-3', 3],
   ['format-5', 5],
   ['format-6', 6],
+  ['format-7', 7],
 ])('%s', (name, version) => {
   test('merge reads it and the totals survive', async () => {
     const w = createTestWriter();
