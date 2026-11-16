@@ -385,3 +385,49 @@ describe('a first page reads only the files the cutoff keeps', () => {
     expect(second.rows).toEqual(main.slice(4, 8));
   });
 });
+
+describe('a conditioned trace list reads main`s files', () => {
+  test('a trace matched only in an older partition, and traces that started there, keep main`s rows and order', async () => {
+    const spanAt = (trace: number, id: number, name: string, startMs: number): S => ({
+      trace,
+      id,
+      name,
+      startMs,
+    });
+    // P0 (old): T and T2 start here (not matching), U matches here only. P1 (new): F1, F2 and the later spans of T, T2 match.
+    const old: S[] = [
+      spanAt(801, 8011, 'noise', 0),
+      spanAt(802, 8021, 'noise', 5),
+      spanAt(803, 8031, 'hit', 20),
+    ];
+    const recent: S[] = [
+      spanAt(801, 8012, 'hit', 1000),
+      spanAt(802, 8022, 'hit', 1010),
+      spanAt(804, 8041, 'hit', 1100),
+      spanAt(805, 8051, 'hit', 1200),
+    ];
+    const fx = await buildFormat4Report([spansRequest(old), spansRequest(recent)], { close: false });
+    const fdb = await openFixtureDb(fx);
+    try {
+      const mk = () =>
+        createDuckDbDataSource({
+          engine: mosaicQueryEngine(createCoordinator(fdb.connector, silentLogger), fdb),
+          manifest: fx.manifest,
+        });
+      const window = { start: -1e9, end: 1e10 };
+      const sort = { column: 'start', dir: 'desc' } as const;
+      const ask = (limit: number) =>
+        mk().querySpans(
+          spanQuery({ mode: 'traces', sort, limit, condition: 'name == "hit"', window, needs: ['rows'] }),
+        );
+      const everything = (await ask(100)).rows as TraceRow[];
+      expect(everything).toHaveLength(5);
+      // the cutoff would keep only the newer partition (4 traces there, page of 3 + 1)
+      const page = (await ask(3)).rows as TraceRow[];
+      expect(page.map((r) => r.traceId)).toEqual(everything.slice(0, 3).map((r) => r.traceId));
+      expect(page).toEqual(everything.slice(0, 3));
+    } finally {
+      fdb.close();
+    }
+  });
+});

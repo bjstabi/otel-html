@@ -66,6 +66,7 @@ export const emptySpanResult = (): SpanQueryResult => ({
   durations: { summary: null, bins: [] },
   groups: null,
   residual: null,
+  next: null,
   tables: { resources: [], scopes: [] },
 });
 
@@ -77,6 +78,7 @@ export const emptyLogResult = (): LogQueryResult => ({
   facets: new FacetCounts(10, 10),
   buckets: new TimeBuckets(LOG_SEVERITY_KEYS, 8),
   residual: null,
+  next: null,
 });
 
 /**

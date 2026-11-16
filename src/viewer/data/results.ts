@@ -111,8 +111,8 @@ export type LogQueryResult = {
   buckets: TimeBuckets<LogSeverityKey>;
   /** The residual OTTL text (D5) evaluated in the browser; null when the whole condition ran in SQL. */
   residual: string | null;
-  /** Where the next page of a time-sorted logs list starts; absent or null when this page is the last, or the list does not page. */
-  next?: RowCursor | null;
+  /** Where the next page of a time-sorted logs list starts; null when this page is the last, or the list does not page. */
+  next: RowCursor | null;
 } & ({ mode: 'logs'; rows: readonly LogRow[] } | { mode: 'traces'; rows: readonly LogTraceRow[] });
 
 export interface ServiceStats {
@@ -198,8 +198,8 @@ export interface SpanQueryResult {
   /** The residual OTTL text (D5) evaluated in the browser; null when the whole condition ran in SQL. */
   residual: string | null;
   tables: RowTables;
-  /** Where the next page of a start-sorted list starts; absent or null when this page is the last, or the list does not page. */
-  next?: RowCursor | null;
+  /** Where the next page of a start-sorted list starts; null when this page is the last, or the list does not page. */
+  next: RowCursor | null;
 }
 
 /** Up to `n` same-stream logs on each side of `log`, in time order with the ref tiebreak. */

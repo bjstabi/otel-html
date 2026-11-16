@@ -587,8 +587,9 @@ export function createDuckDbDataSource(opts: {
                 pruned: none ? prunePartitions(manifest, 'traces', new Map(), null) : f.files,
                 need,
                 dir: sort.dir,
-                cutoff: !siblingsReadRaw(f),
-                ...(none ? {} : { counts: () => matchCounts('spans', f, f.files) }),
+                // a conditioned list reads main's files: a trace's rank is its earliest span's, which may lie in a file
+                // the spans cutoff leaves out
+                cutoff: none && !siblingsReadRaw(f),
                 read: async (files) => {
                   const t = none
                     ? await read(['traces'], files, allTraceRowsQuery(f, sort, need, null, { files }), signal)

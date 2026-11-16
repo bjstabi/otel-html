@@ -183,6 +183,7 @@ function spanResult(q: SpanQuery): SpanQueryResult {
     durations: { summary: null, bins: [] },
     groups: null,
     residual: null,
+    next: null,
     tables: { resources: [], scopes: [] },
   };
   // `total` alone reports the match count `rows` would: the spans, or in traces mode the one fixture trace
@@ -235,7 +236,7 @@ function logResult(q: LogQuery): LogQueryResult {
   }
   const rows = needs.has('rows') ? sorted(kept, q.sort.dir, (r) => r.time).slice(0, q.limit) : [];
   const total = needs.has('rows') ? kept.length : 0;
-  return { mode: 'logs', rows, total, matched: total, facets, buckets, residual: null };
+  return { mode: 'logs', rows, total, matched: total, facets, buckets, residual: null, next: null };
 }
 
 /**

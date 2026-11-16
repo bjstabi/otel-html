@@ -90,6 +90,7 @@ function resultOf(rows: SpanRow[], over: Partial<SpanQueryResult> = {}): SpanQue
     groups: null,
     residual: null,
     tables: { resources: [], scopes: [] },
+    next: null,
     ...over,
   };
 }
