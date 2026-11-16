@@ -291,7 +291,7 @@ export const ShareTracesPartitionFileSchema: z.ZodType<PartitionFile> = z.strict
   serviceShare: z.exactOptional(z.literal(true)),
 });
 
-export const RollupPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
+const RollupPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
   ...PartitionFileShape,
   rollup: RollupDescriptionSchema,
 });
