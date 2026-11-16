@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, test } from 'vitest';
 import type { ManifestV4 } from '../../../src/format/manifest.js';
 import { parseTraceId } from '../../../src/model/ids.js';
 import { toSql } from '../../../src/query/sql/columns.js';
+import type { RowCursor } from '../../../src/query/sql/cursor.js';
 import {
   attributeFacetsQuery,
   CORE_LOG_FACETS,
@@ -22,6 +23,7 @@ import {
   servicesQuery,
   spanCountQuery,
   spanRowsQuery,
+  spanTotalQuery,
   timelineQuery,
   traceBoundOf,
   tracePartitionsQuery,
@@ -63,6 +65,8 @@ type RowKey =
   | 'span_count'
   | 'start_ns'
   | 'filename'
+  | 'file_row_number'
+  | 'span_id'
   | 'trace_id';
 type Row = Partial<Record<RowKey, unknown>> & Record<string, unknown>;
 
@@ -719,13 +723,14 @@ describe('a trace split over three partitions, mixed kinds and caps', () => {
     expect(new Set(col(rows, 'total'))).toEqual(new Set([9n])); // 6 many-* + root + child + late
   });
 
-  test('spanRowsQuery counts with a scalar subquery and breaks ties by file and row', () => {
+  test('spanRowsQuery breaks ties by span_id, file and row; a non-time sort counts with a scalar subquery', () => {
     const sqlText = spanRowsQuery(gfilter(), { column: 'start', dir: 'asc' }, 2).toString();
     expect(sqlText).not.toMatch(/OVER \(\)/);
     expect(sqlText).toMatch(/ORDER BY .*"span_id" ASC, "filename" ASC, "file_row_number" ASC/s);
-    expect(new Set(col(grun(spanRowsQuery(gfilter(), { column: 'start', dir: 'asc' }, 2)), 'total'))).toEqual(
-      new Set([9n]),
-    );
+    expect(grun(spanTotalQuery(gfilter()))).toEqual([{ total: 9n }]);
+    const byName = spanRowsQuery(gfilter(), { column: 'name', dir: 'asc' }, 2);
+    expect(byName.toString()).not.toMatch(/OVER \(\)/);
+    expect(new Set(col(grun(byName), 'total'))).toEqual(new Set([9n]));
   });
 
   test('the span statement of a trace is bounded by the trace’s start and end', () => {
@@ -761,5 +766,79 @@ describe('a trace split over three partitions, mixed kinds and caps', () => {
     ).toEqual({ startNs: 5n, endNs: 9n });
     expect(traceBoundOf([{ filename: 'a', min_start: 5n, max_end: null }])).toBeNull();
     expect(traceBoundOf([])).toBeNull();
+  });
+});
+
+describe('spanRowsQuery cursor', () => {
+  // five spans at one start over two files, then one later: the span_id tie-breaker decides before the file
+  const at = (id: number, startMs: number): S => ({
+    trace: id,
+    id,
+    svc: 'svc-a',
+    name: `s${id}`,
+    startMs,
+    durMs: 1,
+  });
+  let c: Format4Fixture;
+  let cdb: TestDb;
+  beforeAll(async () => {
+    c = await buildFormat4Report(
+      [request([at(5, 0), at(1, 0), at(3, 0)]), request([at(2, 0), at(4, 0), at(6, 10)])],
+      { close: false },
+    );
+    cdb = await openFixtureDb(c);
+  });
+  const cf = () =>
+    buildFilter({ manifest: c.manifest, table: 'spans', condition: null, text: '', window: null }).filter;
+  const crun = (q: { toString(): string }): Row[] => cdb.rows(q.toString());
+  const cursorOf = (r: Row): RowCursor => ({
+    time: BigInt(r.start_ns as bigint) + c.epoch,
+    filename: String(r.filename),
+    row: BigInt(r.file_row_number as bigint),
+    spanId: String(r.span_id),
+  });
+  const pages = (dir: 'asc' | 'desc', size: number): string[][] => {
+    const out: string[][] = [];
+    let cursor: RowCursor | null = null;
+    for (let i = 0; i < 10; i++) {
+      const rows = crun(spanRowsQuery(cf(), { column: 'start', dir }, size, cursor));
+      if (rows.length === 0) break;
+      out.push(col(rows, 'name') as string[]);
+      const last = rows[rows.length - 1];
+      if (last === undefined) break;
+      cursor = cursorOf(last);
+    }
+    return out;
+  };
+
+  test('a time sort does not select total; a non-time sort keeps it', () => {
+    expect(String(spanRowsQuery(cf(), { column: 'start', dir: 'asc' }, 2))).not.toMatch(/total/);
+    expect(String(spanRowsQuery(cf(), { column: 'duration', dir: 'asc' }, 2))).toMatch(/total/);
+  });
+
+  test('the cursor is a keyset predicate matching the ORDER BY', () => {
+    const cur: RowCursor = { time: 7n, filename: 'f', row: 3n, spanId: 'ab' };
+    const asc = String(spanRowsQuery(cf(), { column: 'start', dir: 'asc' }, 2, cur));
+    const desc = String(spanRowsQuery(cf(), { column: 'start', dir: 'desc' }, 2, cur));
+    expect(asc).toMatch(/start_time_unix_nano" > 7/);
+    expect(desc).toMatch(/start_time_unix_nano" < 7/);
+    for (const q of [asc, desc])
+      expect(q).toMatch(/\("span_id", "filename", "file_row_number"\) > \('ab', 'f', 3::BIGINT\)/);
+    expect(String(spanRowsQuery(cf(), { column: 'start', dir: 'asc' }, 2))).not.toMatch(/span_id" >/);
+    expect(String(spanRowsQuery(cf(), { column: 'duration', dir: 'asc' }, 2, cur))).not.toMatch(/'ab'/);
+  });
+
+  test('pages of 2 return all six spans exactly once, in order, both directions', () => {
+    const asc = pages('asc', 2);
+    expect(asc.flat()).toHaveLength(6);
+    expect(new Set(asc.flat()).size).toBe(6);
+    expect(asc.flat()).toEqual(['s1', 's2', 's3', 's4', 's5', 's6']);
+    const desc = pages('desc', 2);
+    expect(desc.flat()).toEqual(['s6', 's1', 's2', 's3', 's4', 's5']);
+  });
+
+  test('spanTotalQuery is count(*) only', () => {
+    expect(crun(spanTotalQuery(cf()))).toEqual([{ total: 6n }]);
+    expect(String(spanTotalQuery(cf()))).not.toMatch(/ORDER BY|LIMIT/);
   });
 });

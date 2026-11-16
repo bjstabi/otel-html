@@ -411,7 +411,7 @@ describe('querySpans', () => {
       ['POST /orders', 1, 300e6],
     ]);
     // one temp table: created, dropped
-    expect(all.arrow).toBe(8); // candidates, rows, core and attribute facets, timeline, summary, bins, groups
+    expect(all.arrow).toBe(9); // candidates, rows, their count, core and attribute facets, timeline, summary, bins, groups
     expect(all.exec).toBe(2);
     expect(db.rows("SELECT table_name FROM duckdb_tables() WHERE table_name LIKE 'otel_residual%'")).toEqual(
       [],
@@ -439,10 +439,10 @@ describe('querySpans', () => {
     expect(r.arrow + r.exec).toBe(0);
   });
 
-  test('needs restricts the work: needs ["rows"] sends one statement; all needs send six', async () => {
-    expect((await counted(() => ds.querySpans(query({ needs: ['rows'], text: 'one' })))).arrow).toBe(1);
+  test('needs restricts the work: needs ["rows"] sends two; all needs send seven', async () => {
+    expect((await counted(() => ds.querySpans(query({ needs: ['rows'], text: 'one' })))).arrow).toBe(2); // rows, count
     const all = await counted(() => ds.querySpans(query({ text: 'select' })));
-    expect(all.arrow).toBe(6); // rows, core facets, attribute facets, timeline, duration summary, duration bins
+    expect(all.arrow).toBe(7); // rows, their count, core facets, attribute facets, timeline, duration summary, duration bins
     const groups = await counted(() =>
       ds.querySpans(query({ text: 'select', needs: ['groups'], measureBy: 'service.name' })),
     );
@@ -818,10 +818,14 @@ describe('preparing the files a statement reads', () => {
     const { events, source } = recording(gate);
     const pending = source.querySpans(query({ needs: ['rows'], text: 'no-cache-2' }));
     await new Promise((r) => setTimeout(r, 20));
-    expect(events.map((e) => e.kind)).toEqual(['prepare']);
+    // the page and its count each prepare, then each query
+    expect(new Set(events.map((e) => e.kind))).toEqual(new Set(['prepare']));
     release();
     await pending;
-    expect(events.map((e) => e.kind)).toEqual(['prepare', 'query']);
+    expect(events.map((e) => e.kind).filter((k) => k === 'query')).toHaveLength(2);
+    expect(events.map((e) => e.kind).lastIndexOf('prepare')).toBeLessThan(
+      events.map((e) => e.kind).indexOf('query'),
+    );
   });
 });
 

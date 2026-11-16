@@ -17,6 +17,7 @@ import { durationBucketSql } from '../../format/parquet/duration-bucket.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId } from '../../model/ids.js';
 import { jsonAt, jsonKind, jsonStringAt, relTime } from './columns.js';
+import { keysetAfter, type RowCursor } from './cursor.js';
 import { CORE_SPAN_FACETS, truncated } from './facets.js';
 import { filenameTerm, type SqlFilter, whereOf } from './filter.js';
 import type { AbsWindow, Pruned } from './prune.js';
@@ -71,15 +72,37 @@ function spanColumns(epoch: bigint): Record<string, ExprNode> {
   ]);
 }
 
-/** Spans of the filtered set (columns of `spanColumns` plus `total`, the matches before LIMIT), sorted, with a start/span_id tiebreak. */
-export function spanRowsQuery(f: SqlFilter, sort: SpanSort, limit: number): Query {
+/**
+ * Spans of the filtered set (columns of `spanColumns`), sorted, with a start/span_id/file/row tiebreak. A start sort
+ * has no `total` column (`spanTotalQuery` counts, so a page reads no more than its rows) and takes a `cursor`, the
+ * last row of the previous page: the rows strictly after it in the ORDER BY. Any other sort keeps `total`, the matches
+ * before LIMIT, and ignores the cursor.
+ */
+export function spanRowsQuery(f: SqlFilter, sort: SpanSort, limit: number, cursor?: RowCursor | null): Query {
   const terms = whereOf(f, 'spans');
-  // a scalar subquery, not `count(*) OVER ()`: the window function would materialise every matching row before the top-N
-  const total = Query.from('spans')
-    .select({ n: sql`count(*)` })
-    .where(...terms);
-  return Query.from('spans')
-    .select(spanColumns(f.epoch), { total: sql`(${total})` })
+  const byStart = sort.column === 'start';
+  if (byStart && cursor != null) {
+    if (cursor.spanId === undefined) {
+      throw new OtelHtmlError('usage', { message: 'spanRowsQuery: a span cursor needs the span_id' });
+    }
+    terms.push(
+      keysetAfter('start_time_unix_nano', sort.dir, cursor.time, [
+        ['span_id', literal(cursor.spanId)],
+        ['filename', literal(cursor.filename)],
+        ['file_row_number', verbatim(`${cursor.row}::BIGINT`)],
+      ]),
+    );
+  }
+  const q = Query.from('spans');
+  if (byStart) q.select(spanColumns(f.epoch));
+  else {
+    // a scalar subquery, not `count(*) OVER ()`: the window function would materialise every matching row before the top-N
+    const total = Query.from('spans')
+      .select({ n: sql`count(*)` })
+      .where(...terms);
+    q.select(spanColumns(f.epoch), { total: sql`(${total})` });
+  }
+  return q
     .where(...terms)
     .orderby(
       dirOf(SPAN_SORT[sort.column], sort.dir),
@@ -89,6 +112,11 @@ export function spanRowsQuery(f: SqlFilter, sort: SpanSort, limit: number): Quer
       asc('file_row_number'),
     )
     .limit(limit);
+}
+
+/** One row, `total`: the number of filtered spans, from a statement that reads no span row. */
+export function spanTotalQuery(f: SqlFilter): Query {
+  return spanCountQuery(f, 'spans');
 }
 
 /**

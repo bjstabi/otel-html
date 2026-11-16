@@ -21,6 +21,7 @@ import { LOG_SEVERITY_KEYS, SEVERITY_BANDS } from '../../semconv/severity.js';
 import type { LogRef, LogRow } from '../../viewer/data/log-query.js';
 import { refParts } from '../../viewer/data/log-query.js';
 import { relTime } from './columns.js';
+import { keysetAfter, type RowCursor } from './cursor.js';
 import { type SqlFilter, whereOf } from './filter.js';
 import type { AbsWindow } from './prune.js';
 import { type BucketSpec, bucketExpr } from './time.js';
@@ -80,15 +81,33 @@ const LOG_SORT: Record<LogSort['column'], string> = {
   service: 'service_name',
 };
 
-/** Logs of the filtered set (`logColumns` plus `total`, the matches before LIMIT), sorted, then by time, file, row. */
-export function logRowsQuery(f: SqlFilter, sort: LogSort, limit: number): Query {
+/**
+ * Logs of the filtered set (`logColumns`), sorted, then by time, file, row. A time sort has no `total` column
+ * (`logTotalQuery` counts, so a page reads no more than its rows) and takes a `cursor`, the last row of the previous
+ * page: the rows strictly after it in the ORDER BY. Any other sort keeps `total`, the matches before LIMIT, and
+ * ignores the cursor.
+ */
+export function logRowsQuery(f: SqlFilter, sort: LogSort, limit: number, cursor?: RowCursor | null): Query {
   const terms = whereOf(f, 'logs');
-  // a scalar subquery, not `count(*) OVER ()`: the window function would materialise every matching row before the top-N
-  const total = Query.from('logs')
-    .select({ n: sql`count(*)` })
-    .where(...terms);
-  return Query.from('logs')
-    .select(logColumns(f.epoch), { total: sql`(${total})` })
+  const byTime = sort.column === 'time';
+  if (byTime && cursor != null) {
+    terms.push(
+      keysetAfter('time_rel', sort.dir, cursor.time, [
+        ['filename', literal(cursor.filename)],
+        ['file_row_number', verbatim(`${cursor.row}::BIGINT`)],
+      ]),
+    );
+  }
+  const q = Query.from('logs');
+  if (byTime) q.select(logColumns(f.epoch));
+  else {
+    // a scalar subquery, not `count(*) OVER ()`: the window function would materialise every matching row before the top-N
+    const total = Query.from('logs')
+      .select({ n: sql`count(*)` })
+      .where(...terms);
+    q.select(logColumns(f.epoch), { total: sql`(${total})` });
+  }
+  return q
     .where(...terms)
     .orderby(
       dirOf(LOG_SORT[sort.column], sort.dir),
@@ -97,6 +116,13 @@ export function logRowsQuery(f: SqlFilter, sort: LogSort, limit: number): Query 
       asc('file_row_number'),
     )
     .limit(limit);
+}
+
+/** One row, `total`: the number of filtered logs, from a statement that reads no log row. */
+export function logTotalQuery(f: SqlFilter): Query {
+  return Query.from('logs')
+    .select({ total: sql`count(*)` })
+    .where(...whereOf(f, 'logs'));
 }
 
 /** (`bucket`, `band`, `n`) per bucket of the effective time and severity band (`SEVERITY_BANDS`), by bucket then band. */

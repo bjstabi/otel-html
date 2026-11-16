@@ -22,6 +22,7 @@ import {
   logCountQuery,
   logRowsQuery,
   logTimelineQuery,
+  logTotalQuery,
   logTracesQuery,
   type PatternSort,
   patternsQuery,
@@ -67,6 +68,7 @@ import {
   servicesQuery,
   spanCountQuery,
   spanRowsQuery,
+  spanTotalQuery,
   type TraceSort,
   timelineQuery,
   traceBoundOf,
@@ -550,6 +552,20 @@ export function createDuckDbDataSource(opts: {
       return read(['spans', 'traces'], own.files, windowTraceRowsQuery(own, traces, sort, limit), signal);
     };
 
+    /** The match count a time-sorted rows statement no longer carries: routed to the rollups like the `total` need. */
+    const rowsTotal = async (f: SqlFilter): Promise<number> => {
+      const split = plan(f, 'total', [], false);
+      const t =
+        split === null
+          ? await read(['spans'], f.files, spanTotalQuery(f), signal)
+          : await readMeasures(
+              split,
+              rollupTotalQuery(measuresRelation(f, 'spans', split, [], false)),
+              signal,
+            );
+      return toNumber(cell(rowsOf(t)[0] ?? {}, 'total') ?? 0n, 'total');
+    };
+
     const run = async (f: SqlFilter): Promise<SpanQueryResult> => {
       const result = emptyResult(caps, residual);
       const spec = bucketSpec(rule.window, range, undefined, rule.bucketLong);
@@ -575,6 +591,8 @@ export function createDuckDbDataSource(opts: {
                 },
                 test,
               });
+              // a start-sorted statement carries no total; it is only needed when the scan stopped early
+              if (spanSort.column === 'start' && !exhausted) candidates = await rowsTotal(f);
               const interned = internRows(rows);
               Object.assign(result, {
                 rows: interned.rows,
@@ -582,10 +600,12 @@ export function createDuckDbDataSource(opts: {
                 total: exhausted ? rows.length : Math.max(candidates, rows.length),
               });
             } else if (spanSort !== null) {
-              Object.assign(
-                result,
-                spanRows(await read(['spans'], f.files, spanRowsQuery(f, spanSort, q.limit), signal), epoch),
-              );
+              const [page, total] = await Promise.all([
+                read(['spans'], f.files, spanRowsQuery(f, spanSort, q.limit), signal),
+                spanSort.column === 'start' ? rowsTotal(f) : null,
+              ]);
+              const decoded = spanRows(page, epoch);
+              Object.assign(result, total === null ? decoded : { ...decoded, total });
             }
           })(),
         );
@@ -901,6 +921,20 @@ export function createDuckDbDataSource(opts: {
     const useIds = browser && (aggregates || (q.mode === 'traces' && needs.has('rows')));
     const test = residual === null ? null : logResidualTest(compileCondition(residual, 'log_record'), epoch);
 
+    /** The match count a time-sorted rows statement no longer carries: routed to the rollups like the `total` need. */
+    const rowsTotal = async (f: SqlFilter): Promise<number> => {
+      const split = plan(f, 'total', []);
+      const t =
+        split === null
+          ? await read(['logs'], f.files, logTotalQuery(f), signal)
+          : await readMeasures(
+              split,
+              rollupTotalQuery(measuresRelation(f, 'logs', split, [], false)),
+              signal,
+            );
+      return toNumber(cell(rowsOf(t)[0] ?? {}, 'total') ?? 0n, 'total');
+    };
+
     const run = async (f: SqlFilter): Promise<LogQueryResult> => {
       const result = emptyLogResult(caps, residual, q.mode);
       const spec = bucketSpec(rule.window, range, undefined, rule.bucketLong);
@@ -927,12 +961,16 @@ export function createDuckDbDataSource(opts: {
                 },
                 test,
               });
+              if (logSort.column === 'time' && !exhausted) candidates = await rowsTotal(f);
               const total = exhausted ? rows.length : Math.max(candidates, rows.length);
               Object.assign(result, { rows: rows.map((e) => e.row), total, matched: total });
             } else if (logSort !== null) {
-              const { rows, total } = logRows(
-                await read(['logs'], f.files, logRowsQuery(f, logSort, q.limit), signal),
-              );
+              const [page, counted] = await Promise.all([
+                read(['logs'], f.files, logRowsQuery(f, logSort, q.limit), signal),
+                logSort.column === 'time' ? rowsTotal(f) : null,
+              ]);
+              const { rows, total: paged } = logRows(page);
+              const total = counted ?? paged;
               Object.assign(result, { rows, total, matched: total });
             }
           })(),

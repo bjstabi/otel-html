@@ -291,7 +291,9 @@ const SPAN_CONDITIONS: SpanSpec[] = [
 
 const SPAN_ROWS: SpanSpec[] = [
   {
-    ...span('spans.rows', ['rows'], ['spanRowsQuery']),
+    ...span('spans.rows', ['rows'], ['spanRowsQuery', 'spanTotalQuery'], {
+      long: ['spanRowsQuery', 'rollupTotalQuery'],
+    }),
     family: 'rows page',
     variants: [SHORT, LONG, ALL],
   },
@@ -351,7 +353,9 @@ const LOG_QUERIES: LogSpec[] = [
   log('logs.facets.attr', 'top values', ['facets'], ['coreFacetsQuery', 'attributeFacetsQuery'], {
     long: ['rollupFacetsQuery', 'attributeFacetsQuery'],
   }),
-  log('logs.rows', 'rows page', ['rows'], ['logRowsQuery']),
+  log('logs.rows', 'rows page', ['rows'], ['logRowsQuery', 'logTotalQuery'], {
+    long: ['logRowsQuery', 'rollupTotalQuery'],
+  }),
   log('logs.traces', 'trace list', ['rows', 'total'], ['logTracesQuery', 'logCountQuery'], {
     over: { mode: 'traces', sort: { column: 'first', dir: 'asc' } },
   }),

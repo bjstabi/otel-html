@@ -90,9 +90,10 @@ describe('lazy rollup views', () => {
     const c = await open(report.manifest);
     const ds = createDuckDbDataSource({ engine: c.engine, manifest: report.manifest });
     await c.cold();
-    await ds.querySpans(
-      query({ window: report.window, needs: ['rows', 'facets'], facetKeys: ['http.route'] }),
-    );
+    // the rows page's count is routed like a `total`, so under a long window it would bind them; this one is short
+    const short = { start: report.window.start, end: report.window.start + 1e9 };
+    await ds.querySpans(query({ window: short, needs: ['rows', 'facets'], facetKeys: ['http.route'] }));
+    await ds.querySpans(query({ window: report.window, needs: ['facets'], facetKeys: ['http.route'] }));
     await ds.querySpans(
       query({
         window: { start: report.window.start, end: report.window.start + 1e9 },
