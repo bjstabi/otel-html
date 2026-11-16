@@ -111,6 +111,16 @@ export interface LogPoint {
   severity: number;
 }
 
+/** The spans or traces `spanPoints` plots: the filter of a `SpanQuery`, one sorted statement of up to `limit` rows. */
+export type SpanPointsQuery = Pick<SpanQuery, 'condition' | 'text' | 'window' | 'mode' | 'sort' | 'limit'>;
+
+/** One span or trace of a point plot: its start (relative ns), duration, and whether it errored. */
+export interface SpanPoint {
+  start: number;
+  durationNs: number;
+  error: boolean;
+}
+
 export type LogQueryResult = {
   /** Matched logs; traces in traces mode. */
   total: number;

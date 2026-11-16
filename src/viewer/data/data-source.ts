@@ -13,6 +13,8 @@ import type {
   PatternQuery,
   PatternsResult,
   ServicesResult,
+  SpanPoint,
+  SpanPointsQuery,
   SpanQuery,
   SpanQueryResult,
   SpanRow,
@@ -59,6 +61,8 @@ export interface DataSource extends MetricMethods {
     opts: { window: TimeWindow | null; condition: string | null; limit: number },
     signal?: AbortSignal,
   ): Promise<ServicesResult>;
+  /** Start, duration and status of up to `q.limit` spans (traces in traces mode) in `q.sort` order; the point plot's own statement. */
+  spanPoints(q: SpanPointsQuery, signal?: AbortSignal): Promise<readonly SpanPoint[]>;
   queryLogs(q: LogQuery, signal?: AbortSignal): Promise<LogQueryResult>;
   /** Time and severity of up to `q.limit` logs in `q.sort` order, from one statement that reads those two columns. */
   logPoints(q: LogPointsQuery, signal?: AbortSignal): Promise<readonly LogPoint[]>;

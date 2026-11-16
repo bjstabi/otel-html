@@ -100,6 +100,7 @@ export function dataSourceOf(
     services: () => Promise.resolve({ services: [], total: 0 }),
     queryLogs: () => Promise.resolve(emptyLogResult()),
     logPoints: () => Promise.resolve([]),
+    spanPoints: () => Promise.resolve([]),
     getLog: unused,
     traceLogs: unused,
     surroundingLogs: unused,

@@ -574,6 +574,26 @@ export const CATALOGUE = [
     }),
   ),
   ...WINDOWED.map(
+    (v): Entry<'spanPoints'> => ({
+      id: `spans.points.${v.suffix}`,
+      family: 'rows page',
+      method: 'spanPoints',
+      builders: ['spanPointsQuery'],
+      spacing: v.spacing,
+      window: true,
+      // the point plot's own statement: start, duration and status of up to `listCap` spans, the newest first
+      run: (ds, ctx) =>
+        ds.spanPoints({
+          condition: null,
+          text: '',
+          window: ctx.window,
+          mode: 'spans',
+          sort: { column: 'start', dir: 'desc' },
+          limit: 10_000,
+        }),
+    }),
+  ),
+  ...WINDOWED.map(
     (v): Entry<'logPoints'> => ({
       id: `logs.points.${v.suffix}`,
       family: 'rows page',
@@ -890,6 +910,11 @@ const BASELINE: Record<string, Declared> = {
   }),
   'logs.rows.long': decl(['fixed', 'files', 'files'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
   // the scatter's own statement: time and severity of up to `listCap` logs, no row of the list
+  // the point plot's own statement: start, duration and status of up to `listCap` spans, no row of the list
+  'spans.points.short': decl(['fixed', 'scan', 'scan'], {
+    allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
+  }),
+  'spans.points.long': decl(['fixed', 'scan', 'files'], { allowed: { density: ROWS_PAGE } }),
   'logs.points.short': decl(['fixed', 'files', 'files'], {
     allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
   }),

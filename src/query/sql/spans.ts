@@ -121,6 +121,28 @@ export function spanRowsQuery(
     .limit(limit);
 }
 
+/**
+ * (`start_ns`, `duration_ns`, `status_code`) of the filtered spans in the order of `spanRowsQuery`, up to `limit`: the
+ * three columns a point plot draws, and no others, so it reads no name, attribute or id column.
+ */
+export function spanPointsQuery(f: SqlFilter, sort: SpanSort, limit: number): Query {
+  return Query.from('spans')
+    .select({
+      start_ns: relTime('start_time_unix_nano', f.epoch),
+      duration_ns: column('duration_ns'),
+      status_code: column('status_code'),
+    })
+    .where(...whereOf(f, 'spans'))
+    .orderby(
+      dirOf(SPAN_SORT[sort.column], sort.dir),
+      asc('start_time_unix_nano'),
+      asc('span_id'),
+      asc('filename'),
+      asc('file_row_number'),
+    )
+    .limit(limit);
+}
+
 /** One row, `total`: the number of filtered spans, from a statement that reads no span row. */
 export function spanTotalQuery(f: SqlFilter): Query {
   return spanCountQuery(f, 'spans');

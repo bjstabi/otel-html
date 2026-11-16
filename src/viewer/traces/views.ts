@@ -2,7 +2,7 @@ import type { EChartsOption } from 'echarts';
 import { formatDuration } from '../../semconv/formatters.js';
 import { bar, type FacetViewContext, pie, toplist, treemap } from '../components/facet-views.js';
 import { seconds } from '../components/histogram-card.js';
-import type { SpanQueryResult, SpanRow, TraceRow } from '../data/results.js';
+import type { SpanPoint, SpanQueryResult, SpanRow, TraceRow } from '../data/results.js';
 import type { ExplorerView } from '../state/explorer-view.js';
 import type { PageView } from '../state/page-options.js';
 
@@ -102,8 +102,15 @@ function startOf(r: SpanRow | TraceRow): number {
 
 /** Duration against start time for the returned rows; errors are a separate series with a distinct symbol. */
 function pointplot(result: SpanQueryResult): EChartsOption {
+  return pointplotOf(
+    result.rows.map((r) => ({ start: startOf(r), durationNs: r.durationNs, error: isError(r) })),
+  );
+}
+
+/** `pointplot` over the points of `spanPoints`: start, duration and status are all it plots. */
+export function pointplotOf(all: readonly SpanPoint[]): EChartsOption {
   const points = (err: boolean): number[][] =>
-    result.rows.filter((r) => isError(r) === err).map((r) => [startOf(r), r.durationNs]);
+    all.filter((p) => p.error === err).map((p) => [p.start, p.durationNs]);
   return {
     animation: false,
     grid: { left: 64, right: 12, top: 28, bottom: 28 },

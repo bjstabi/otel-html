@@ -6,6 +6,7 @@ import { ColumnPicker } from '../components/column-picker.js';
 import { ExplorerControls } from '../components/explorer-controls.js';
 import {
   ErrorCard,
+  LoadingNote,
   NoMatch,
   PageStatus,
   PILL,
@@ -33,6 +34,7 @@ import { manifestRange } from '../data/manifest-range.js';
 import {
   CORE_SPAN_FACET_KEYS,
   type DurationBin,
+  type SpanPointsQuery,
   type SpanQuery,
   type SpanRow,
   type TraceRow,
@@ -55,13 +57,14 @@ import { useTheme } from '../theme/theme-provider.js';
 import { attributeColumn, SPAN_COLUMNS_UI, TRACE_COLUMNS_UI } from './columns.js';
 import { RedStrip } from './red-strip.js';
 import { TracePanel } from './trace-panel.js';
-import { useSpanQuery } from './use-span-query.js';
+import { useSpanPoints, useSpanQuery } from './use-span-query.js';
 import {
   type ChartView,
   cssTokenReader,
   GROUPED_VIEWS,
   type Measure,
   paddedAxis,
+  pointplotOf,
   resolveCssVars,
   VIEW_BUILDERS,
 } from './views.js';
@@ -147,6 +150,48 @@ export function TracesExplorer(props: { dataSource: DataSource }): JSX.Element {
     );
   }
   return <ExplorerBody dataSource={props.dataSource} />;
+}
+
+/**
+ * The Point plot view: duration against start for up to `listCap` spans or traces, from a statement of its own (the
+ * list loads 200 at a time, which is too few points). It runs only while the view shows, and asks for points alone.
+ */
+function PointCard(props: {
+  dataSource: DataSource;
+  query: SpanPointsQuery;
+  listCap: number;
+  total: number;
+  mode: string;
+}): JSX.Element {
+  const { query, listCap } = props;
+  const { resolved } = useTheme();
+  const own = useMemo<SpanPointsQuery>(
+    () => ({
+      condition: query.condition,
+      text: query.text,
+      window: query.window,
+      mode: query.mode,
+      sort: query.sort,
+      limit: listCap,
+    }),
+    [query, listCap],
+  );
+  const { state } = useSpanPoints(props.dataSource, own);
+  const shown = state.status === 'ready' ? state.result : state.status === 'loading' ? state.previous : null;
+  const option = useMemo(() => {
+    if (shown === null) return null;
+    // `resolved` re-reads the theme tokens when light/dark changes.
+    void resolved;
+    return resolveCssVars(pointplotOf(shown.slice(0, listCap)), cssTokenReader());
+  }, [shown, listCap, resolved]);
+  if (state.status === 'error')
+    return <ErrorCard title="The point plot could not run" message={state.message} gone={state.gone} />;
+  if (option === null) return <LoadingNote />;
+  return (
+    <div className="rounded-card border border-hairline bg-surface p-3">
+      <Chart option={option} height={320} ariaLabel={`Point plot of ${props.total} ${props.mode}`} />
+    </div>
+  );
 }
 
 function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
@@ -304,6 +349,8 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
 
   const chartOption = useMemo(() => {
     if (result === null || view === 'list' || view === 'table') return null;
+    // the point plot draws from its own statement (`PointCard`), not from the pages of the list
+    if (view === 'pointplot') return null;
     const chart: ChartView = view;
     // `resolved` re-reads the theme tokens when light/dark changes.
     void resolved;
@@ -435,6 +482,14 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                 <div className="min-w-0">
                   {result.total === 0 ? (
                     <NoMatch noun={mode === 'spans' ? 'spans' : 'traces'} onClear={clearFilters} />
+                  ) : view === 'pointplot' ? (
+                    <PointCard
+                      dataSource={dataSource}
+                      query={query}
+                      listCap={manifest.config.viewer.listCap}
+                      total={result.total}
+                      mode={mode}
+                    />
                   ) : chartOption !== null ? (
                     <div className="rounded-card border border-hairline bg-surface p-3">
                       <Chart

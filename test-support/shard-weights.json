@@ -185,6 +185,7 @@
     "test/viewer-data/duckdb-source-paging-long.test.ts": 3,
     "test/viewer-data/duckdb-source-paging.test.ts": 1.7,
     "test/viewer-data/duckdb-source-points.test.ts": 2,
+    "test/viewer-data/duckdb-source-span-points.test.ts": 0.8,
     "test/viewer-data/duckdb-source-spans.test.ts": 10.4,
     "test/viewer-data/engine-bytes.test.ts": 0.2,
     "test/viewer-data/engine-files.test.ts": 0.1,

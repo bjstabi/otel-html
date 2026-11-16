@@ -71,6 +71,7 @@ import {
   serviceBucketsQuery,
   servicesQuery,
   spanCountQuery,
+  spanPointsQuery,
   spanRowsQuery,
   spanTotalQuery,
   type TraceSort,
@@ -121,6 +122,8 @@ import type {
   RowTables,
   ServicesResult,
   SpanNeed,
+  SpanPoint,
+  SpanPointsQuery,
   SpanQuery,
   SpanQueryResult,
   SpanRow,
@@ -1132,6 +1135,40 @@ export function createDuckDbDataSource(opts: {
     }));
   }
 
+  async function spanPoints(q: SpanPointsQuery, signal?: AbortSignal): Promise<readonly SpanPoint[]> {
+    throwIfAborted(signal);
+    checkLimit(q.limit);
+    const rule = rules(q.window);
+    const { filter, residual } = buildFilter({
+      manifest,
+      table: 'spans',
+      condition: q.condition,
+      text: q.text,
+      window: rule.window,
+      long: rule.long,
+    });
+    if (q.mode === 'spans' && residual === null) {
+      if (filter.files.files.length === 0) return [];
+      const sort = sortOf(SPAN_SORTS, q.sort, 'spans');
+      const table = await read(['spans'], filter.files, spanPointsQuery(filter, sort, q.limit), signal);
+      return rowsOf(table).map((r) => ({
+        start: toNumber(cell(r, 'start_ns'), 'start_ns'),
+        durationNs: toNumber(cell(r, 'duration_ns') ?? 0, 'duration_ns'),
+        error: toNumber(cell(r, 'status_code') ?? 0, 'status_code') === 2,
+      }));
+    }
+    // traces are aggregates, and terms only the browser can evaluate need whole rows: the list's own statement
+    const r = await querySpans(
+      { ...q, needs: ['rows'], facetKeys: [], groupBy: null, measureBy: null, cursor: null },
+      signal,
+    );
+    return r.rows.map((x) =>
+      'span' in x
+        ? { start: x.span.start, durationNs: x.durationNs, error: x.span.status.code === 2 }
+        : { start: x.start, durationNs: x.durationNs, error: x.errors > 0 },
+    );
+  }
+
   async function queryLogs(q: LogQuery, signal?: AbortSignal): Promise<LogQueryResult> {
     throwIfAborted(signal);
     checkLimit(q.limit);
@@ -1679,6 +1716,7 @@ export function createDuckDbDataSource(opts: {
     services,
     queryLogs,
     logPoints,
+    spanPoints,
     getLog,
     traceLogs,
     surroundingLogs,

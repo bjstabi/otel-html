@@ -4,7 +4,14 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { FacetCounts } from '../../src/rollups/facets.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
-import type { SpanQuery, SpanQueryResult, SpanRow, TraceRow } from '../../src/viewer/data/results.js';
+import type {
+  SpanPoint,
+  SpanPointsQuery,
+  SpanQuery,
+  SpanQueryResult,
+  SpanRow,
+  TraceRow,
+} from '../../src/viewer/data/results.js';
 import { type GoTo, GoToContext } from '../../src/viewer/shell/go-to.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
@@ -12,7 +19,13 @@ import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { TracesExplorer } from '../../src/viewer/traces/explorer.js';
 import { manifestV4 } from './v4-manifest.js';
 
-vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));
+const charts = vi.hoisted(() => [] as { series?: { data?: unknown[] }[] }[]);
+vi.mock('../../src/viewer/components/chart.js', () => ({
+  Chart: (p: { option: { series?: { data?: unknown[] }[] } }): null => {
+    charts.push(p.option);
+    return null;
+  },
+}));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(cleanup);
 
@@ -87,7 +100,17 @@ function setup(
   initial: Parameters<typeof createSelectionStore>[0] = {},
 ) {
   const calls: SpanQuery[] = [];
+  const pointCalls: SpanPointsQuery[] = [];
   const ds = {
+    spanPoints: (q: SpanPointsQuery) => {
+      pointCalls.push(q);
+      return Promise.resolve(
+        Array.from(
+          { length: 500 },
+          (_, i): SpanPoint => ({ start: i, durationNs: 1000 + i, error: i % 5 === 0 }),
+        ),
+      );
+    },
     manifest: manifestV4(5000, LIST_CAP),
     querySpans: (q: SpanQuery) => {
       calls.push(q);
@@ -107,7 +130,7 @@ function setup(
       </SelectionProvider>
     </ThemeProvider>,
   );
-  return { store, calls };
+  return { store, calls, pointCalls };
 }
 
 const rowCount = (): number =>
@@ -181,5 +204,27 @@ describe('the Traces list pages', () => {
     });
     await waitFor(() => expect(rowCount()).toBe(60));
     expect(calls[0]?.limit).toBe(LIST_CAP);
+  });
+});
+
+describe('the Point plot', () => {
+  test('plots up to listCap points from its own statement, not the first page of the list', async () => {
+    charts.length = 0;
+    const { calls, pointCalls } = setup(() => Promise.resolve(page(spans('a', 200), CURSOR)), {
+      view: 'pointplot',
+    });
+    await waitFor(() => expect(pointCalls).toHaveLength(1));
+    expect(pointCalls[0]?.limit).toBe(LIST_CAP);
+    expect(pointCalls[0]?.mode).toBe('spans');
+    await waitFor(() => expect(charts.length).toBeGreaterThan(0));
+    const drawn = charts.at(-1)?.series?.reduce((n, s) => n + (s.data?.length ?? 0), 0);
+    expect(drawn).toBe(500);
+    expect(calls[0]?.limit).toBe(200);
+  });
+
+  test('the list views never run the points statement', async () => {
+    const { pointCalls } = setup(() => Promise.resolve(page(spans('a', 200), CURSOR)));
+    await waitFor(() => expect(rowCount()).toBe(200));
+    expect(pointCalls).toHaveLength(0);
   });
 });
