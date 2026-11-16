@@ -232,6 +232,13 @@ export const SORT_COLUMNS: Readonly<Record<Table, readonly string[]>> = {
   log_rollups: ['scope_name', 'service_name', 'time_unix_nano'],
 };
 
+/** One column of a sort and its direction (nulls last either way). `bucketNs` sorts by the value's bucket (`value / bucketNs`, floored) instead of the value: a coarse time key. */
+export interface SortKey {
+  readonly column: string;
+  readonly dir: 'asc' | 'desc';
+  readonly bucketNs?: bigint;
+}
+
 export const TIME_COLUMN: Readonly<Record<Table, string>> = {
   spans: 'start_time_unix_nano',
   logs: 'time_unix_nano',

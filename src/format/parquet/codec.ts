@@ -32,6 +32,7 @@ import {
   type ColumnDef,
   type ColumnType,
   SORT_COLUMNS,
+  type SortKey,
   TABLE_COLUMNS,
   TABLES,
   type Table,
@@ -40,8 +41,22 @@ import type { Row } from './rows.js';
 import { arrowSchema } from './schema.js';
 import { ensureParquetWasm } from './wasm.js';
 
+/**
+ * A file layout other than the writer's own, for the measurement of the format-7 candidates (`mise run measure:layout`);
+ * every field left out keeps today's layout. `sort` replaces a table's `SORT_COLUMNS` (nulls last, stable),
+ * `rowGroupRows` replaces `EncodeOptions.rowGroupRows`, `noDictionary` names columns written without a dictionary page and
+ * `bloom` replaces `BLOOM_TABLES`.
+ */
+export interface LayoutOptions {
+  readonly sort?: Partial<Record<Table, readonly SortKey[]>>;
+  readonly rowGroupRows?: number;
+  readonly noDictionary?: readonly string[];
+  readonly bloom?: ReadonlySet<Table>;
+}
+
 export interface EncodeOptions {
   readonly rowGroupRows: number;
+  readonly layout?: LayoutOptions;
 }
 
 const OBSERVED = 'observed_time_unix_nano';
@@ -72,18 +87,35 @@ export function sortKeyOf(table: Table, get: (column: string) => unknown): unkno
  * The stable permutation that sorts a batch by `SORT_COLUMNS[table]` (nulls last); logs sort by
  * `time_unix_nano ?? observed_time_unix_nano` (the column keeps its null).
  */
-function sortPermutation(table: Table, batch: ColumnBatch): number[] {
-  const keys = SORT_COLUMNS[table].map((c): readonly unknown[] => {
-    const col = batch.cells[c] ?? [];
-    if (!(table === 'logs' && c === 'time_unix_nano')) return col;
+function sortPermutation(table: Table, batch: ColumnBatch, layout?: LayoutOptions): number[] {
+  const sortKeys: readonly SortKey[] =
+    layout?.sort?.[table] ?? SORT_COLUMNS[table].map((column): SortKey => ({ column, dir: 'asc' }));
+  const keys = sortKeys.map((k): { cells: readonly unknown[]; sign: 1 | -1 } => {
+    const col = batch.cells[k.column] ?? [];
     const observed = batch.cells[OBSERVED] ?? [];
-    return col.map((v, i) => v ?? observed[i] ?? null);
+    const cells =
+      table === 'logs' && k.column === 'time_unix_nano' ? col.map((v, i) => v ?? observed[i] ?? null) : col;
+    const bucket = k.bucketNs;
+    return {
+      cells:
+        bucket === undefined
+          ? cells
+          : cells.map((v) =>
+              typeof v === 'bigint' ? (v >= 0n ? v / bucket : -((-v + bucket - 1n) / bucket)) : v,
+            ),
+      sign: k.dir === 'desc' ? -1 : 1,
+    };
   });
   const order = Array.from({ length: batch.length }, (_, i) => i);
   // Array.prototype.sort is stable.
   return order.sort((x, y) => {
     for (const k of keys) {
-      const d = compareKeys(k[x], k[y]);
+      const a = k.cells[x];
+      const b = k.cells[y];
+      const aNull = a === undefined || a === null;
+      const bNull = b === undefined || b === null;
+      // nulls last in both directions
+      const d = aNull || bNull ? compareKeys(a, b) : k.sign * compareKeys(a, b);
       if (d !== 0) return d;
     }
     return 0;
@@ -367,10 +399,10 @@ function columnData(def: ColumnDef, type: DataType, col: readonly unknown[], per
  * row must have passed `checkRow` (a session checks each row when it accepts it; `encodeTable` checks).
  */
 export function encodeColumns(table: Table, batch: ColumnBatch, opts: EncodeOptions): Uint8Array {
-  const perm = sortPermutation(table, batch);
+  const perm = sortPermutation(table, batch, opts.layout);
   const file = encodeSorted(table, batch, perm, opts);
-  if (!BLOOM_TABLES.has(table) || batch.length === 0) return file;
-  const collector = new BloomCollector(opts.rowGroupRows);
+  if (!(opts.layout?.bloom ?? BLOOM_TABLES).has(table) || batch.length === 0) return file;
+  const collector = new BloomCollector(opts.layout?.rowGroupRows ?? opts.rowGroupRows);
   const ids = batch.cells[BLOOM_COLUMN] ?? [];
   collector.add(perm.map((i) => ids[i]));
   return addBloomFilters(file, collector.finish());
@@ -378,7 +410,7 @@ export function encodeColumns(table: Table, batch: ColumnBatch, opts: EncodeOpti
 
 /** `encodeColumns` without the bloom filters, for tests: the bytes of a file written before they existed (`encodeBatches` does not call it). */
 export function encodeColumnsUnfiltered(table: Table, batch: ColumnBatch, opts: EncodeOptions): Uint8Array {
-  return encodeSorted(table, batch, sortPermutation(table, batch), opts);
+  return encodeSorted(table, batch, sortPermutation(table, batch, opts.layout), opts);
 }
 
 function encodeSorted(
@@ -414,10 +446,12 @@ export function columnsToArrow(table: Table, batch: ColumnBatch, perm: readonly 
 /** ZSTD, row groups of `rowGroupRows`: the one set of properties every format-4 file is written with. */
 export function writerProperties(opts: EncodeOptions): WriterProperties {
   ensureParquetWasm();
-  return new WriterPropertiesBuilder()
+  let builder = new WriterPropertiesBuilder()
     .setCompression(Compression.ZSTD)
-    .setMaxRowGroupSize(opts.rowGroupRows)
-    .build();
+    .setMaxRowGroupSize(opts.layout?.rowGroupRows ?? opts.rowGroupRows);
+  for (const column of opts.layout?.noDictionary ?? [])
+    builder = builder.setColumnDictionaryEnabled(column, false);
+  return builder.build();
 }
 
 /** Sorts `rows` by `SORT_COLUMNS[table]` (nulls last, stable) and encodes them as ZSTD Parquet. */
