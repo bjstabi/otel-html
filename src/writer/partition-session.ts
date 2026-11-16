@@ -245,6 +245,8 @@ class PartitionSession implements WriterSession {
   readonly #statisticsKeys: Record<Table, string[]>;
   /** The statistics keys only a widget condition asked for, per table: a rollup keeps one while it is cheap (`rollupKeyAllowed`). */
   readonly #widgetKeys: Record<Table, string[]>;
+  /** The (table, key) pairs a widget key was left out of a rollup for, already warned about this session. */
+  readonly #toldKeys = new Set<string>();
   readonly #createdAt: string;
   readonly #title: string;
   /** The anchor this session's own records are relative to: its own first record's time, fixed once data is accepted. Times in files are absolute. */
@@ -396,7 +398,11 @@ class PartitionSession implements WriterSession {
         if (!rollupKeyAllowed(rollupBytes - current, size)) why = 'too large';
       }
       if (why !== null) {
-        this.#deps.logger.warn(
+        // once per session and (table, key): every later flush would say the same
+        const told = `${base}\0${key}`;
+        const log = this.#toldKeys.has(told) ? 'debug' : 'warn';
+        this.#toldKeys.add(told);
+        this.#deps.logger[log](
           `the ${base} rollup does not group by ${key}, which a widget condition tests: the rollup would be ${why}`,
           {
             key,

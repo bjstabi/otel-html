@@ -79,3 +79,17 @@ describe('compacting flushes that disagree on a key only a widget condition test
     );
   });
 });
+
+describe('the warning for a key a rollup leaves out', () => {
+  test('is given once per session and key, not on every flush', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: 'r', config: config(), mode: 'replace' });
+    for (const [n, from] of [0, 1_000, 2_000].entries()) {
+      await s.add(spansWith(from, 300, unique), `u${n}.json`);
+      await s.flush();
+    }
+    await s.close();
+    const warned = w.logs.filter((l) => l.level === 'warn' && l.msg.includes(WK));
+    expect(warned).toHaveLength(1);
+  });
+});
