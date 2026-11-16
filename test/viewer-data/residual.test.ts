@@ -8,7 +8,7 @@ function recorder(): { engine: QueryEngine; texts: Map<string, string>; statemen
   const engine: QueryEngine = {
     tempTables: true,
     query: () => Promise.reject(new Error('no query')),
-    queryBatch: (qs, signal) => sequentialBatch(engine)(qs, signal),
+    queryBatch: (items) => sequentialBatch(engine)(items),
     exec: (s) => {
       statements.push(s);
       return Promise.resolve();

@@ -80,7 +80,7 @@ function fakes(format: 'local' | 'site', failStatement?: (statement: string, nth
       calls.queries += 1;
       return { numRows: 0, toArray: () => [] } as unknown as Table;
     },
-    queryBatch: (qs, signal) => sequentialBatch(queryEngine)(qs, signal),
+    queryBatch: (items) => sequentialBatch(queryEngine)(items),
     exec: async () => {},
     registerText: async () => {},
     close: async () => {},

@@ -27,7 +27,7 @@ function recording() {
   const statements: string[] = [];
   const engine: QueryEngine = {
     ...inner,
-    queryBatch: (qs, signal) => sequentialBatch(engine)(qs, signal),
+    queryBatch: (items) => sequentialBatch(engine)(items),
     query: (q, signal) => {
       statements.push(String(q));
       return inner.query(q, signal);

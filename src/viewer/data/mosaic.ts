@@ -90,8 +90,8 @@ export function mosaicQueryEngine(
   const engine: QueryEngine = {
     tempTables,
     // through `this`: a wrapper that spreads this engine and replaces `query` is batched through its own `query`
-    queryBatch(qs, signal) {
-      return sequentialBatch(this)(qs, signal);
+    queryBatch(items) {
+      return sequentialBatch(this)(items);
     },
     async query(q: Query, signal?: AbortSignal): Promise<Table> {
       if (signal?.aborted) throw abortError();

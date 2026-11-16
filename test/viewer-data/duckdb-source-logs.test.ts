@@ -479,7 +479,7 @@ describe('traceLogs', () => {
     const base = mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db);
     const engine: QueryEngine = {
       ...base,
-      queryBatch: (qs, signal) => sequentialBatch(engine)(qs, signal),
+      queryBatch: (items) => sequentialBatch(engine)(items),
       query: (q, signal) => {
         texts.push(q.toString());
         return base.query(q, signal);

@@ -14,10 +14,9 @@ const abortError = (): DOMException => new DOMException('The query was aborted',
 
 /**
  * What the data source reads through: `prepare` goes straight to the engine, and the `query` calls of one microtask
- * leave together as one `queryBatch`, so a server can answer a page's statements in one request. Each caller gets its
- * own entry: a failed statement rejects only its caller, and a caller whose signal aborts rejects with
- * `DOMException('AbortError')` alone (a statement already aborted never runs). The batch's own signal aborts when
- * every statement in it has.
+ * leave together as one `queryBatch`, so a server can answer a page's statements in one request. Each caller gets the
+ * promise of its own statement, which settles as that statement does and carries the caller's own signal: a statement
+ * already aborted never runs, and one aborted later is cancelled by the engine as `query` would.
  */
 export function createBatcher(engine: QueryEngine): Pick<QueryEngine, 'prepare' | 'query'> {
   let pending: Pending[] = [];
@@ -30,57 +29,25 @@ export function createBatcher(engine: QueryEngine): Pick<QueryEngine, 'prepare' 
       return false;
     });
     if (live.length === 0) return;
-    let signal: AbortSignal | undefined;
-    const first = live[0]?.signal;
-    if (live.every((i) => i.signal === first))
-      signal = first; // the common case: one page signal
-    else if (live.every((i) => i.signal !== undefined)) {
-      const all = new AbortController();
-      const check = (): void => {
-        if (live.every((i) => i.signal?.aborted)) all.abort();
-      };
-      for (const i of live) i.signal?.addEventListener('abort', check, { once: true });
-      signal = all.signal;
+    let promises: Promise<Table>[];
+    try {
+      promises = engine.queryBatch(live.map((i) => ({ query: i.q, signal: i.signal })));
+    } catch (error) {
+      for (const item of live) item.reject(error);
+      return;
     }
-    engine
-      .queryBatch(
-        live.map((i) => i.q),
-        signal,
-      )
-      .then(
-        (settled) => {
-          live.forEach((item, at) => {
-            const r = settled[at];
-            if (r?.status === 'fulfilled') item.resolve(r.value);
-            else item.reject(r?.reason ?? new Error('the engine settled fewer statements than it was sent'));
-          });
-        },
-        (error: unknown) => {
-          for (const item of live) item.reject(error);
-        },
-      );
+    live.forEach((item, at) => {
+      const p = promises[at];
+      if (p === undefined) item.reject(new Error('the engine returned fewer statements than it was sent'));
+      else p.then(item.resolve, item.reject);
+    });
   };
   return {
     prepare: (paths, signal) => engine.prepare(paths, signal),
     query(q, signal) {
       if (signal?.aborted) return Promise.reject(abortError());
       return new Promise<Table>((resolve, reject) => {
-        // the caller's own abort rejects it at once, whatever the rest of the batch does
-        const onAbort = (): void => reject(abortError());
-        signal?.addEventListener('abort', onAbort, { once: true });
-        const item: Pending = {
-          q,
-          signal,
-          resolve: (t) => {
-            signal?.removeEventListener('abort', onAbort);
-            resolve(t);
-          },
-          reject: (e) => {
-            signal?.removeEventListener('abort', onAbort);
-            reject(e);
-          },
-        };
-        pending.push(item);
+        pending.push({ q, signal, resolve, reject });
         if (pending.length === 1) queueMicrotask(flush);
       });
     },

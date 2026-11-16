@@ -101,9 +101,9 @@ export async function pageOn(
     await counting.cold();
     let batches = 0;
     const send = counting.engine.queryBatch;
-    counting.engine.queryBatch = (qs, signal) => {
+    counting.engine.queryBatch = (items) => {
       batches++;
-      return send.call(counting.engine, qs, signal);
+      return send.call(counting.engine, items);
     };
     const recording = recordingDataSource(
       createDuckDbDataSource({ engine: counting.engine, manifest: live.manifest }),
