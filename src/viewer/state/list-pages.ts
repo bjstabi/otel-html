@@ -56,11 +56,17 @@ export function useListPages<Row>(
   }, [key, first]);
   useEffect(() => () => flight.current?.abort(), []);
 
-  const extra = first !== null && loaded !== null && loaded.base === first ? loaded : null;
+  // The key `first` arrived under: while a new query loads, `first` is still the previous result, so its rows and its
+  // cursor belong to a query that is no longer asked and continue nothing until another `first` arrives.
+  const [owner, setOwner] = useState<{ first: object | null; key: string }>({ first, key });
+  if (owner.first !== first) setOwner({ first, key });
+  const current = owner.first !== first || owner.key === key;
+
+  const extra = current && first !== null && loaded !== null && loaded.base === first ? loaded : null;
   const rows = first === null ? [] : extra === null ? first.rows : [...first.rows, ...extra.rows];
   const held = rows.length > cap ? rows.slice(0, cap) : rows;
   const next = first === null ? null : extra === null ? first.next : extra.next;
-  const cursor = held.length >= cap ? null : next;
+  const cursor = !current || held.length >= cap ? null : next;
 
   const latest = useRef({ first, cursor, loadNext, loading: state.loading });
   latest.current = { first, cursor, loadNext, loading: state.loading };

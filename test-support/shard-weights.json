@@ -251,6 +251,7 @@
     "test/viewer/log-body.test.tsx": 0.8,
     "test/viewer/log-list.test.tsx": 1.7,
     "test/viewer/log-panel.test.tsx": 2.9,
+    "test/viewer/list-pages.test.tsx": 0.5,
     "test/viewer/log-views.test.ts": 0.7,
     "test/viewer/logs-explorer-paging.test.tsx": 5,
     "test/viewer/logs-explorer.test.tsx": 4.7,
