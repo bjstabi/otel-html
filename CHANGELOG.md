@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.7.0](https://github.com/bjstabi/otel-html/compare/otel-html-v0.6.0...otel-html-v0.7.0) (2026-11-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **ci:** report and deploy run as jobs of the CI run; no deployer dispatch ([#331](https://github.com/bjstabi/otel-html/issues/331))
+
+### Features
+
+* **ci:** report and deploy run as jobs of the CI run; no deployer dispatch ([#331](https://github.com/bjstabi/otel-html/issues/331)) ([d90d5a0](https://github.com/bjstabi/otel-html/commit/d90d5a06b61c24db35b759c793be83b7404cbfc9))
+
+
+### Bug fixes
+
+* **ci:** an in-graph run's site entry carries its finished conclusion ([#332](https://github.com/bjstabi/otel-html/issues/332)) ([fd9488e](https://github.com/bjstabi/otel-html/commit/fd9488e2a024884e5fc9ce119d729c23c3301a2c))
+
+
+### Performance
+
+* **test:** build fixtures once, pool DuckDB, rebalance shards and trim CI ([#329](https://github.com/bjstabi/otel-html/issues/329)) ([6747b26](https://github.com/bjstabi/otel-html/commit/6747b2600800adf81b205d7528eb452da05540e6))
+* **viewer:** lists page by cursor from the newest files; batched statements ([#338](https://github.com/bjstabi/otel-html/issues/338)) ([daf0a8a](https://github.com/bjstabi/otel-html/commit/daf0a8a3e86493fe4903b4a3a22f2c446d0a4e52))
+* **writer:** rollups carry the keys dashboard widgets test ([#337](https://github.com/bjstabi/otel-html/issues/337)) ([b88baac](https://github.com/bjstabi/otel-html/commit/b88baaca77473341ebbf08c313f2d2603df83476))
+
+
+### Documentation
+
+* **agents:** wait on long commands in the foreground, never with a pgrep -f loop ([#327](https://github.com/bjstabi/otel-html/issues/327)) ([897316f](https://github.com/bjstabi/otel-html/commit/897316f1aed6f7cd778c5d879c5c5a647302866e))
+* query-layout design and plan (format 7, paged lists, batches) ([#336](https://github.com/bjstabi/otel-html/issues/336)) ([1c836a9](https://github.com/bjstabi/otel-html/commit/1c836a9607b7cebd8a79e11c417cc2896413db58))
+
 ## [0.6.0](https://github.com/bjstabi/otel-html/compare/otel-html-v0.5.0...otel-html-v0.6.0) (2026-11-15)
 
 
