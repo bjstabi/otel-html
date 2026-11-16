@@ -1,3 +1,4 @@
+import type { Table } from '@uwdata/flechette';
 import { and, column, type ExprNode, eq, literal, type Query, sql } from '@uwdata/mosaic-sql';
 import type { ManifestV4 } from '../../format/manifest.js';
 import type { Table as TableName } from '../../format/parquet/columns.js';
@@ -7,6 +8,8 @@ import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId, UnixNanos } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../model/records.js';
 import { type CompiledCondition, compileCondition } from '../../ottl/compile.js';
+import type { RowCursor } from '../../query/sql/cursor.js';
+import { countsFromRows, rollupCounts } from '../../query/sql/cutoff.js';
 import {
   attributeFacetsQuery,
   CORE_LOG_FACETS,
@@ -88,6 +91,7 @@ import { LOG_SEVERITY_KEYS } from '../../semconv/severity.js';
 import { durationAxis } from '../traces/views.js';
 import type { DataSource, TraceDetail } from './data-source.js';
 import { metricMethods } from './duckdb-metrics.js';
+import { afterCursor, inReadOrder, readPage } from './list-pages.js';
 import { checkSurroundingCount, type LogRef, type LogRow, refParts } from './log-query.js';
 import {
   type LogRowEntry,
@@ -207,6 +211,7 @@ function emptyResult(caps: typeof DEFAULT_FACET_CAPS, residual: string | null): 
     groups: null,
     residual,
     tables: { resources: [], scopes: [] },
+    next: null,
   };
 }
 
@@ -228,6 +233,7 @@ function emptyLogResult(caps: FacetCaps, residual: string | null, mode: LogQuery
     facets: new FacetCounts(caps.facetValueCap, caps.facetKeyCap, [...CORE_LOG_KEYS]),
     buckets: new TimeBuckets(LOG_SEVERITY_KEYS),
     residual,
+    next: null,
   };
   return mode === 'traces' ? { ...base, mode, rows: [] } : { ...base, mode: 'logs', rows: [] };
 }
@@ -552,6 +558,153 @@ export function createDuckDbDataSource(opts: {
       return read(['spans', 'traces'], own.files, windowTraceRowsQuery(own, traces, sort, limit), signal);
     };
 
+    /** A start-sorted trace list that pages: any list the trace-by-start rules of a long window do not take over. */
+    const pagesTraces = (sort: TraceSort): boolean =>
+      sort.column === 'start' && residual === null && !(rule.long && filter.window !== null);
+
+    /**
+     * A page of the start-sorted trace list (no long window, no browser condition): `q.limit` traces. The first page
+     * reads the `traces` files the cutoff keeps (no condition: those files; a condition: the spans files it keeps and
+     * every `traces` file of the matching traces); a page after a cursor reads every file, since the cursor decides.
+     * The count is its own statement, `traceTotal`.
+     */
+    const tracePage = async (
+      f: SqlFilter,
+      sort: TraceSort,
+    ): Promise<{ table: Table; next: RowCursor | null }> => {
+      const need = q.limit + 1;
+      const cursor = q.cursor ?? null;
+      const none = unconditioned(f);
+      const table =
+        cursor !== null
+          ? await (none
+              ? read(['traces'], undefined, allTraceRowsQuery(f, sort, need, null, { cursor }), signal)
+              : read(['spans', 'traces'], f.files, traceRowsQuery(f, sort, need, { cursor }), signal))
+          : (
+              await readPage({
+                manifest,
+                table: none ? 'traces' : 'spans',
+                pruned: none ? prunePartitions(manifest, 'traces', new Map(), null) : f.files,
+                need,
+                dir: sort.dir,
+                ...(none ? {} : { counts: () => matchCounts('spans', f, f.files) }),
+                read: async (files) => {
+                  const t = none
+                    ? await read(['traces'], files, allTraceRowsQuery(f, sort, need, null, { files }), signal)
+                    : await read(
+                        ['spans', 'traces'],
+                        files,
+                        traceRowsQuery({ ...f, files }, sort, need, {}),
+                        signal,
+                      );
+                  return { rows: t.numRows, value: t };
+                },
+              })
+            ).value;
+      const rows = rowsOf(table);
+      const last = rows[q.limit - 1];
+      const start = last === undefined ? null : cell(last, 'start_ns');
+      return {
+        table,
+        next:
+          rows.length > q.limit && last !== undefined && start != null
+            ? {
+                time: BigInt(start as bigint | number),
+                filename: String(cell(last, 'trace_id')),
+                row: 0n,
+              }
+            : null,
+      };
+    };
+
+    /** The traces the list of `f` holds, which a page does not count. */
+    const traceTotal = async (f: SqlFilter): Promise<number> => {
+      const split = unconditioned(f) ? null : plan(f, 'total', [], false);
+      const t = unconditioned(f)
+        ? await read(['traces'], undefined, allTraceCountQuery(null), signal)
+        : split === null
+          ? await read(['spans'], f.files, spanCountQuery(f, 'traces'), signal)
+          : await readMeasures(
+              split,
+              rollupTotalQuery(measuresRelation(f, 'spans', split, [], false)),
+              signal,
+            );
+      return toNumber(cell(rowsOf(t)[0] ?? {}, 'total') ?? 0n, 'total');
+    };
+
+    /**
+     * Per-file match counts for the cutoff, from the rollups where they answer the filter exactly (`rollupCounts`);
+     * undefined when the filter has no condition (the files' own `rows` are the counts) or no rollup can say.
+     */
+    const matchCounts = async (
+      table: 'spans' | 'logs',
+      f: SqlFilter,
+      pruned: Pruned,
+    ): Promise<ReadonlyMap<string, number> | undefined> => {
+      // a browser condition's id table is no rollup dimension: the files' own `rows` stand for the counts
+      if (browser || (f.predicate === null && f.text === null)) return undefined;
+      const rc = rollupCounts(manifest, table, pruned, f, reads);
+      if (rc.query === null) return undefined;
+      const t = await readMeasures({ rollup: [...rc.baseOf.keys()], raw: [] }, rc.query, signal);
+      return countsFromRows(
+        rc,
+        rowsOf(t).map((r) => ({
+          filename: String(cell(r, 'filename')),
+          n: cell(r, 'n') as number | bigint,
+        })),
+      );
+    };
+
+    /**
+     * A page of a start-sorted spans list: `limit` rows, from the newest (oldest, ascending) files that can fill it,
+     * after `q.cursor`. One row more than the page is asked, which says whether `next` exists.
+     */
+    const spanPage = async (
+      f: SqlFilter,
+      sort: SpanSort,
+    ): Promise<{ table: Table; shown: number; next: RowCursor | null }> => {
+      const need = q.limit + 1;
+      const cursor = q.cursor ?? null;
+      const pruned =
+        cursor === null ? f.files : afterCursor(manifest, 'spans', f.files, cursor.time, sort.dir);
+      const page = await readPage({
+        manifest,
+        table: 'spans',
+        pruned,
+        need,
+        dir: sort.dir,
+        counts: () => matchCounts('spans', f, pruned),
+        read: async (files, complete) => {
+          // every file read ascending is what the shared view does (oldest first, footers already bound): its own list
+          // would only bind them again; a cutoff, or a descending read, lists its files itself
+          const view = complete;
+          const own: SqlFilter = view ? { ...f, files } : { ...f, files: { ...files, all: true } };
+          const table = await read(
+            ['spans'],
+            files,
+            spanRowsQuery(own, sort, need, cursor, view ? undefined : inReadOrder(files, sort.dir)),
+            signal,
+          );
+          return { rows: table.numRows, value: table };
+        },
+      });
+      const rows = rowsOf(page.value);
+      const last = rows[q.limit - 1];
+      const more = rows.length > q.limit && last !== undefined;
+      return {
+        table: page.value,
+        shown: q.limit,
+        next: more
+          ? {
+              time: epoch + BigInt(cell(last, 'start_ns') as bigint | number),
+              filename: String(cell(last, 'filename')),
+              row: BigInt(cell(last, 'file_row_number') as bigint | number),
+              spanId: String(cell(last, 'span_id')),
+            }
+          : null,
+      };
+    };
+
     /** The match count a time-sorted rows statement no longer carries: routed to the rollups like the `total` need. */
     const rowsTotal = async (f: SqlFilter): Promise<number> => {
       const split = plan(f, 'total', [], false);
@@ -574,7 +727,10 @@ export function createDuckDbDataSource(opts: {
       if (needs.has('rows')) {
         parts.push(
           (async () => {
-            if (traceSort !== null) {
+            if (traceSort !== null && pagesTraces(traceSort)) {
+              const [paged, total] = await Promise.all([tracePage(f, traceSort), traceTotal(f)]);
+              Object.assign(result, { rows: traceRows(paged.table, q.limit).rows, total, next: paged.next });
+            } else if (traceSort !== null) {
               const r = traceRows(await traceList(f, traceSort));
               Object.assign(result, r);
             } else if (spanSort !== null && !useIds && test !== null) {
@@ -599,13 +755,13 @@ export function createDuckDbDataSource(opts: {
                 tables: interned.tables,
                 total: exhausted ? rows.length : Math.max(candidates, rows.length),
               });
+            } else if (spanSort !== null && spanSort.column === 'start') {
+              const [paged, total] = await Promise.all([spanPage(f, spanSort), rowsTotal(f)]);
+              const decoded = spanRows(paged.table, epoch, paged.shown);
+              Object.assign(result, { ...decoded, total, next: paged.next });
             } else if (spanSort !== null) {
-              const [page, total] = await Promise.all([
-                read(['spans'], f.files, spanRowsQuery(f, spanSort, q.limit), signal),
-                spanSort.column === 'start' ? rowsTotal(f) : null,
-              ]);
-              const decoded = spanRows(page, epoch);
-              Object.assign(result, total === null ? decoded : { ...decoded, total });
+              const page = await read(['spans'], f.files, spanRowsQuery(f, spanSort, q.limit), signal);
+              Object.assign(result, spanRows(page, epoch));
             }
           })(),
         );
@@ -921,6 +1077,70 @@ export function createDuckDbDataSource(opts: {
     const useIds = browser && (aggregates || (q.mode === 'traces' && needs.has('rows')));
     const test = residual === null ? null : logResidualTest(compileCondition(residual, 'log_record'), epoch);
 
+    /** Per-file match counts for the cutoff (see `querySpans`' `matchCounts`). */
+    const matchCounts = async (
+      f: SqlFilter,
+      pruned: Pruned,
+    ): Promise<ReadonlyMap<string, number> | undefined> => {
+      // a browser condition's id table is no rollup dimension: the files' own `rows` stand for the counts
+      if (browser || (f.predicate === null && f.text === null)) return undefined;
+      const rc = rollupCounts(manifest, 'logs', pruned, f, reads);
+      if (rc.query === null) return undefined;
+      const t = await readMeasures({ rollup: [...rc.baseOf.keys()], raw: [] }, rc.query, signal);
+      return countsFromRows(
+        rc,
+        rowsOf(t).map((r) => ({
+          filename: String(cell(r, 'filename')),
+          n: cell(r, 'n') as number | bigint,
+        })),
+      );
+    };
+
+    /** A page of a time-sorted logs list: `q.limit` rows after `q.cursor`, from the newest (oldest, ascending) files that can fill it. */
+    const logPage = async (
+      f: SqlFilter,
+      sort: LogSort,
+    ): Promise<{ table: Table; next: RowCursor | null }> => {
+      const need = q.limit + 1;
+      const cursor = q.cursor ?? null;
+      const pruned =
+        cursor === null ? f.files : afterCursor(manifest, 'logs', f.files, epoch + cursor.time, sort.dir);
+      const page = await readPage({
+        manifest,
+        table: 'logs',
+        pruned,
+        need,
+        dir: sort.dir,
+        counts: () => matchCounts(f, pruned),
+        read: async (files, complete) => {
+          // every file read ascending is what the shared view does (oldest first, footers already bound): its own list
+          // would only bind them again; a cutoff, or a descending read, lists its files itself
+          const view = complete;
+          const own: SqlFilter = view ? { ...f, files } : { ...f, files: { ...files, all: true } };
+          const table = await read(
+            ['logs'],
+            files,
+            logRowsQuery(own, sort, need, cursor, view ? undefined : inReadOrder(files, sort.dir)),
+            signal,
+          );
+          return { rows: table.numRows, value: table };
+        },
+      });
+      const rows = rowsOf(page.value);
+      const last = rows[q.limit - 1];
+      return {
+        table: page.value,
+        next:
+          rows.length > q.limit && last !== undefined
+            ? {
+                time: BigInt(cell(last, 'time_rel') as bigint | number),
+                filename: String(cell(last, 'filename')),
+                row: BigInt(cell(last, 'file_row_number') as bigint | number),
+              }
+            : null,
+      };
+    };
+
     /** The match count a time-sorted rows statement no longer carries: routed to the rollups like the `total` need. */
     const rowsTotal = async (f: SqlFilter): Promise<number> => {
       const split = plan(f, 'total', []);
@@ -964,13 +1184,18 @@ export function createDuckDbDataSource(opts: {
               if (logSort.column === 'time' && !exhausted) candidates = await rowsTotal(f);
               const total = exhausted ? rows.length : Math.max(candidates, rows.length);
               Object.assign(result, { rows: rows.map((e) => e.row), total, matched: total });
+            } else if (logSort !== null && logSort.column === 'time') {
+              const [paged, total] = await Promise.all([logPage(f, logSort), rowsTotal(f)]);
+              Object.assign(result, {
+                rows: logRows(paged.table, q.limit).rows,
+                total,
+                matched: total,
+                next: paged.next,
+              });
             } else if (logSort !== null) {
-              const [page, counted] = await Promise.all([
-                read(['logs'], f.files, logRowsQuery(f, logSort, q.limit), signal),
-                logSort.column === 'time' ? rowsTotal(f) : null,
-              ]);
-              const { rows, total: paged } = logRows(page);
-              const total = counted ?? paged;
+              const { rows, total } = logRows(
+                await read(['logs'], f.files, logRowsQuery(f, logSort, q.limit), signal),
+              );
               Object.assign(result, { rows, total, matched: total });
             }
           })(),

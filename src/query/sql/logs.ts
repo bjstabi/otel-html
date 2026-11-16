@@ -21,7 +21,7 @@ import { LOG_SEVERITY_KEYS, SEVERITY_BANDS } from '../../semconv/severity.js';
 import type { LogRef, LogRow } from '../../viewer/data/log-query.js';
 import { refParts } from '../../viewer/data/log-query.js';
 import { relTime } from './columns.js';
-import { keysetAfter, type RowCursor } from './cursor.js';
+import { keysetAfter, ownFiles, type RowCursor } from './cursor.js';
 import { type SqlFilter, whereOf } from './filter.js';
 import type { AbsWindow } from './prune.js';
 import { type BucketSpec, bucketExpr } from './time.js';
@@ -87,7 +87,13 @@ const LOG_SORT: Record<LogSort['column'], string> = {
  * page: the rows strictly after it in the ORDER BY. Any other sort keeps `total`, the matches before LIMIT, and
  * ignores the cursor.
  */
-export function logRowsQuery(f: SqlFilter, sort: LogSort, limit: number, cursor?: RowCursor | null): Query {
+export function logRowsQuery(
+  f: SqlFilter,
+  sort: LogSort,
+  limit: number,
+  cursor?: RowCursor | null,
+  files?: readonly string[],
+): Query {
   const terms = whereOf(f, 'logs');
   const byTime = sort.column === 'time';
   if (byTime && cursor != null) {
@@ -98,7 +104,7 @@ export function logRowsQuery(f: SqlFilter, sort: LogSort, limit: number, cursor?
       ]),
     );
   }
-  const q = Query.from('logs');
+  const q = byTime && files !== undefined ? Query.from({ logs: ownFiles(files) }) : Query.from('logs');
   if (byTime) q.select(logColumns(f.epoch));
   else {
     // a scalar subquery, not `count(*) OVER ()`: the window function would materialise every matching row before the top-N

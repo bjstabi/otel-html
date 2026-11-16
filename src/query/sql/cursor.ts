@@ -29,3 +29,13 @@ export function keysetAfter(
   const past = dir === 'asc' ? sql`${verbatim(col)} > ${t}` : sql`${verbatim(col)} < ${t}`;
   return or(past, and(sql`${verbatim(col)} = ${t}`, sql`(${verbatim(names)}) > (${verbatim(values)})`));
 }
+
+const quoted = (text: string): string => `'${text.replaceAll("'", "''")}'`;
+
+/**
+ * A relation over exactly `files`, read in the order given, with the virtual columns of the shared views
+ * (`filename`, `file_row_number`): a time-sorted rows statement reads its own list, newest partition first for a
+ * descending sort and oldest first for an ascending one, which the one shared view (oldest first) cannot do for both.
+ */
+export const ownFiles = (files: readonly string[]): ExprNode =>
+  sql`${verbatim(`read_parquet([${files.map(quoted).join(', ')}], filename = true, file_row_number = true, union_by_name = false)`)}`;

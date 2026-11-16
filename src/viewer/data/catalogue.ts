@@ -304,12 +304,14 @@ const WINDOW_TRACES = ['windowTracePartitionsQuery', 'windowTraceRowsQuery'] as 
 
 const TRACE_LIST: SpanSpec[] = [
   {
-    ...span('traces.list', ['rows'], ['allTraceRowsQuery'], { over: { mode: 'traces' } }),
+    ...span('traces.list', ['rows'], ['allTraceRowsQuery', 'allTraceCountQuery'], {
+      over: { mode: 'traces' },
+    }),
     family: 'trace list',
     variants: [ALL, ALL_LONG],
   },
   {
-    ...span('traces.list', ['rows'], ['traceRowsQuery'], {
+    ...span('traces.list', ['rows'], ['traceRowsQuery', 'spanCountQuery'], {
       over: { mode: 'traces' },
       long: ['allTraceRowsQuery'],
     }),
@@ -788,7 +790,8 @@ const BASELINE: Record<string, Declared> = {
   }),
   'spans.total.traces.long': decl(['files', 'files', 'files']),
   'spans.rows.short': decl(['fixed', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
-  'spans.rows.long': decl(['fixed', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
+  // a page reads the newest files that fill it, so a wider window only adds files (it was a scan before paging)
+  'spans.rows.long': decl(['fixed', 'scan', 'files'], { allowed: { density: ROWS_PAGE } }),
   'spans.rows.all': decl(['scan', 'scan', null], { allowed: { retention: ROWS_PAGE, density: ROWS_PAGE } }),
   'percentile.short': decl(['scan', 'scan', null], {
     allowed: { retention: PERCENTILE_SHORT, density: PERCENTILE_SHORT },

@@ -7,6 +7,7 @@ import {
   eq,
   isIn,
   literal,
+  or,
   Query,
   type SelectQuery,
   sql,
@@ -17,7 +18,7 @@ import { durationBucketSql } from '../../format/parquet/duration-bucket.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId } from '../../model/ids.js';
 import { jsonAt, jsonKind, jsonStringAt, relTime } from './columns.js';
-import { keysetAfter, type RowCursor } from './cursor.js';
+import { keysetAfter, ownFiles, type RowCursor } from './cursor.js';
 import { CORE_SPAN_FACETS, truncated } from './facets.js';
 import { filenameTerm, type SqlFilter, whereOf } from './filter.js';
 import type { AbsWindow, Pruned } from './prune.js';
@@ -76,9 +77,15 @@ function spanColumns(epoch: bigint): Record<string, ExprNode> {
  * Spans of the filtered set (columns of `spanColumns`), sorted, with a start/span_id/file/row tiebreak. A start sort
  * has no `total` column (`spanTotalQuery` counts, so a page reads no more than its rows) and takes a `cursor`, the
  * last row of the previous page: the rows strictly after it in the ORDER BY. Any other sort keeps `total`, the matches
- * before LIMIT, and ignores the cursor.
+ * before LIMIT, and ignores the cursor. A start sort reads `files` (when given) as its own list in that order, not the view.
  */
-export function spanRowsQuery(f: SqlFilter, sort: SpanSort, limit: number, cursor?: RowCursor | null): Query {
+export function spanRowsQuery(
+  f: SqlFilter,
+  sort: SpanSort,
+  limit: number,
+  cursor?: RowCursor | null,
+  files?: readonly string[],
+): Query {
   const terms = whereOf(f, 'spans');
   const byStart = sort.column === 'start';
   if (byStart && cursor != null) {
@@ -93,7 +100,7 @@ export function spanRowsQuery(f: SqlFilter, sort: SpanSort, limit: number, curso
       ]),
     );
   }
-  const q = Query.from('spans');
+  const q = byStart && files !== undefined ? Query.from({ spans: ownFiles(files) }) : Query.from('spans');
   if (byStart) q.select(spanColumns(f.epoch));
   else {
     // a scalar subquery, not `count(*) OVER ()`: the window function would materialise every matching row before the top-N
@@ -126,12 +133,12 @@ export function spanTotalQuery(f: SqlFilter): Query {
  * `traces` row of the scope (else, or when that row has none, NULL; it reads the `traces` column only, never a span), the root from the row with the smallest start whose `root_name` is set,
  * the lower partition on a tie (R35). Also `duration_ns` and `total`.
  */
-export function traceRowsQuery(f: SqlFilter, sort: TraceSort, limit: number): Query {
+export function traceRowsQuery(f: SqlFilter, sort: TraceSort, limit: number, page?: TracePage): Query {
   const matching = Query.from('spans')
     .select('trace_id')
     .distinct()
     .where(...whereOf(f, 'spans'));
-  return traceRowsOf(traceAggregate(f.epoch).where(sql`trace_id IN (${matching})`), sort, limit);
+  return traceRowsOf(traceAggregate(f.epoch).where(sql`trace_id IN (${matching})`), sort, limit, page);
 }
 
 /**
@@ -146,10 +153,13 @@ export function allTraceRowsQuery(
   sort: TraceSort,
   limit: number,
   window?: AbsWindow | null,
+  page?: TracePage & { files?: Pruned | null },
 ): Query {
   const agg = traceAggregate(f.epoch).having(sql`sum(span_count) > 0`);
   if (window != null) agg.having(traceStartIn(window));
-  return traceRowsOf(agg, sort, limit);
+  const own = page?.files == null ? null : filenameTerm(page.files);
+  if (own !== null) agg.where(own);
+  return traceRowsOf(agg, sort, limit, page);
 }
 
 /** The traces that start in `window` (absolute, `lo <= start < hi`), as an aggregate `HAVING` term over `traceAggregate`. */
@@ -232,7 +242,17 @@ function traceAggregate(epoch: bigint): SelectQuery {
     .groupby('trace_id');
 }
 
-function traceRowsOf(agg: Query, sort: TraceSort, limit: number): Query {
+/**
+ * A trace list read as a page: no `total` column (`spanCountQuery` / `allTraceCountQuery` count, so a page reads no more
+ * than its rows) and, for a start sort, a `cursor` after the last row of the previous page. The trace cursor is
+ * `time` the trace's `start_ns` (relative to the epoch) and `filename` its trace id (`row` is 0): the list's ORDER BY is
+ * start, then `trace_id`. A trace without a timed span sorts last (`NULLS LAST`) and is reached whatever the cursor.
+ */
+export interface TracePage {
+  cursor?: RowCursor | null;
+}
+
+function traceRowsOf(agg: Query, sort: TraceSort, limit: number, page?: TracePage): Query {
   const withDuration = Query.from({ agg }).select({
     trace_id: column('trace_id'),
     span_count: column('span_count'),
@@ -246,10 +266,18 @@ function traceRowsOf(agg: Query, sort: TraceSort, limit: number): Query {
     root_resource: sql`root.resource`,
     share: column('share'),
   });
-  return Query.from({ t: withDuration })
-    .select('*', { total: sql`count(*) OVER ()` })
-    .orderby(dirOf(TRACE_SORT[sort.column], sort.dir), asc('trace_id'))
-    .limit(limit);
+  const q = Query.from({ t: withDuration });
+  if (page === undefined) q.select('*', { total: sql`count(*) OVER ()` });
+  else q.select('*');
+  if (page?.cursor != null && sort.column === 'start') {
+    q.where(
+      or(
+        keysetAfter('start_ns', sort.dir, page.cursor.time, [['trace_id', literal(page.cursor.filename)]]),
+        sql`start_ns IS NULL`,
+      ),
+    );
+  }
+  return q.orderby(dirOf(TRACE_SORT[sort.column], sort.dir), asc('trace_id')).limit(limit);
 }
 
 /**

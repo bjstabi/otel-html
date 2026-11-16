@@ -97,8 +97,12 @@ export interface SpanEntry {
 }
 
 /** Decodes the rows of `spanRowsQuery` / `traceSpansQuery` (times already relative; `start_ns`, `end_ns`). */
-export function spanEntries(t: Table, epoch: bigint): { entries: SpanEntry[]; total: number } {
-  const rows = rowsOf(t);
+export function spanEntries(
+  t: Table,
+  epoch: bigint,
+  take = Number.POSITIVE_INFINITY,
+): { entries: SpanEntry[]; total: number } {
+  const rows = rowsOf(t).slice(0, take);
   const entries = rows.map((row): SpanEntry => {
     const { span, shared } = spanFromRow(
       { ...row, start_time_unix_nano: cell(row, 'start_ns'), end_time_unix_nano: cell(row, 'end_ns') },
@@ -152,8 +156,9 @@ export function internRows(entries: readonly SpanEntry[]): { rows: SpanRow[]; ta
 export function spanRows(
   t: Table,
   epoch: bigint,
+  take = Number.POSITIVE_INFINITY,
 ): { rows: SpanRow[]; total: number; tables: RowTables; share: ({ start: number; end: number } | null)[] } {
-  const { entries, total } = spanEntries(t, epoch);
+  const { entries, total } = spanEntries(t, epoch, take);
   return { ...internRows(entries), total, share: entries.map((e) => e.share) };
 }
 
@@ -168,8 +173,8 @@ export function storedShare(v: unknown): ServiceShare | null {
 }
 
 /** The rows of `traceRowsQuery`; a trace without a timed span row has start and duration 0, one without a root has no `rootSummary`. */
-export function traceRows(t: Table): { rows: TraceRow[]; total: number } {
-  const rows = rowsOf(t);
+export function traceRows(t: Table, take = Number.POSITIVE_INFINITY): { rows: TraceRow[]; total: number } {
+  const rows = rowsOf(t).slice(0, take);
   const out = rows.map(
     (r): TraceRow => ({
       traceId: text(cell(r, 'trace_id')) as TraceId,
@@ -189,7 +194,11 @@ export function traceRows(t: Table): { rows: TraceRow[]; total: number } {
     }),
   );
   const first = rows[0];
-  return { rows: out, total: first === undefined ? 0 : toNumber(cell(first, 'total'), 'total') };
+  return {
+    rows: out,
+    // a page has no `total` column: the count is its own statement
+    total: first === undefined ? 0 : toNumber(cell(first, 'total') ?? out.length, 'total'),
+  };
 }
 
 /**

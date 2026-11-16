@@ -448,7 +448,7 @@ describe('querySpans', () => {
     );
     expect(groups.arrow).toBe(1);
     const traces = await counted(() => ds.querySpans(query({ text: 'commit', mode: 'traces' })));
-    expect(traces.arrow).toBe(6);
+    expect(traces.arrow).toBe(7); // the list page and its count are two statements, no longer one with `count(*) OVER ()`
     const keyed = await counted(() =>
       ds.querySpans(query({ text: 'commit', needs: ['facets'], facetKeys: ['service.name'] })),
     );
@@ -788,7 +788,10 @@ describe('preparing the files a statement reads', () => {
     );
     const prepared = events.flatMap((e) => (e.kind === 'prepare' ? e.paths : []));
     expect(new Set(prepared)).toEqual(new Set([pathsOf('spans')[0], ...pathsOf('traces')]));
-    expect(prepared.filter((p) => pathsOf('spans').includes(p))).toEqual([pathsOf('spans')[0]]);
+    // the page and the count both prepare the one kept spans file, and no other
+    expect(new Set(prepared.filter((p) => pathsOf('spans').includes(p)))).toEqual(
+      new Set([pathsOf('spans')[0]]),
+    );
     expect(prepared.some((p) => pathsOf('logs').includes(p))).toBe(false);
   });
 
