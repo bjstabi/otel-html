@@ -49,6 +49,14 @@ import {
 } from './rollup-rows.js';
 import { shareSpanAt } from './trace-summaries.js';
 import { watchWasmPanics } from './wasm-panic.js';
+import {
+  type CompiledWidgetIndex,
+  encodeWidgetTraces,
+  WidgetTraceSet,
+  widgetIndexAllowed,
+  widgetIndexInexact,
+  widgetIndexTooLarge,
+} from './widget-trace-rows.js';
 import { writeWrapperOfFile } from './wrapper-file.js';
 
 export interface CompactOptions {
@@ -77,6 +85,8 @@ export interface CompactOptions {
    * compaction holds only one time group of it (`latestTemplates`). A cluster not listed keeps its own latest.
    */
   templates?: ReadonlyMap<string, string>;
+  /** The report's widget trace index; each output with spans gets its `widget_traces`, derived from the merged spans. */
+  widgetIndex?: CompiledWidgetIndex;
   /** Where the guard's refusal of a rollup is told. */
   warn?: (message: string, attrs: Record<string, unknown>) => void;
 }
@@ -918,7 +928,16 @@ export async function compactPartitions(
   // Rollups recomputed from the rows the merge reads anyway, one chunk at a time.
   const recomputed: Partial<Record<RollupTable, RollupSum>> = {};
   const recomputedWide: Partial<Record<RollupTable, RollupSum>> = {};
+  const widgetSet = opts.widgetIndex === undefined ? undefined : new WidgetTraceSet(opts.widgetIndex);
   const onRows = (table: Table): ((chunk: ColumnBatch) => void) | undefined => {
+    const rolled = rollupFeed(table);
+    if (table !== 'spans' || widgetSet === undefined) return rolled;
+    return (chunk) => {
+      rolled?.(chunk);
+      widgetSet.add(chunk);
+    };
+  };
+  const rollupFeed = (table: Table): ((chunk: ColumnBatch) => void) | undefined => {
     const rt = table === 'spans' ? 'span_rollups' : table === 'logs' ? 'log_rollups' : null;
     const plan = rt === null ? undefined : plans[rt];
     if (rt === null || plan === undefined || plan.how !== 'recompute') return undefined;
@@ -1089,6 +1108,42 @@ export async function compactPartitions(
         ...(timeEndMax === undefined ? {} : { timeEndMax }),
         ...(rollup === undefined ? {} : { rollup }),
       };
+    }
+    const spansFile = files.spans;
+    const index = opts.widgetIndex;
+    if (index !== undefined && widgetSet !== undefined && spansFile !== undefined) {
+      if (!widgetSet.exact) {
+        opts.warn?.(...widgetIndexInexact(index));
+      } else {
+        const rows = widgetSet.rows();
+        const bytes = encodeWidgetTraces(rows, index, opts.rowGroupRows);
+        const empty = encodeWidgetTraces([], index, opts.rowGroupRows).length;
+        if (widgetIndexAllowed(bytes.length, empty, spansFile.bytes)) {
+          const path = partitionFilePath(n, 'widget_traces');
+          await fs.writeBytes(at(out, path), bytes);
+          if (opts.format === 'local') {
+            await writeWrapperOfFile(
+              fs,
+              at(out, partitionWrapperPath(n, 'widget_traces')),
+              partitionKey(n, 'widget_traces'),
+              at(out, path),
+            );
+          }
+          files.widget_traces = {
+            path,
+            bytes: bytes.length,
+            ...fileStatistics(
+              'widget_traces',
+              batchFromRows('widget_traces', rows, index.columns),
+              [],
+              opts.facetValueCap,
+            ),
+            widgetIndex: index.description,
+          };
+        } else {
+          opts.warn?.(...widgetIndexTooLarge(index, bytes.length - empty, spansFile.bytes));
+        }
+      }
     }
   } catch (e) {
     if (created) await fs.removeDir(dir).catch(() => undefined);

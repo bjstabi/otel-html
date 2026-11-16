@@ -21,6 +21,28 @@ export function widgetIndexAllowed(indexBytes: number, emptyBytes: number, spans
   return indexBytes - emptyBytes <= WIDGET_INDEX_SHARE * spansBytes;
 }
 
+/** What a writer tells when the guard refuses a partition's index (`widgetIndexAllowed`), and with which attributes. */
+export function widgetIndexTooLarge(
+  index: CompiledWidgetIndex,
+  indexBytes: number,
+  spansBytes: number,
+): [message: string, attrs: Record<string, unknown>] {
+  return [
+    'the widget trace index of this partition is not written: it would weigh over 5 % of the spans file',
+    { conditions: index.conditions.map((c) => c.source), indexBytes, spansBytes },
+  ];
+}
+
+/** What a writer tells when a partition's `WidgetTraceSet` is not exact (Amendment 1). */
+export function widgetIndexInexact(
+  index: CompiledWidgetIndex,
+): [message: string, attrs: Record<string, unknown>] {
+  return [
+    'the widget trace index of this partition is not written: its span times are more than 2^53 ns apart',
+    { conditions: index.conditions.map((c) => c.source) },
+  ];
+}
+
 export interface CompiledWidgetIndex {
   readonly conditions: readonly { id: string; source: string; test: (t: SpanTarget) => boolean }[];
   readonly variables: readonly string[];

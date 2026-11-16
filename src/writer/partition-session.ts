@@ -1,4 +1,5 @@
 import type { ResolvedConfig } from '../config/schema.js';
+import { widgetTraceConditions } from '../config/widget-traces.js';
 import {
   type PartitionEntry,
   type PartitionFile,
@@ -73,7 +74,7 @@ import {
   pointNormalization,
   UNNORMALIZED,
 } from './partition-checkpoint.js';
-import { PartitionWriter } from './partition-writer.js';
+import { type Derived, PartitionWriter } from './partition-writer.js';
 import { patternRows } from './pattern-rows.js';
 import { prunePartitions } from './prune.js';
 import { rebaseBatch } from './rebase.js';
@@ -100,6 +101,14 @@ import type {
 import { traceRows } from './trace-summaries.js';
 import { writeViewerAssets } from './viewer-assets.js';
 import { watchWasmPanics } from './wasm-panic.js';
+import {
+  type CompiledWidgetIndex,
+  compileWidgetIndex,
+  WidgetTraceSet,
+  widgetIndexAllowed,
+  widgetIndexInexact,
+  widgetIndexTooLarge,
+} from './widget-trace-rows.js';
 import { writeWrapper } from './wrapper-file.js';
 
 interface Restored {
@@ -256,6 +265,10 @@ class PartitionSession implements WriterSession {
   readonly #widgetKeys: Record<StatisticsTable, string[]>;
   /** The (table, key) pairs a widget key was left out of a rollup for, already warned about this session. */
   readonly #toldKeys = new Set<string>();
+  /** The widget trace index of this report's config, null when it has no indexed traces widget. */
+  readonly #widgetIndex: CompiledWidgetIndex | null;
+  /** The widget index messages already told this session (a partition that refuses its index says so once). */
+  readonly #toldIndex = new Set<string>();
   readonly #createdAt: string;
   readonly #title: string;
   /** The anchor this session's own records are relative to: its own first record's time, fixed once data is accepted. Times in files are absolute. */
@@ -312,6 +325,14 @@ class PartitionSession implements WriterSession {
     this.#widgetKeys = Object.fromEntries(
       STATISTICS_TABLES.map((t) => [t, widgetOnlyKeysFor(t, config)]),
     ) as Record<StatisticsTable, string[]>;
+    const spec = widgetTraceConditions(config.dashboards);
+    this.#widgetIndex = compileWidgetIndex(spec);
+    for (const source of spec.notRowLocal) {
+      deps.logger.warn(
+        'a traces widget condition is not indexed: it calls a converter that is not row local, so its partitions are scanned',
+        { condition: source },
+      );
+    }
     this.#writer = new PartitionWriter(deps.fs, {
       out,
       rowGroupRows: deps.rowGroupRows ?? config.writer.rowGroupRows,
@@ -325,6 +346,7 @@ class PartitionSession implements WriterSession {
         return {
           rows: { traces: traceRows(taken.spans, taken.logs), patterns: p.rows, ...r.rows },
           rollups: r.descriptions,
+          ...this.#widgetRows(taken.spans),
           commit: () => {
             this.#drain = p.drain;
           },
@@ -439,6 +461,38 @@ class PartitionSession implements WriterSession {
 
   #encodeOptions(): { rowGroupRows: number } {
     return { rowGroupRows: this.#deps.rowGroupRows ?? this.#config.writer.rowGroupRows };
+  }
+
+  /** Tells `message` once per session when it is a widget index refusal, every time otherwise. */
+  #warnOnce(message: string, attrs: Record<string, unknown>): void {
+    if (message.startsWith('the widget trace index')) {
+      if (this.#toldIndex.has(message)) return;
+      this.#toldIndex.add(message);
+    }
+    this.#deps.logger.warn(message, attrs);
+  }
+
+  /** The `widget_traces` rows of a cut's spans; nothing for a cut without spans or a set that is not exact. */
+  #widgetRows(spans: ColumnBatch): Pick<Derived, 'widgetIndex'> {
+    const index = this.#widgetIndex;
+    if (index === null || spans.length === 0) return {};
+    const set = new WidgetTraceSet(index);
+    set.add(spans);
+    if (!set.exact) {
+      this.#warnOnce(...widgetIndexInexact(index));
+      return {};
+    }
+    return {
+      widgetIndex: {
+        rows: set.rows(),
+        index,
+        allowed: (indexBytes, emptyBytes, spansBytes) => {
+          if (widgetIndexAllowed(indexBytes, emptyBytes, spansBytes)) return true;
+          this.#warnOnce(...widgetIndexTooLarge(index, indexBytes - emptyBytes, spansBytes));
+          return false;
+        },
+      },
+    };
   }
 
   /** The rollup rows of a cut and their descriptions; a table whose rollup the guard refuses gets neither, and a warning. */
@@ -1261,7 +1315,8 @@ class PartitionSession implements WriterSession {
         source: `compact:${first.n}..${last.n}`,
         patternKey,
         ...(templates === undefined ? {} : { templates }),
-        warn: (message, attrs) => this.#deps.logger.warn(message, attrs),
+        ...(this.#widgetIndex === null ? {} : { widgetIndex: this.#widgetIndex }),
+        warn: (message, attrs) => this.#warnOnce(message, attrs),
       });
       this.#writer.skipTo(n + 1);
       const replaced = new Set(picks.map((e) => e.n));

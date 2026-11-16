@@ -16,6 +16,7 @@ import { fileStatistics, hasTimeEndMax, statisticsKeysOf, timeEndMaxOf } from '.
 import { partitionDir, partitionFilePath, partitionKey, partitionWrapperPath } from '../format/paths.js';
 import { at } from './checkpoint.js';
 import type { FileSystem } from './ports.js';
+import { type CompiledWidgetIndex, encodeWidgetTraces } from './widget-trace-rows.js';
 import { writeWrapper } from './wrapper-file.js';
 
 export interface PartitionWriterOptions {
@@ -34,10 +35,19 @@ export interface PartitionWriterOptions {
  * What a derive hook returns. `rows` are written with the cut's own rows (they need not be held). `commit` runs
  * once, only after every file of the cut was written, so a stateful deriver changes its state only on success.
  */
-interface Derived {
+export interface Derived {
   rows: Partial<Record<Table, readonly Row[]>>;
   /** The `rollup` description each listed rollup table's file carries. */
   rollups?: Partial<Record<RollupTable, RollupDescription>>;
+  /**
+   * The rows of `widget_traces` for a cut that has spans (none for a cut without). The table is written even with
+   * 0 rows, unless `allowed` (the guard, given the table's encoded bytes, an empty table's, and the spans file's) says no.
+   */
+  widgetIndex?: {
+    rows: readonly Row[];
+    index: CompiledWidgetIndex;
+    allowed(indexBytes: number, emptyBytes: number, spansBytes: number): boolean;
+  };
   commit?: () => void;
 }
 
@@ -134,6 +144,7 @@ export class PartitionWriter {
       const derived = this.#opts.derive?.(taken);
       const encoded: { table: Table; batch: ColumnBatch; bytes: Uint8Array }[] = [];
       for (const table of TABLES) {
+        if (table === 'widget_traces') continue; // from `derived.widgetIndex`, below
         // Held rows were checked when the session accepted them; derived rows were not.
         const derivedRows = derived?.rows[table] ?? [];
         for (const [i, row] of derivedRows.entries()) checkRow(table, row, i);
@@ -145,6 +156,19 @@ export class PartitionWriter {
           batch,
           bytes: encodeColumns(table, batch, { rowGroupRows: this.#opts.rowGroupRows }),
         });
+      }
+      const spansBytes = encoded.find((e) => e.table === 'spans')?.bytes.length;
+      const wi = derived?.widgetIndex;
+      if (wi !== undefined && spansBytes !== undefined) {
+        const bytes = encodeWidgetTraces(wi.rows, wi.index, this.#opts.rowGroupRows);
+        const empty = encodeWidgetTraces([], wi.index, this.#opts.rowGroupRows).length;
+        if (wi.allowed(bytes.length, empty, spansBytes)) {
+          encoded.push({
+            table: 'widget_traces',
+            batch: batchFromRows('widget_traces', wi.rows, wi.index.columns),
+            bytes,
+          });
+        }
       }
       await this.#fs.mkdirp(at(this.#opts.out, partitionDir(n)));
       const files: Partial<Record<Table, PartitionFile>> = {};
@@ -173,6 +197,7 @@ export class PartitionWriter {
           ...(hasTimeEndMax(table) ? { timeEndMax: timeEndMaxOf(batch) } : {}),
           ...(rollup === undefined ? {} : { rollup }),
           ...(table === 'traces' ? { serviceShare: true as const } : {}),
+          ...(table === 'widget_traces' && wi !== undefined ? { widgetIndex: wi.index.description } : {}),
         };
       }
       derived?.commit?.(); // before the number advances: a throw here leaves the cut retryable
