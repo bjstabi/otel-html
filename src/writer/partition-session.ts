@@ -1241,6 +1241,7 @@ class PartitionSession implements WriterSession {
         nextPartition: n,
         rowGroupRows: this.#deps.rowGroupRows ?? this.#config.writer.rowGroupRows,
         statisticsKeys: this.#statisticsKeys,
+        widgetKeys: this.#widgetKeys,
         facetValueCap: this.#config.writer.facetValueCap,
         format: this.#config.writer.format,
         // the group's first and last partition numbers, not every number between (a group is made by time)
