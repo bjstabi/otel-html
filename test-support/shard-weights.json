@@ -154,6 +154,7 @@
     "test/scaling/classes.test.ts": 0.7,
     "test/scaling/classify.test.ts": 0.1,
     "test/scaling/counting-engine.test.ts": 12.7,
+    "test/scaling/layout-statements.test.ts": 2.5,
     "test/scaling/generator.test.ts": 9.8,
     "test/scaling/model.test.ts": 0.2,
     "test/scaling/recording-source.test.ts": 0.9,

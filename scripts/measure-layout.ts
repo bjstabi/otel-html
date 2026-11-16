@@ -2,7 +2,8 @@
 // the size of `rolling`'s) in today's layout, rewrites it once per candidate (sort x row-group size) and runs every
 // `LAYOUT_STATEMENTS` entry and every catalogue entry cold in the counting engine. Prints the modelled serial requests and
 // the bytes per statement and per entry against today's layout, and the pick rule's verdict.
-//   bun scripts/measure-layout.ts [--candidates a:50000,b:16384,...] [--partitions N] [--bloom traces,logs,spans] [--json <file>]
+//   bun scripts/measure-layout.ts [--candidates a:50000,b:16384,...] [--partitions N] [--bloom traces,logs,spans] [--no-prepare] [--json <file>]
+// Statements prepare small files first, as the data layer does; --no-prepare reads them by range (how the first numbers were taken).
 // Sorts: a time DESC; b scope, time DESC; c scope, service, time DESC; d hour DESC, scope, service, time DESC.
 import { writeFileSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
@@ -16,6 +17,7 @@ import {
   type Shape,
 } from '../test-support/scaling/generator.js';
 import {
+  isResidualLimit,
   LAYOUT_STATEMENTS,
   type LayoutContext,
   measureStatement,
@@ -96,23 +98,33 @@ interface Result {
   name: string;
   statements: Record<string, { serial: number; bytes: number }>;
   entries: Record<string, { serial: number; bytes: number }>;
+  /** Entries left out for the residual limit, which every layout reaches alike. */
+  skipped: string[];
+  /** Entries whose measurement failed otherwise (id -> message): not comparable, never counted as zero. */
+  failed: Record<string, string>;
 }
 
+const PREPARE = !args.includes('--no-prepare');
 const MEASURED_ENTRIES = CATALOGUE.filter((e) => !isMerged(e));
 
 async function measureReport(name: string, report: ScalingReport): Promise<Result> {
   const live: Live = await openLive(report);
   try {
     const ctx: LayoutContext = await prepareContext(live);
-    const result: Result = { name, statements: {}, entries: {} };
+    const result: Result = { name, statements: {}, entries: {}, skipped: [], failed: {} };
     for (const s of LAYOUT_STATEMENTS) {
-      const m = await measureStatement(live, s, ctx);
+      const m = await measureStatement(live, s, ctx, { prepare: PREPARE });
       result.statements[s.id] = { serial: m.cost.serial, bytes: m.cost.bytes };
     }
     for (const e of MEASURED_ENTRIES) {
-      // a residual condition gives up past 200,000 candidate rows: it throws the same on every layout, and is left out
-      const m = await measureCold(live, e).catch(() => undefined);
-      if (m !== undefined) result.entries[e.id] = { serial: m.cost.serial, bytes: m.cost.bytes };
+      try {
+        const m = await measureCold(live, e);
+        result.entries[e.id] = { serial: m.cost.serial, bytes: m.cost.bytes };
+      } catch (error) {
+        // a residual condition gives up past 200,000 candidate rows on every layout alike: left out. Any other failure is recorded.
+        if (isResidualLimit(e.id, error)) result.skipped.push(e.id);
+        else result.failed[e.id] = error instanceof Error ? error.message : String(error);
+      }
     }
     return result;
   } finally {
@@ -177,10 +189,20 @@ for (const s of LAYOUT_STATEMENTS)
   print(`| ${s.id} | ${s.path ?? '-'} | ${results.map((r) => cell(r, s.id)).join(' | ')} |`);
 
 print('\n### Pick rule\n');
-print('| candidate | section 7 sum | section 7 paths worse than main | other entries worse by > 10 % |');
-print('|---|---|---|---|');
-const verdicts: { name: string; sum: number; worse: string[]; slow: string[] }[] = [];
+print(
+  '| candidate | section 7 sum | section 7 paths worse than main | other entries worse by > 10 % | incomparable entries |',
+);
+print('|---|---|---|---|---|');
+const verdicts: { name: string; sum: number; worse: string[]; slow: string[]; incomparable: string[] }[] = [];
 for (const r of results) {
+  // an entry main measured and this report did not (or the reverse) is incomparable: never a zero
+  const incomparable = [
+    ...new Set([
+      ...Object.keys(main.failed),
+      ...Object.keys(r.failed),
+      ...Object.keys(main.entries).filter((id) => !(id in r.entries) && !r.skipped.includes(id)),
+    ]),
+  ];
   const sum = strict.reduce((a, id) => a + (r.statements[id]?.serial ?? 0), 0);
   const worse =
     r.name === 'main'
@@ -193,12 +215,16 @@ for (const r of results) {
           ...LAYOUT_STATEMENTS.filter((s) => s.path === null)
             .map((s) => s.id)
             .filter((id) => (r.statements[id]?.serial ?? 0) > 1.1 * (main.statements[id]?.serial ?? 0)),
-          ...Object.keys(main.entries).filter(
-            (id) => (r.entries[id]?.serial ?? 0) > 1.1 * (main.entries[id]?.serial ?? 0),
-          ),
+          ...Object.keys(main.entries).filter((id) => {
+            const a = main.entries[id];
+            const b = r.entries[id];
+            return a !== undefined && b !== undefined && b.serial > 1.1 * a.serial;
+          }),
         ];
-  verdicts.push({ name: r.name, sum, worse, slow });
-  print(`| ${r.name} | ${sum} | ${worse.join(', ') || '-'} | ${slow.length} |`);
+  verdicts.push({ name: r.name, sum, worse, slow, incomparable });
+  print(
+    `| ${r.name} | ${sum} | ${worse.join(', ') || '-'} | ${slow.length} | ${incomparable.length === 0 ? '-' : `${incomparable.length} (${incomparable.join(', ')}): not comparable`} |`,
+  );
 }
 print('\n### Entries worse than main by more than 10 %, per candidate (serial: main -> candidate)\n');
 for (const r of results.slice(1)) {

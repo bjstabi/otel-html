@@ -1,3 +1,4 @@
+import { tableFiles } from '../../src/query/sql/views.js';
 import type { ScalingIds } from '../../src/viewer/data/catalogue.js';
 import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
 import { costWith } from './cost.js';
@@ -30,6 +31,7 @@ const TIME = {
   traces: 'start_time_unix_nano',
 } as const;
 const lit = (s: string): string => `'${s.replaceAll("'", "''")}'`;
+// the engine's `filename` is the resolved path of the file (`<dir>/partitions/<n>/<table>.parquet`), so the leading `%/` matches
 const inNewest = (ctx: LayoutContext): string => `filename LIKE '%/partitions/${ctx.newest}/%'`;
 
 const first =
@@ -117,16 +119,38 @@ export async function prepareContext(live: Live): Promise<LayoutContext> {
   };
 }
 
+/** The tables of the views a statement reads (`FROM spans`, `JOIN traces`). */
+export function tablesOf(text: string): ('spans' | 'logs' | 'traces')[] {
+  const found = new Set<'spans' | 'logs' | 'traces'>();
+  for (const m of text.matchAll(/\b(?:FROM|JOIN)\s+(spans|logs|traces)\b/g))
+    found.add(m[1] as 'spans' | 'logs' | 'traces');
+  return [...found];
+}
+
+export interface StatementOptions {
+  /**
+   * Prepare the files of the statement's tables first, as the data layer's `runPrepared` does: a file at or under the
+   * engine's small-file limit is then one whole fetch, not range reads (default true; false is how the first
+   * measurement of the layout candidates was taken).
+   */
+  prepare?: boolean;
+}
+
 /** `statement` cold on an open `Live`, as `measureCold` does an entry. */
 export function measureStatement(
   live: Live,
   statement: LayoutStatement,
   ctx: LayoutContext,
+  options: StatementOptions = {},
 ): Promise<Measured> {
   const run = live.turn.then(async (): Promise<Measured> => {
     const { counting, sizes, report } = live;
     const text = statement.sql(report.ids, ctx);
     await counting.cold();
+    if (options.prepare ?? true) {
+      const files = tablesOf(text).flatMap((t) => tableFiles(report.manifest, t, (path) => path));
+      await counting.engine.prepare(files);
+    }
     await rows(live, text);
     const events = await counting.take();
     const prepared = counting.prepared();
@@ -140,3 +164,12 @@ export function measureStatement(
   live.turn = run.catch(() => undefined);
   return run;
 }
+
+/**
+ * The one failure a layout measurement leaves out: a catalogue entry with a residual condition gives up past 200,000
+ * candidate rows, on every layout alike. Any other failure is a measurement that did not complete.
+ */
+export const isResidualLimit = (entryId: string, error: unknown): boolean =>
+  entryId.includes('.residual.') &&
+  error instanceof Error &&
+  /on more than \d+ rows; narrow the window/.test(error.message);
