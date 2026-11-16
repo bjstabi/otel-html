@@ -58,7 +58,7 @@ describe('compacting flushes that disagree on a key only a widget condition test
     const s = await openSession(w.deps, { out: 'r', config: config(), mode: 'replace' });
     await s.add(spansWith(0, 2_000, small), 'a.json');
     await s.flush();
-    await s.add(spansWith(10_000, 300, unique), 'b.json');
+    await s.add(spansWith(10_000, 2_000, unique), 'b.json');
     await s.flush();
     const flushes = [0, 1].map(
       (n) => manifestOf(w, 'r').partitions[n]?.files.span_rollups?.rollup?.dimensions,
@@ -73,7 +73,33 @@ describe('compacting flushes that disagree on a key only a widget condition test
     const dimensions = file?.rollup?.dimensions ?? [];
     expect(dimensions).not.toContain(WK);
     const raw = tableRowsOf(w, 'r', 'spans');
-    expect(raw).toHaveLength(2_300);
+    expect(raw).toHaveLength(4_000);
+    expect(canon(addRollupRows(tableRowsOf(w, 'r', 'span_rollups'), []))).toEqual(
+      canon(spanRollupRows(batchFromRows('spans', raw), dimensions)),
+    );
+  });
+});
+
+describe('compacting flushes of which only a small one left a widget key out', () => {
+  test('the union is weighed again: its rollup groups by the key when that is cheap, and answers as the raw spans do', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: 'r', config: config(), mode: 'replace' });
+    await s.add(spansWith(0, 20_000, small), 'a.json');
+    await s.flush();
+    await s.add(spansWith(100_000, 300, unique), 'b.json');
+    await s.flush();
+    const flushes = [0, 1].map(
+      (n) => manifestOf(w, 'r').partitions[n]?.files.span_rollups?.rollup?.dimensions,
+    );
+    expect(flushes[0]).toContain(WK);
+    // the 300 spans alone: the key would add a group per span to a rollup of a few rows
+    expect(flushes[1]).not.toContain(WK);
+    await s.close();
+    const m = manifestOf(w, 'r');
+    expect(m.partitions).toHaveLength(1);
+    const dimensions = m.partitions[0]?.files.span_rollups?.rollup?.dimensions ?? [];
+    expect(dimensions).toContain(WK);
+    const raw = tableRowsOf(w, 'r', 'spans');
     expect(canon(addRollupRows(tableRowsOf(w, 'r', 'span_rollups'), []))).toEqual(
       canon(spanRollupRows(batchFromRows('spans', raw), dimensions)),
     );
