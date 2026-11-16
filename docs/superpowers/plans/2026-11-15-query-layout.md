@@ -252,7 +252,9 @@ vitest, Playwright, mise.
 **Interfaces:**
 - Produces: `interface RowCursor { time: bigint; filename: string; row: bigint }`.
 - Produces: `spanRowsQuery(f, sort, limit, cursor?: RowCursor | null)` and `logRowsQuery(f, sort, limit, cursor?)`.
-  - With a time sort, the cursor adds `(time, filename, file_row_number) < (…)`, or `>` for `asc`.
+  - With a time sort, the cursor adds `time < t OR (time = t AND (filename, file_row_number) > (f, r))` for `desc`,
+    and `time > t OR (time = t AND (filename, file_row_number) > (f, r))` for `asc`. The tie-breakers stay ascending
+    in both, matching the ORDER BY.
   - With a time sort, the scalar `total` subquery is gone: the column is not selected.
   - Other sorts keep today's shape, and `total`, unchanged.
 - Produces: `spanTotalQuery(f)` and `logTotalQuery(f)` (`count(*)` only), routed to rollups through
@@ -272,9 +274,16 @@ vitest, Playwright, mise.
 - Test: `test/query/sql/cutoff.test.ts`
 
 **Interfaces:**
-- Produces: `newestFiles(manifest: ManifestV4, table: 'spans' | 'logs' | 'traces', pruned: Pruned, need: number, counts?: ReadonlyMap<string, number>): { files: Pruned; complete: boolean }`.
-  - It returns the fewest partitions, newest first by `timeMax`, whose rows (from `counts` when given, else the
-    file's `rows`) reach `need`.
+- Produces: `newestFiles(manifest: ManifestV4, table: 'spans' | 'logs' | 'traces', pruned: Pruned, need: number, opts?: { dir?: 'asc' | 'desc'; counts?: ReadonlyMap<string, number>; after?: Pruned }): { files: Pruned; complete: boolean }`.
+  - It returns the fewest partitions, newest first by `timeMax` (oldest first by `timeMin` for `dir: 'asc'`), whose
+    rows (from `counts` when given, else the file's `rows`) reach `need`. `after` is the set an earlier page
+    already used; the result extends it.
+  - Then it adds every other pruned file that overlaps the kept set in time: for `desc`, `timeMax` at or above the
+    kept set's smallest `timeMin`; for `asc`, `timeMin` at or below its largest `timeMax`. Partitions from
+    different merged inputs can overlap.
+  - Without `counts`, a filtered page that holds fewer than `need` rows while `complete` is false calls
+    `newestFiles` again with `after` and reads the next group. It repeats until the page fills or `complete` is
+    true. `next` is set only when the page has rows and more may exist.
   - For `traces`, it adds every older file whose `timeEndMax` is at least the kept set's smallest `timeMin`.
   - `complete` means every pruned file is in.
 - Produces: `rollupCounts(...)`. It reads per-file counts from the rollups for a filtered list: one statement over
@@ -285,6 +294,9 @@ vitest, Playwright, mise.
   - With `counts` showing 0 matches in the newest 3, it keeps partitions 4–6.
   - A trace whose `timeEndMax` reaches into an older partition pulls that partition in. This is Review Focus 2.
   - Mixed format-6 and format-7 partitions give the same answer.
+  - Two partitions overlapping in time both join; `dir: 'asc'` keeps the oldest.
+  - (Task 9) A filter without rollup counts whose matches lie only in older partitions fills the page by extending
+    the cutoff.
 - [ ] **Step 2:** → FAIL. **Step 3:** implement. **Step 4:** → PASS. **Step 5:** commit
   `perf(query): pick the newest files that can fill a page`.
 
@@ -334,7 +346,9 @@ vitest, Playwright, mise.
 
 **Files:**
 - Modify:
-  - `src/viewer/data/query-engine.ts`: `queryBatch(qs: readonly Query[], signal?): Promise<Table[]>`.
+  - `src/viewer/data/query-engine.ts`: `queryBatch(qs: readonly Query[], signal?): Promise<PromiseSettledResult<Table>[]>`,
+    one settled entry per statement in input order. The `Batcher` hands each caller its own entry, so a failed
+    statement rejects only that caller.
   - `src/viewer/data/duckdb-source.ts`: a `Batcher` collects the `read` calls of one microtask and sends them with
     `queryBatch`.
   - The browser engine runs them in order on its one connection.
