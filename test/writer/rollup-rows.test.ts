@@ -7,6 +7,7 @@ import {
   RollupSum,
   rollupAllowed,
   rollupDimensions,
+  rollupKeyAllowed,
   rollupSumsFit,
   spanRollupRows,
   widestDimension,
@@ -194,5 +195,14 @@ describe('rollupSumsFit', () => {
     expect(rollupSumsFit([sumRow(2n ** 63n - 1n), sumRow(-(2n ** 63n)), sumRow(null), {}])).toBe(true);
     expect(rollupSumsFit([sumRow(2n ** 63n)])).toBe(false);
     expect(rollupSumsFit([sumRow(-(2n ** 63n) - 1n)])).toBe(false);
+  });
+});
+
+describe('rollupKeyAllowed', () => {
+  test('a key is worth keeping up to 15 % of the base file, not beyond', () => {
+    expect(rollupKeyAllowed(0, 1_000)).toBe(true);
+    expect(rollupKeyAllowed(150, 1_000)).toBe(true);
+    expect(rollupKeyAllowed(151, 1_000)).toBe(false);
+    expect(rollupKeyAllowed(1, 0)).toBe(false);
   });
 });

@@ -1029,3 +1029,72 @@ describe('PartitionSession rollups', () => {
     await s.close();
   });
 });
+
+describe('PartitionSession rollups and the keys widget conditions test', () => {
+  const widgetConfig = (query: string) =>
+    cfg(
+      {},
+      {
+        dashboards: [
+          {
+            id: 'd',
+            title: 'D',
+            widgets: [
+              { type: 'toplist', signal: 'spans', groupBy: 'span.name', query, x: 0, y: 0, w: 6, h: 6 },
+            ],
+          },
+        ],
+      },
+    );
+  const withAttr = (n: number, value: (i: number) => string) =>
+    otlp(
+      traceRequest(
+        Array.from({ length: n }, (_, i) =>
+          span({
+            traceId: traceIdOf(i),
+            spanId: spanIdOf(i),
+            name: `step-${i % 4}`,
+            startTimeUnixNano: String(BigInt(EPOCH_NS) + BigInt(i)),
+            endTimeUnixNano: String(BigInt(EPOCH_NS) + BigInt(i) + 10n),
+            attributes: [{ key: 'step.number', value: { stringValue: value(i) } }],
+          }),
+        ),
+      ),
+    );
+
+  test('a key a widget condition tests is a dimension of the rollup, and a statistics key', async () => {
+    const w = createTestWriter();
+    const s = await open(w, widgetConfig('attributes["step.number"] != nil'));
+    await s.add(
+      withAttr(2_000, (i) => String(i % 5)),
+      'a.json',
+    );
+    await s.flush();
+    const files = manifest(w).partitions[0]?.files;
+    expect(files?.span_rollups?.rollup?.dimensions).toContain('attr:step.number');
+    expect(files?.spans?.values['attr:step.number']).toEqual(['0', '1', '2', '3', '4']);
+    expect(w.logs.filter((l) => l.level === 'warn')).toEqual([]);
+    await s.close();
+  });
+
+  test('a key whose rollup passes 15 % of the base file is dropped, with a warning naming it', async () => {
+    const w = createTestWriter();
+    const s = await open(w, widgetConfig('attributes["step.number"] != nil'));
+    // one value per span: grouping by the key keeps a row per span, far above 15 % of the base bytes
+    await s.add(
+      withAttr(
+        300,
+        (i) => `${(i * 2654435761).toString(16)}-${(i * 40503 + 7).toString(36)}-${'x'.repeat(i % 40)}`,
+      ),
+      'a.json',
+    );
+    await s.flush();
+    const files = manifest(w).partitions[0]?.files;
+    expect(files?.span_rollups).toBeDefined();
+    expect(files?.span_rollups?.rollup?.dimensions).not.toContain('attr:step.number');
+    const warnings = w.logs.filter((l) => l.level === 'warn' && l.msg.includes('step.number'));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.attrs).toMatchObject({ key: 'attr:step.number' });
+    await s.close();
+  });
+});

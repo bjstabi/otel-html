@@ -1,8 +1,10 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { cp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { threadId } from 'node:worker_threads';
+import { parse } from 'yaml';
 import { z } from 'zod';
+import type { ConfigInput } from '../../src/config/schema.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { isPartitioned, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { TABLES } from '../../src/format/parquet/columns.js';
@@ -376,7 +378,11 @@ function partitionJson(shape: Shape, n: number): Record<string, unknown>[] {
 export async function buildFreshReport(shape: Shape): Promise<ScalingReport> {
   const w = createTestWriter();
   w.deps.rowGroupRows = rowsPerGroup(shape);
+  // the shipped CI dashboard: the writer keeps the attribute keys its widgets test in the rollups, as in the live report
+  const dashboards = (parse(readFileSync('.github/otel-html-ci.yaml', 'utf8')) as { dashboards: unknown[] })
+    .dashboards;
   const config = testConfig({
+    dashboards: dashboards as ConfigInput['dashboards'],
     writer: {
       format: 'site',
       statisticsKeys: ['resource:run.id'],
