@@ -346,7 +346,8 @@
     "test/writer/trace-summaries.test.ts": 0.2,
     "test/writer/upgrade-v4.test.ts": 0.8,
     "test/writer/upgrade.test.ts": 0.9,
-    "test/writer/wasm-panic.test.ts": 0.1
+    "test/writer/wasm-panic.test.ts": 0.1,
+    "test/writer/widget-trace-rows.test.ts": 0.5
   },
   "unit-perf": {
     "test/host/engine-limits.test.ts": 1.9,

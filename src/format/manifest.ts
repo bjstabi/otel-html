@@ -180,7 +180,7 @@ export interface RollupDescription {
 }
 
 /** Format 7, the `widget_traces` file only: the conditions (hashes) and variable keys its rows cover, sorted. */
-interface WidgetIndexDescription {
+export interface WidgetIndexDescription {
   conditions: string[];
   variables: string[];
 }
