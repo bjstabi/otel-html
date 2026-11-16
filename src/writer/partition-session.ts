@@ -487,6 +487,7 @@ class PartitionSession implements WriterSession {
     const rollupTable = base === 'spans' ? 'span_rollups' : 'log_rollups';
     let size = baseBytes;
     let current: number | undefined;
+    const refused: string[] = [];
     const encodedSize = (rows: readonly Row[]): number =>
       encodeColumns(rollupTable, batchFromRows(rollupTable, rows), this.#encodeOptions()).length;
     for (const key of this.#statisticsKeys[base].filter((k) => widget.has(k))) {
@@ -507,6 +508,7 @@ class PartitionSession implements WriterSession {
         const told = `${base}\0${key}`;
         const log = this.#toldKeys.has(told) ? 'debug' : 'warn';
         this.#toldKeys.add(told);
+        refused.push(key);
         this.#deps.logger[log](
           `the ${base} rollup does not group by ${key}, which a widget condition tests: the rollup would be ${why}`,
           {
@@ -531,6 +533,7 @@ class PartitionSession implements WriterSession {
         grainNs: ROLLUP_GRAIN_NS,
         dimensions,
         ...(base === 'spans' ? { durationBuckets: 'log2x8' as const } : {}),
+        ...(refused.length === 0 ? {} : { refused: refused.sort() }),
       },
     };
   }
@@ -1215,12 +1218,13 @@ class PartitionSession implements WriterSession {
     if (src.files[base] === undefined) return null;
     const wanted = rollupDimensions(base, this.#statisticsKeys[base]);
     const have = f.rollup.dimensions;
-    // A widget-only key the rollup lacks but whose statistics the file records was weighed and dropped by the writer
-    // that wrote it (`#rollupOf`; the statistics of a key a writer never listed are absent): weighing it again would
-    // decode the partition on every merge only to drop it again.
+    // A widget-only key the rollup lacks is skipped only when the writer recorded that it weighed and refused it
+    // (`refused`): weighing it again would decode the partition on every merge only to drop it again. A rollup
+    // that merely lacks the key (an older writer, or a compaction that never weighed it) is computed again.
+    const refused = new Set(f.rollup.refused);
     const widget = new Set(this.#widgetKeys[base]);
     const have0 = new Set(have);
-    const need = wanted.filter((d) => have0.has(d) || !(widget.has(d) && f.values[d] !== undefined));
+    const need = wanted.filter((d) => have0.has(d) || !(widget.has(d) && refused.has(d)));
     return have.length === need.length && have.every((d, i) => d === need[i]) ? null : base;
   }
 

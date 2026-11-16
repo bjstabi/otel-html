@@ -75,6 +75,7 @@ describe('compacting flushes that disagree on a key only a widget condition test
     const told = w.logs.filter((l) => l.level === 'warn' && l.msg.includes(WK) && l.msg.includes('compact'));
     expect(told).toHaveLength(1);
     expect(told[0]?.msg).toContain('too large');
+    expect(file?.rollup?.refused).toEqual([WK]);
     const raw = tableRowsOf(w, 'r', 'spans');
     expect(raw).toHaveLength(4_000);
     expect(canon(addRollupRows(tableRowsOf(w, 'r', 'span_rollups'), []))).toEqual(
@@ -102,6 +103,7 @@ describe('compacting flushes of which only a small one left a widget key out', (
     expect(m.partitions).toHaveLength(1);
     const dimensions = m.partitions[0]?.files.span_rollups?.rollup?.dimensions ?? [];
     expect(dimensions).toContain(WK);
+    expect(m.partitions[0]?.files.span_rollups?.rollup?.refused).toBeUndefined();
     const raw = tableRowsOf(w, 'r', 'spans');
     expect(canon(addRollupRows(tableRowsOf(w, 'r', 'span_rollups'), []))).toEqual(
       canon(spanRollupRows(batchFromRows('spans', raw), dimensions)),
@@ -120,5 +122,27 @@ describe('the warning for a key a rollup leaves out', () => {
     await s.close();
     const warned = w.logs.filter((l) => l.level === 'warn' && l.msg.includes(WK));
     expect(warned).toHaveLength(1);
+  });
+});
+
+describe('refused keys on a compaction that sums its inputs', () => {
+  test('flushes that both refused the key leave it on the record', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: 'r', config: config(), mode: 'replace' });
+    await s.add(spansWith(0, 300, unique), 'a.json');
+    await s.flush();
+    await s.add(
+      spansWith(10_000, 300, (i) => unique(i + 1)),
+      'b.json',
+    );
+    await s.flush();
+    expect(manifestOf(w, 'r').partitions.map((p) => p.files.span_rollups?.rollup?.refused)).toEqual([
+      [WK],
+      [WK],
+    ]);
+    await s.close();
+    const m = manifestOf(w, 'r');
+    expect(m.partitions).toHaveLength(1);
+    expect(m.partitions[0]?.files.span_rollups?.rollup?.refused).toEqual([WK]);
   });
 });

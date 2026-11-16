@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'vitest';
+import { wrapDataFile } from '../../src/format/data-file.js';
+import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { mergeReports } from '../../src/writer/merge.js';
 import { openSession } from '../../src/writer/session.js';
 import { logRecord, logsRequest, span, traceRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
-import { manifestOf, spanIdOf, traceIdOf } from './helpers.js';
+import { manifestOf, rawManifestOf, spanIdOf, traceIdOf } from './helpers.js';
 
 const KEY = 'resource:run.id';
 const resource = [{ key: 'run.id', value: { stringValue: 'run-a' } }];
@@ -151,8 +153,52 @@ describe('a merge and a key only a widget condition tests', () => {
     expect(warned()).toBe(1);
     const now = manifestOf(w, 'm').partitions[0]?.files.span_rollups;
     expect(now?.rollup).toEqual(was?.rollup);
+    expect(now?.rollup?.refused).toEqual([WK]);
     const x = await w.fs.readBytes(`dropped/${was?.path}`);
     const y = await w.fs.readBytes(`m/${now?.path}`);
     expect(Array.from(y)).toEqual(Array.from(x));
+  });
+
+  // stand in for a pre-format-7 writer: the rollup lacks the key, says nothing about refusing it, and the statistics record it
+  const asWrittenUnder337 = async (w: TestWriter, out: string, dropKey: boolean): Promise<void> => {
+    const raw = rawManifestOf(w, out) as {
+      partitions: { files: { span_rollups?: { rollup?: { refused?: string[]; dimensions: string[] } } } }[];
+    };
+    const rollup = raw.partitions[0]?.files.span_rollups?.rollup;
+    if (rollup === undefined) throw new Error('no rollup');
+    delete rollup.refused;
+    if (dropKey) rollup.dimensions = rollup.dimensions.filter((d) => d !== WK);
+    await w.fs.writeTextAtomic(`${out}/data/manifest.js`, wrapDataFile(MANIFEST_KEY, raw));
+    const now = manifestOf(w, out).partitions[0]?.files.span_rollups;
+    expect(now?.rollup?.refused).toBeUndefined();
+    expect(now?.rollup?.dimensions).not.toContain(WK);
+    expect(now?.values[WK]).toBeDefined();
+  };
+
+  test('a rollup that lacks a key without a refusal on record (written under #337) is computed again and equals a fresh write', async () => {
+    const w = createTestWriter();
+    await write(w, 'fresh', widgetConfig(), 300, small);
+    await write(w, 'old', widgetConfig(), 300, small);
+    expect(manifestOf(w, 'old').partitions[0]?.files.span_rollups?.rollup?.dimensions).toContain(WK);
+    await asWrittenUnder337(w, 'old', true);
+    await mergeWith(w, 'old');
+    const m = manifestOf(w, 'm').partitions[0]?.files.span_rollups;
+    expect(m?.rollup?.dimensions).toContain(WK);
+    const fresh = manifestOf(w, 'fresh').partitions[0]?.files.span_rollups;
+    const a = await w.fs.readBytes(`m/${m?.path}`);
+    const b = await w.fs.readBytes(`fresh/${fresh?.path}`);
+    expect(Array.from(a)).toEqual(Array.from(b));
+  });
+
+  test('a rollup whose refusal was never recorded is weighed again by the merge (the whole-decode path), and the refusal is then recorded', async () => {
+    const w = createTestWriter();
+    await write(w, 'dropped', widgetConfig(), 300, unique);
+    const warned = (): number => w.logs.filter((l) => l.level === 'warn' && l.msg.includes(WK)).length;
+    expect(warned()).toBe(1);
+    await asWrittenUnder337(w, 'dropped', false);
+    await mergeWith(w, 'dropped');
+    // weighed again (the whole-decode path), refused again, and now on the record
+    expect(warned()).toBe(2);
+    expect(manifestOf(w, 'm').partitions[0]?.files.span_rollups?.rollup?.refused).toEqual([WK]);
   });
 });

@@ -698,7 +698,10 @@ function planRollup(
   const descriptions = withBase.map((e) => e.files[table]?.rollup);
   const first = descriptions[0];
   if (first !== undefined && descriptions.every((d) => d !== undefined && sameDescription(d, first))) {
-    return { how: 'sum', description: first };
+    // the keys every input refused: a key some input never weighed is left to a later merge to recompute
+    const refused = (first.refused ?? []).filter((k) => descriptions.every((d) => d?.refused?.includes(k)));
+    const { refused: _own, ...rest } = first;
+    return { how: 'sum', description: refused.length === 0 ? rest : { ...rest, refused } };
   }
   const widget = new Set(opts.widgetKeys?.[base]);
   const everyInput = (k: string): boolean => descriptions.every((d) => d?.dimensions.includes(k) === true);
@@ -993,7 +996,9 @@ export async function compactPartitions(
             rows = wideRows;
             description = plan.wide;
           } else {
-            for (const key of plan.wide.dimensions.filter((d) => !plan.description.dimensions.includes(d))) {
+            const disputed = plan.wide.dimensions.filter((d) => !plan.description.dimensions.includes(d));
+            description = { ...description, refused: [...disputed].sort() };
+            for (const key of disputed) {
               opts.warn?.(
                 `the ${ROLLUP_OF[rollupTable]} rollup of the compacted partition does not group by ${key}, which a widget condition tests: the rollup would be ${why}`,
                 { key, rollupRows: wideRows?.length, baseRows, rollupBytes, rollupBytesWithout, baseBytes },
