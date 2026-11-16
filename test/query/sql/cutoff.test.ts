@@ -73,6 +73,15 @@ describe('newestFiles', () => {
     expect(newestFiles(m, 'spans', all(m), 5000).bound).toBeNull();
   });
 
+  test('a floor (where untimed rows sort) keeps every file of an ascending list and leaves a descending cutoff alone', () => {
+    const m = manifestOf(ten());
+    expect(newestFiles(m, 'spans', all(m), 200, { dir: 'asc' }).complete).toBe(false);
+    const asc = newestFiles(m, 'spans', all(m), 200, { dir: 'asc', floor: 0n });
+    expect(asc.complete).toBe(true);
+    expect(asc.files.files).toHaveLength(10);
+    expect(idx(newestFiles(m, 'spans', all(m), 200, { floor: 0n }).files.files)).toEqual([8, 9]);
+  });
+
   test('is complete when every file is needed', () => {
     const m = manifestOf(ten());
     const r = newestFiles(m, 'spans', all(m), 5000);

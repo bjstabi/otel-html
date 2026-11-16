@@ -42,13 +42,18 @@ const big = (v: string | null | undefined): bigint | null => (v == null ? null :
  * file left out lies wholly beyond the core, and the first `need` rows of the core are the first `need` rows overall
  * (given the core holds `need` rows). A file without time statistics is always kept and counts for nothing; a
  * file the manifest does not list is kept too.
+ *
+ * `floor` is the time rows without one sort at (logs: the epoch), which a file's statistics leave out, so any file may
+ * hold rows there. An ascending list, which starts with them, then sees every file as reaching down to it, so every
+ * file overlaps the core and none is left out. A descending list ends with them: the cutoff stands, and a page that
+ * reaches `floor` is never taken for complete (its last row lies below `bound`).
  */
 export function newestFiles(
   manifest: ManifestV4,
   table: ListTable,
   pruned: Pruned,
   need: number,
-  opts: { dir?: 'asc' | 'desc'; counts?: ReadonlyMap<string, number>; after?: Pruned } = {},
+  opts: { dir?: 'asc' | 'desc'; counts?: ReadonlyMap<string, number>; after?: Pruned; floor?: bigint } = {},
 ): Cutoff {
   const after = new Set(opts.after?.files ?? []);
   const desc = (opts.dir ?? 'desc') === 'desc';
@@ -64,7 +69,14 @@ export function newestFiles(
     .map((path) => {
       const f = byPath.get(path);
       const rows = f === undefined ? 0 : (opts.counts?.get(path) ?? f.rows);
-      return { path, rows, min: big(f?.timeMin), max: big(f?.timeMax), end: big(f?.timeEndMax) };
+      const min = big(f?.timeMin);
+      return {
+        path,
+        rows,
+        min: !desc && min !== null && opts.floor !== undefined && opts.floor < min ? opts.floor : min,
+        max: big(f?.timeMax),
+        end: big(f?.timeEndMax),
+      };
     });
   const kept = new Set<string>();
   const dated: Entry[] = [];

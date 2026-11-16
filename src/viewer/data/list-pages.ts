@@ -22,14 +22,17 @@ export async function readPage<T>(opts: {
   need: number;
   dir: 'asc' | 'desc';
   cutoff?: boolean;
+  /** The time rows without one sort at (logs: the epoch); see `newestFiles`. */
+  floor?: bigint;
   counts?: () => Promise<ReadonlyMap<string, number> | undefined>;
   read: (files: Pruned, complete: boolean) => Promise<{ rows: number; value: T; edge?: bigint | null }>;
 }): Promise<{ value: T; files: Pruned; rows: number; complete: boolean }> {
   const { manifest, table, pruned, need, dir } = opts;
   const reach = opts.cutoff === false ? Number.MAX_SAFE_INTEGER : need;
+  const floor = opts.floor === undefined ? {} : { floor: opts.floor };
   let counts: ReadonlyMap<string, number> | undefined;
   let asked = false;
-  let cut = newestFiles(manifest, table, pruned, reach, { dir });
+  let cut = newestFiles(manifest, table, pruned, reach, { dir, ...floor });
   for (;;) {
     const page = await opts.read(cut.files, cut.complete);
     const done = { value: page.value, rows: page.rows, files: cut.files, complete: cut.complete };
@@ -42,7 +45,7 @@ export async function readPage<T>(opts: {
       asked = true;
       counts = await opts.counts();
       if (counts !== undefined) {
-        const recut = newestFiles(manifest, table, pruned, reach, { dir, counts });
+        const recut = newestFiles(manifest, table, pruned, reach, { dir, counts, ...floor });
         const same =
           recut.files.files.length === cut.files.files.length &&
           recut.files.files.every((p, i) => p === cut.files.files[i]);
@@ -54,6 +57,7 @@ export async function readPage<T>(opts: {
     }
     const more = newestFiles(manifest, table, pruned, reach, {
       dir,
+      ...floor,
       after: cut.files,
       ...(counts === undefined ? {} : { counts }),
     });

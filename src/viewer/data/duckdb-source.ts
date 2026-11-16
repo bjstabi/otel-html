@@ -1265,6 +1265,8 @@ export function createDuckDbDataSource(opts: {
         need,
         dir: sort.dir,
         cutoff: cursor !== null || !siblingsReadRaw(f),
+        // a log without a time sorts at the epoch, which no file's statistics cover
+        floor: epoch,
         counts: () => matchCounts(f, pruned),
         read: async (files, complete) => {
           // every file read ascending is what the shared view does (oldest first, footers already bound): its own list
@@ -1280,10 +1282,25 @@ export function createDuckDbDataSource(opts: {
           return { rows: table.numRows, value: table, edge: edgeOf(table, 'time_rel', epoch, need) };
         },
       });
-      const rows = rowsOf(page.value);
+      // The cursor dropped the files whose times all lie beyond it, but a log without a time sorts last of a descending
+      // list, at the epoch, and any file may hold one: a page that reaches the epoch (or ends the list) reads them too.
+      let table = page.value;
+      const dropped = cursor !== null && pruned.files.length < f.files.files.length;
+      if (dropped && sort.dir === 'desc') {
+        const edge = edgeOf(table, 'time_rel', epoch, need);
+        if (edge === null || edge <= epoch) {
+          table = await read(
+            ['logs'],
+            f.files,
+            logRowsQuery(f, sort, need, cursor, inReadOrder(f.files, sort.dir)),
+            signal,
+          );
+        }
+      }
+      const rows = rowsOf(table);
       const last = rows[q.limit - 1];
       return {
-        table: page.value,
+        table,
         next:
           rows.length > q.limit && last !== undefined
             ? {
