@@ -1,13 +1,8 @@
 import '../../src/writer/parquet-wasm-source.js';
-import { createHash } from 'node:crypto';
 import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
-import { loadConfigFile } from '../../src/config/load.js';
-import { resolveConfig } from '../../src/config/resolve.js';
-import type { ResolvedConfig } from '../../src/config/schema.js';
 import { conditionId, widgetTraceConditions } from '../../src/config/widget-traces.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { isPartitioned, parseAnyManifest } from '../../src/format/manifest.js';
@@ -16,90 +11,9 @@ import type { Row } from '../../src/format/parquet/rows.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { openSession } from '../../src/writer/session.js';
-import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
-import type { JsonObject } from '../../test-support/otlp-builders.js';
 import { createTestWriter, otlp, testConfig } from '../../test-support/writer-deps.js';
-import { manifestOf, spanIdOf, tableRowsOf, traceIdOf } from './helpers.js';
-
-const CI_YAML = '.github/otel-html-ci.yaml';
-const T0 = 1_700_000_000_000_000_000n;
-
-async function ciConfig(): Promise<ResolvedConfig> {
-  const fs = createMemoryFileSystem();
-  await fs.mkdirp('/c');
-  await fs.writeTextAtomic('/c/ci.yaml', await readFile(CI_YAML, 'utf8'));
-  return resolveConfig({ file: await loadConfigFile(fs, '/c/ci.yaml'), env: {}, fileLabel: 'config.yaml' })
-    .config;
-}
-
-const str = (key: string, value: string): JsonObject => ({ key, value: { stringValue: value } });
-
-interface CiSpan {
-  i: number;
-  /** A root span has no parent; a job span has one and its job attributes. */
-  job?: 'success' | 'skip';
-  scope?: string;
-  run?: string;
-  task?: string;
-  start?: bigint;
-  end?: bigint;
-  trace?: number;
-  /** An extra attribute, for weight. */
-  pad?: string;
-}
-
-/** One request holding each span in a resource of its own, as the CI publisher writes a run. */
-function ciRequest(spans: readonly CiSpan[]): ReturnType<typeof otlp> {
-  return otlp({
-    resourceSpans: spans.map((s) => ({
-      resource: {
-        attributes: [
-          str('cicd.pipeline.name', 'ci'),
-          str('cicd.pipeline.run.id', s.run ?? '7'),
-          ...(s.task === undefined ? [] : [str('cicd.pipeline.task.name', s.task)]),
-        ],
-      },
-      scopeSpans: [
-        {
-          scope: { name: s.scope ?? 'otel-html-ci' },
-          spans: [
-            {
-              traceId: traceIdOf(s.trace ?? 0),
-              spanId: spanIdOf(s.i),
-              ...(s.job === undefined ? {} : { parentSpanId: spanIdOf(1000) }),
-              name: 'n',
-              kind: 1,
-              startTimeUnixNano: String(s.start ?? T0 + BigInt(s.i)),
-              endTimeUnixNano: String(s.end ?? T0 + BigInt(s.i) + 5n),
-              attributes: [
-                ...(s.job === undefined
-                  ? []
-                  : [
-                      str('cicd.pipeline.task.run.id', String(s.i)),
-                      str('cicd.pipeline.task.run.result', s.job),
-                    ]),
-                ...(s.pad === undefined ? [] : [str('pad', s.pad)]),
-              ],
-            },
-          ],
-        },
-      ],
-    })),
-  });
-}
-
-const noise = (i: number): string =>
-  [0, 1, 2].map((k) => createHash('sha256').update(`${i}:${k}`).digest('hex')).join('');
-
-/** Spans of another scope: they give the spans file the weight a real partition has, and match no widget. */
-const filler = (n: number, from = 100): CiSpan[] =>
-  Array.from({ length: n }, (_, k) => ({
-    i: from + k,
-    trace: from + k,
-    scope: 'other',
-    run: `filler-${from + k}`,
-    pad: noise(from + k),
-  }));
+import { manifestOf, tableRowsOf, traceIdOf } from './helpers.js';
+import { ciConfig, ciRequest, filler, T0 } from './widget-index-helpers.js';
 
 const indexRows = (w: ReturnType<typeof createTestWriter>, out = 'r'): Row[] =>
   tableRowsOf(w, out, 'widget_traces');

@@ -104,6 +104,7 @@ import { watchWasmPanics } from './wasm-panic.js';
 import {
   type CompiledWidgetIndex,
   compileWidgetIndex,
+  encodeWidgetTraces,
   WidgetTraceSet,
   widgetIndexAllowed,
   widgetIndexInexact,
@@ -244,6 +245,45 @@ export async function openPartitionSession(
     await lock.release();
     throw e;
   }
+}
+
+/** Every column of a base table file, decoded into one batch. */
+async function decodeBatch(
+  base: 'spans' | 'logs',
+  bytes: Uint8Array,
+  path: string,
+  guard: PanicGuard,
+): Promise<ColumnBatch> {
+  const names = TABLE_COLUMNS[base].map((c) => c.name);
+  const cells = new Map<string, unknown[]>(names.map((name) => [name, []]));
+  let length = 0;
+  for await (const cols of readColumns(
+    base,
+    new Blob([bytes as Uint8Array<ArrayBuffer>]),
+    path,
+    undefined,
+    guard,
+  )) {
+    length += cols[0]?.length ?? 0;
+    for (const [i, name] of names.entries()) {
+      const into = cells.get(name);
+      if (into !== undefined) for (const v of cols[i] ?? []) into.push(v);
+    }
+  }
+  return { length, cells: Object.fromEntries(cells) };
+}
+
+/** Whether a copied file's index (undefined for a format 5 or 6 file) holds every condition and variable `index` writes. */
+function coversIndex(
+  have: { conditions: string[]; variables: string[] } | undefined,
+  index: CompiledWidgetIndex,
+): boolean {
+  if (have === undefined) return false;
+  const c = new Set(have.conditions);
+  const v = new Set(have.variables);
+  return (
+    index.description.conditions.every((x) => c.has(x)) && index.description.variables.every((x) => v.has(x))
+  );
 }
 
 class PartitionSession implements WriterSession {
@@ -1087,6 +1127,43 @@ class PartitionSession implements WriterSession {
     this.#ctx = null;
   }
 
+  /** A copied partition's file written under number `n`, with its wrapper in a `local` report. */
+  async #putFile(n: number, table: Table, bytes: Uint8Array): Promise<void> {
+    const { fs } = this.#deps;
+    await fs.writeBytes(at(this.#out, partitionFilePath(n, table)), bytes);
+    if (this.#config.writer.format === 'local') {
+      await writeWrapper(fs, at(this.#out, partitionWrapperPath(n, table)), partitionKey(n, table), bytes);
+    }
+  }
+
+  /** The `widget_traces` of a copied partition's decoded spans, with the flush's guard and warnings; null when none is written. */
+  #computedIndex(
+    index: CompiledWidgetIndex,
+    spans: ColumnBatch,
+    spansBytes: number,
+  ): { bytes: Uint8Array; file: PartitionFile } | null {
+    const wi = this.#widgetRows(spans).widgetIndex;
+    if (wi === undefined) return null;
+    const rowGroupRows = this.#encodeOptions().rowGroupRows;
+    const bytes = encodeWidgetTraces(wi.rows, index, rowGroupRows);
+    const empty = encodeWidgetTraces([], index, rowGroupRows).length;
+    if (!wi.allowed(bytes.length, empty, spansBytes)) return null;
+    return {
+      bytes,
+      file: {
+        path: '',
+        bytes: bytes.length,
+        ...fileStatistics(
+          'widget_traces',
+          batchFromRows('widget_traces', wi.rows, index.columns),
+          [],
+          this.#config.writer.facetValueCap,
+        ),
+        widgetIndex: index.description,
+      },
+    };
+  }
+
   /**
    * The rollup file of a copied partition computed again from its base rows, when the copy's rollup description lacks
    * the dimensions this report's statistics keys give; null when it is to be copied as it is; 'refused' when the guard
@@ -1097,7 +1174,7 @@ class PartitionSession implements WriterSession {
     f: PartitionFile,
     baseBytes: ReadonlyMap<Table, Uint8Array>,
     path: string,
-    guard: PanicGuard,
+    decode: (base: 'spans' | 'logs') => Promise<ColumnBatch>,
   ): Promise<{ bytes: Uint8Array; file: PartitionFile } | 'refused' | null> {
     if ((table !== 'span_rollups' && table !== 'log_rollups') || f.rollup === undefined) return null;
     const base = ROLLUP_OF[table];
@@ -1113,23 +1190,8 @@ class PartitionSession implements WriterSession {
     if (bytes === undefined || (have.length === need.length && have.every((d, i) => d === need[i]))) {
       return null;
     }
-    const names = TABLE_COLUMNS[base].map((c) => c.name);
-    const cells = new Map<string, unknown[]>(names.map((name) => [name, []]));
-    let length = 0;
-    for await (const cols of readColumns(
-      base,
-      new Blob([bytes as Uint8Array<ArrayBuffer>]),
-      f.path,
-      undefined,
-      guard,
-    )) {
-      length += cols[0]?.length ?? 0;
-      for (const [i, name] of names.entries()) {
-        const into = cells.get(name);
-        if (into !== undefined) for (const v of cols[i] ?? []) into.push(v);
-      }
-    }
-    const made = this.#rollupOf(base, { length, cells: Object.fromEntries(cells) }, bytes.length);
+    const batch0 = await decode(base);
+    const made = this.#rollupOf(base, batch0, bytes.length);
     if (made === null) return 'refused';
     for (const [i, row] of made.rows.entries()) checkRow(table, row, i);
     const batch = batchFromRows(table, made.rows);
@@ -1157,10 +1219,28 @@ class PartitionSession implements WriterSession {
     let made = false;
     const baseBytes = new Map<Table, Uint8Array>();
     const watch = watchWasmPanics();
+    // A base table is decoded at most once per copy: a rollup repair and the widget index share it.
+    const decoded = new Map<'spans' | 'logs', Promise<ColumnBatch>>();
+    const decode = (base: 'spans' | 'logs'): Promise<ColumnBatch> => {
+      let d = decoded.get(base);
+      if (d === undefined) {
+        const bytes = baseBytes.get(base);
+        const path = src.files[base]?.path ?? '';
+        d =
+          bytes === undefined
+            ? Promise.reject(new Error(`no ${base} bytes`))
+            : decodeBatch(base, bytes, path, watch.guard);
+        decoded.set(base, d);
+      }
+      return d;
+    };
+    const index = this.#widgetIndex;
     try {
       for (const table of TABLES) {
         const f = src.files[table];
         if (f === undefined) continue;
+        // A `widget_traces` is copied only when this report's ids and variables are within its own; else it is computed below.
+        if (table === 'widget_traces' && (index === null || !coversIndex(f.widgetIndex, index))) continue;
         const from = at(copy.dir, f.path);
         let bytes: Uint8Array;
         try {
@@ -1178,20 +1258,16 @@ class PartitionSession implements WriterSession {
         if (table === 'spans' || table === 'logs') baseBytes.set(table, bytes);
         // A rollup that lacks a dimension this report lists is computed again from the partition's rows (a rollup with this
         // report's description is copied as it is, like a partition without one).
-        const own = await this.#recomputedRollup(table, f, baseBytes, path, watch.guard);
+        const own = await this.#recomputedRollup(table, f, baseBytes, path, decode);
         if (own === 'refused') continue;
         const out = own === null ? { bytes, file: f } : own;
-        await fs.writeBytes(at(this.#out, path), out.bytes);
-        if (this.#config.writer.format === 'local') {
-          await writeWrapper(
-            fs,
-            at(this.#out, partitionWrapperPath(n, table)),
-            partitionKey(n, table),
-            out.bytes,
-          );
-        }
+        await this.#putFile(n, table, out.bytes);
         if (own !== null) {
           files[table] = { ...own.file, path };
+          continue;
+        }
+        if (table === 'widget_traces') {
+          files[table] = { ...f, path };
           continue;
         }
         // The input may not have recorded a key this report lists (another config wrote it): compute it from the bytes.
@@ -1202,6 +1278,8 @@ class PartitionSession implements WriterSession {
           this.#config.writer.facetValueCap,
           () => Promise.resolve(bytes),
           watch.guard,
+          // The index decodes the spans anyway: the statistics read that decode instead of streaming the file again.
+          table === 'spans' && index !== null ? () => decode('spans') : undefined,
         );
         const values: Record<string, string[] | null> = Object.create(null) as Record<
           string,
@@ -1219,6 +1297,15 @@ class PartitionSession implements WriterSession {
           ...(f.rollup === undefined ? {} : { rollup: f.rollup }),
           ...(f.serviceShare === undefined ? {} : { serviceShare: f.serviceShare }),
         };
+      }
+      const spansFile = files.spans;
+      if (index !== null && spansFile !== undefined && files.widget_traces === undefined) {
+        const own = this.#computedIndex(index, await decode('spans'), spansFile.bytes);
+        if (own !== null) {
+          const path = partitionFilePath(n, 'widget_traces');
+          await this.#putFile(n, 'widget_traces', own.bytes);
+          files.widget_traces = { ...own.file, path };
+        }
       }
     } catch (e) {
       if (made) await fs.removeDir(at(this.#out, partitionDir(n))).catch(() => undefined);

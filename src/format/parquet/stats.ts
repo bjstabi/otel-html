@@ -209,7 +209,8 @@ export function widgetOnlyKeysFor(
 /**
  * `entry` with every key of `keys` it lacks (absent: "not computed") computed by decoding the file: values
  * already recorded are kept, a recorded `null` ("over the cap") too, so it is not decoded again. A key stays `null` when its distinct values exceed `cap` (as `fileStatistics` applies it)
- * or the table cannot answer it. `read` is called only when a key is missing, and the file is streamed.
+ * or the table cannot answer it. `read` is called only when a key is missing, and the file is streamed, unless `decoded`
+ * gives the file's rows whole (a caller that holds them for another use): they are then counted in one batch.
  */
 export async function completeStatistics(
   table: Table,
@@ -218,9 +219,16 @@ export async function completeStatistics(
   cap: number,
   read: () => Promise<Uint8Array>,
   guard?: PanicGuard,
+  decoded?: () => Promise<ColumnBatch>,
 ): Promise<PartitionFile> {
   const missing = keys.filter((k) => entry.values[k] === undefined);
   if (missing.length === 0) return entry;
+  if (decoded !== undefined) {
+    const st = fileStatistics(table, await decoded(), missing, cap);
+    const values = { ...entry.values };
+    for (const k of missing) values[k] = st.values[k] ?? null;
+    return { ...entry, values };
+  }
   const sets = new Map<string, Set<string> | null>(missing.map((k) => [k, new Set<string>()]));
   const bytes = await read();
   const names = TABLE_COLUMNS[table].map((c) => c.name);

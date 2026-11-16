@@ -17,6 +17,7 @@ import type {
   ScopeRef,
   SpanRecord,
 } from '../../src/model/records.js';
+import { CONTEXTS, type SpanTarget } from '../../src/ottl/contexts.js';
 import {
   compileWidgetIndex,
   encodeWidgetTraces,
@@ -324,5 +325,29 @@ describe('widgetIndexAllowed', () => {
     expect(WIDGET_INDEX_SHARE).toBe(0.05);
     expect(widgetIndexAllowed(1_000 + 600, 1_000, 10_000)).toBe(false);
     expect(widgetIndexAllowed(1_000 + 500, 1_000, 10_000)).toBe(true);
+  });
+});
+
+describe('the light span decode', () => {
+  test('no span path reads events or links, which it leaves out', () => {
+    const base = spanFromRow(row(), EPOCH, () => ({ resource: resourceOf({}), scope: scopeOf('s') }));
+    const span = { ...base.span };
+    for (const key of ['events', 'links'] as const) {
+      Object.defineProperty(span, key, {
+        get() {
+          throw new Error(`a span path read ${key}`);
+        },
+      });
+    }
+    const target: SpanTarget = {
+      span,
+      resource: base.shared.resource,
+      scope: base.shared.scope,
+      epoch: EPOCH,
+    };
+    for (const [path, accessor] of CONTEXTS.span.paths) {
+      expect(() => accessor.get(target, []), path).not.toThrow();
+      expect(() => accessor.get(target, ['k']), path).not.toThrow();
+    }
   });
 });
