@@ -145,7 +145,7 @@ function links(text: string): SpanLinkRecord[] {
   });
 }
 
-function shared(row: ResultRow): DecodedShared {
+export function sharedFromRow(row: ResultRow): DecodedShared {
   return {
     resource: {
       attributes: attributesFromJson(str(row, 'resource_attributes')),
@@ -172,7 +172,11 @@ const PLACEHOLDER_SCOPE = 0 as ScopeRef;
  * refs are 0 placeholders for the caller's interner. Lossy by design: `duration_ns` is derived (clamped at 0) and
  * ignored, the record has start/end; uint32 fields come back from int64 columns (R29).
  */
-export function spanFromRow(row: ResultRow, epoch: bigint): { span: SpanRecord; shared: DecodedShared } {
+export function spanFromRow(
+  row: ResultRow,
+  epoch: bigint,
+  sharedOf: (row: ResultRow) => DecodedShared = sharedFromRow,
+): { span: SpanRecord; shared: DecodedShared } {
   const parent = strOrNull(row, 'parent_span_id');
   const span: SpanRecord = {
     traceId: str(row, 'trace_id') as TraceId,
@@ -197,7 +201,7 @@ export function spanFromRow(row: ResultRow, epoch: bigint): { span: SpanRecord; 
     resource: PLACEHOLDER_RESOURCE,
     scope: PLACEHOLDER_SCOPE,
   };
-  return { span, shared: shared(row) };
+  return { span, shared: sharedOf(row) };
 }
 
 /** The inverse of `logRow` over a query result (times already relative, D2); a null `event_name` (R9) decodes to the empty string. */
@@ -217,7 +221,7 @@ export function logFromRow(row: ResultRow): { log: LogRecordRecord; shared: Deco
     resource: PLACEHOLDER_RESOURCE,
     scope: PLACEHOLDER_SCOPE,
   };
-  return { log, shared: shared(row) };
+  return { log, shared: sharedFromRow(row) };
 }
 
 /** Interns resources and scopes by their JSON text + schema_url + dropped count, handing out stable refs within one result. */

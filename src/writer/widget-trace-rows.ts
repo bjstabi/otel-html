@@ -4,7 +4,7 @@ import type { ColumnBatch } from '../format/parquet/batch.js';
 import { batchFromRows } from '../format/parquet/batch.js';
 import { encodeColumns } from '../format/parquet/codec.js';
 import { type ColumnDef, VAR_COLUMN_PREFIX, widgetTracesColumns } from '../format/parquet/columns.js';
-import { spanFromRow } from '../format/parquet/decode.js';
+import { type DecodedShared, type ResultRow, sharedFromRow, spanFromRow } from '../format/parquet/decode.js';
 import type { Row } from '../format/parquet/rows.js';
 import type { UnixNanos } from '../model/ids.js';
 import { compileCondition } from '../ottl/compile.js';
@@ -69,6 +69,16 @@ export function compileWidgetIndex(spec: WidgetTraceIndexSpec): CompiledWidgetIn
 }
 
 const TIME_COLUMNS = ['start_time_unix_nano', 'end_time_unix_nano'] as const;
+const SHARED_COLUMNS = [
+  'resource_attributes',
+  'resource_schema_url',
+  'resource_dropped_attributes_count',
+  'scope_name',
+  'scope_version',
+  'scope_attributes',
+  'scope_schema_url',
+  'scope_dropped_attributes_count',
+] as const;
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 
 const column = (b: ColumnBatch, name: string): readonly unknown[] => b.cells[name] ?? [];
@@ -111,6 +121,17 @@ export class WidgetTraceSet {
       for (const t of [starts[i], ends[i]])
         if (typeof t === 'bigint' && t - origin > MAX_SAFE) this.#exact = false;
     }
+    // Rows of one resource and scope are many: their JSON is decoded once per distinct value in this chunk.
+    const memo = new Map<string, DecodedShared>();
+    const sharedOf = (r: ResultRow): DecodedShared => {
+      const key = SHARED_COLUMNS.map((c) => (r[c] === null ? '\u0001' : `s${String(r[c])}`)).join('\u0000');
+      let v = memo.get(key);
+      if (v === undefined) {
+        v = sharedFromRow(r);
+        memo.set(key, v);
+      }
+      return v;
+    };
     const names = Object.keys(batch.cells);
     for (let i = 0; i < batch.length; i++) {
       const row: Record<string, unknown> = {};
@@ -119,9 +140,12 @@ export class WidgetTraceSet {
         const v = row[c];
         if (typeof v === 'bigint') row[c] = v - origin;
       }
+      // No span path reads events or links (only their dropped counts), so they are not decoded.
+      Reflect.set(row, 'events', '[]');
+      Reflect.set(row, 'links', '[]');
       const traceId = Reflect.get(row, 'trace_id');
       if (typeof traceId !== 'string') continue;
-      const { span, shared } = spanFromRow(row, origin);
+      const { span, shared } = spanFromRow(row, origin, sharedOf);
       const target: SpanTarget = {
         span,
         resource: shared.resource,

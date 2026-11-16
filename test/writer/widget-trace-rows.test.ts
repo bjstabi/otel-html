@@ -6,6 +6,7 @@ import { resolveConfig } from '../../src/config/resolve.js';
 import { widgetTraceConditions } from '../../src/config/widget-traces.js';
 import { batchFromRows, type ColumnBatch } from '../../src/format/parquet/batch.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
+import { spanFromRow } from '../../src/format/parquet/decode.js';
 import { type Context, spanRow } from '../../src/format/parquet/rows.js';
 import type { AnyValue } from '../../src/model/anyvalue.js';
 import type { RelNanos, SpanId, TraceId, UnixNanos } from '../../src/model/ids.js';
@@ -45,12 +46,15 @@ interface Made {
   attributes?: Record<string, AnyValue>;
   start?: bigint;
   end?: bigint;
+  /** Gives the span an event and a link, each with attributes. */
+  eventsAndLinks?: boolean;
+  scopeVersion?: string;
 }
 
 /** A spans row (absolute times) for a made span. */
 function row(m: Made = {}) {
   const resource = resourceOf(m.resource ?? {});
-  const scope = scopeOf(m.scope ?? 'otel-html-ci');
+  const scope = { ...scopeOf(m.scope ?? 'otel-html-ci'), version: m.scopeVersion ?? '' };
   const start = m.start ?? EPOCH + 10n;
   const end = m.end ?? start + 5n;
   const ctx: Context = { epoch: EPOCH, resources: () => resource, scopes: () => scope };
@@ -66,9 +70,31 @@ function row(m: Made = {}) {
     end: Number(end - EPOCH) as RelNanos,
     attributes: new Map(Object.entries(m.attributes ?? {})),
     droppedAttributesCount: 0,
-    events: [],
+    events:
+      m.eventsAndLinks === true
+        ? [
+            {
+              time: Number(start - EPOCH + 1n) as RelNanos,
+              name: 'e',
+              attributes: new Map([['ek', str('ev')]]),
+              droppedAttributesCount: 0,
+            },
+          ]
+        : [],
     droppedEventsCount: 0,
-    links: [],
+    links:
+      m.eventsAndLinks === true
+        ? [
+            {
+              traceId: 'c'.repeat(32) as TraceId,
+              spanId: 'd'.repeat(16) as SpanId,
+              traceState: '',
+              attributes: new Map([['lk', str('lv')]]),
+              droppedAttributesCount: 0,
+              flags: 0,
+            },
+          ]
+        : [],
     droppedLinksCount: 0,
     status: { code: 0, message: '' },
     resource: 0 as ResourceRef,
@@ -163,6 +189,80 @@ describe('WidgetTraceSet', () => {
     const set = new WidgetTraceSet(index);
     set.add(batchOf({ start: exact }, { trace: 'f'.repeat(32), id: 'd'.repeat(16), start: exact + 1n }));
     expect(set.rows().map((r) => Reflect.get(r, 'trace_id'))).toEqual(['a'.repeat(32)]);
+  });
+
+  test('the lighter decode (no events or links, shared values memoized) matches what a full decode matches', () => {
+    const sources = [
+      'IsRootSpan() and name == "n"',
+      'attributes["nest"]["k"] == "v"',
+      'resource.attributes["num"] == 5',
+      'resource.attributes["svc"] == "a" and instrumentation_scope.version == "2"',
+      'dropped_events_count == 0 and status.code == 0 and parent_span_id.string != ""',
+      'attributes["nest"]["missing"] == nil',
+    ];
+    const index = compileWidgetIndex({
+      conditions: sources.map((source, i) => ({ id: `${i}`.repeat(16), source })),
+      variables: ['svc', 'num'],
+      notRowLocal: [],
+    });
+    if (index === null) throw new Error('no index');
+    const made: Made[] = [];
+    for (let k = 0; k < 24; k++) {
+      made.push({
+        trace: String(k % 6).repeat(32),
+        id: k.toString(16).padStart(16, '0'),
+        parent: k % 3 === 0 ? null : 'p'.repeat(16),
+        eventsAndLinks: k % 2 === 0,
+        scopeVersion: k % 4 < 2 ? '1' : '2',
+        resource: {
+          svc: str(k % 5 < 2 ? 'a' : 'b'),
+          num: k % 7 < 3 ? { kind: 'int', value: 5n } : str('5'),
+        },
+        attributes: {
+          nest: {
+            kind: 'kvlist',
+            values: new Map<string, AnyValue>(k % 2 === 0 ? [['k', str('v')]] : [['other', str('x')]]),
+          },
+        },
+        start: EPOCH + 10n + BigInt(k),
+      });
+    }
+    const batch = batchOf(...made);
+    const set = new WidgetTraceSet(index);
+    set.add(batch);
+    // the reference: every row decoded in full, no memo
+    const names = Object.keys(batch.cells);
+    const origin = EPOCH + 10n; // the smallest start made above
+    const expected = new Set<string>();
+    for (let i = 0; i < batch.length; i++) {
+      const r: Record<string, unknown> = {};
+      for (const n of names) r[n] = batch.cells[n]?.[i] ?? null;
+      for (const c of ['start_time_unix_nano', 'end_time_unix_nano'])
+        if (typeof r[c] === 'bigint') r[c] = r[c] - origin;
+      const { span, shared } = spanFromRow(r, origin);
+      const target = { span, resource: shared.resource, scope: shared.scope, epoch: origin as UnixNanos };
+      for (const c of index.conditions) {
+        if (!c.test(target)) continue;
+        const vars = ['svc', 'num'].map((key) => {
+          const v = shared.resource.attributes.get(key);
+          return v?.kind === 'string' ? v.value : null;
+        });
+        expected.add(JSON.stringify([c.id, Reflect.get(r, 'trace_id'), vars]));
+      }
+    }
+    const actual = new Set(
+      set
+        .rows()
+        .map((r) =>
+          JSON.stringify([
+            Reflect.get(r, 'condition'),
+            Reflect.get(r, 'trace_id'),
+            [r['var:svc'], r['var:num']],
+          ]),
+        ),
+    );
+    expect(expected.size).toBeGreaterThan(sources.length);
+    expect(actual).toEqual(expected);
   });
 
   test('add over two chunks equals add over their concatenation', async () => {
