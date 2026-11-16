@@ -632,12 +632,14 @@ export function createDuckDbDataSource(opts: {
       return {
         table,
         next:
-          rows.length > q.limit && last !== undefined && start != null
-            ? {
-                time: BigInt(start as bigint | number),
-                filename: String(cell(last, 'trace_id')),
-                row: 0n,
-              }
+          rows.length > q.limit && last !== undefined
+            ? start != null
+              ? {
+                  time: BigInt(start as bigint | number),
+                  filename: String(cell(last, 'trace_id')),
+                  row: 0n,
+                }
+              : { time: 0n, filename: String(cell(last, 'trace_id')), row: 0n, untimed: true }
             : null,
       };
     };

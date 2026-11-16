@@ -10,6 +10,11 @@ export interface RowCursor {
   filename: string;
   row: bigint;
   spanId?: string;
+  /**
+   * A trace cursor inside the group of traces without a timed span, which every list sorts last (`NULLS LAST`) by
+   * trace id: `time` is then unused and `filename` is the last trace id of the page.
+   */
+  untimed?: boolean;
 }
 
 /**

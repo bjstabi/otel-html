@@ -268,7 +268,8 @@ function traceAggregate(epoch: bigint): SelectQuery {
  * A trace list read as a page: no `total` column (`spanCountQuery` / `allTraceCountQuery` count, so a page reads no more
  * than its rows) and, for a start sort, a `cursor` after the last row of the previous page. The trace cursor is
  * `time` the trace's `start_ns` (relative to the epoch) and `filename` its trace id (`row` is 0): the list's ORDER BY is
- * start, then `trace_id`. A trace without a timed span sorts last (`NULLS LAST`) and is reached whatever the cursor.
+ * start, then `trace_id`. A trace without a timed span sorts last (`NULLS LAST`, then by trace id, whatever the direction) and
+ * is reached whatever a timed cursor; a cursor inside that group is `untimed` and continues it after its trace id.
  */
 export interface TracePage {
   cursor?: RowCursor | null;
@@ -293,10 +294,14 @@ function traceRowsOf(agg: Query, sort: TraceSort, limit: number, page?: TracePag
   else q.select('*');
   if (page?.cursor != null && sort.column === 'start') {
     q.where(
-      or(
-        keysetAfter('start_ns', sort.dir, page.cursor.time, [['trace_id', literal(page.cursor.filename)]]),
-        sql`start_ns IS NULL`,
-      ),
+      page.cursor.untimed === true
+        ? and(sql`start_ns IS NULL`, sql`trace_id > ${literal(page.cursor.filename)}`)
+        : or(
+            keysetAfter('start_ns', sort.dir, page.cursor.time, [
+              ['trace_id', literal(page.cursor.filename)],
+            ]),
+            sql`start_ns IS NULL`,
+          ),
     );
   }
   return q.orderby(dirOf(TRACE_SORT[sort.column], sort.dir), asc('trace_id')).limit(limit);
