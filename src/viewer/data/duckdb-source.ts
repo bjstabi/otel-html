@@ -788,7 +788,11 @@ export function createDuckDbDataSource(opts: {
         parts.push(
           (async () => {
             if (traceSort !== null && pagesTraces(traceSort)) {
-              const [paged, total] = await Promise.all([tracePage(f, traceSort), traceTotal(f)]);
+              const [paged, total] = await Promise.all([
+                tracePage(f, traceSort),
+                // the count is the first page's: a page after a cursor asks the rows only
+                q.cursor == null ? traceTotal(f) : 0,
+              ]);
               Object.assign(result, { rows: traceRows(paged.table, q.limit).rows, total, next: paged.next });
             } else if (traceSort !== null) {
               const r = traceRows(await traceList(f, traceSort));
@@ -825,7 +829,10 @@ export function createDuckDbDataSource(opts: {
                 longWindow: false,
               })
             ) {
-              const [paged, total] = await Promise.all([spanPage(f, spanSort), rowsTotal(f)]);
+              const [paged, total] = await Promise.all([
+                spanPage(f, spanSort),
+                q.cursor == null ? rowsTotal(f) : 0,
+              ]);
               const decoded = spanRows(paged.table, epoch, paged.shown);
               Object.assign(result, { ...decoded, total, next: paged.next });
             } else if (spanSort !== null) {
@@ -1298,7 +1305,10 @@ export function createDuckDbDataSource(opts: {
               logSort !== null &&
               pagesLogList({ mode: 'logs', sortColumn: logSort.column, residual, idTable: useIds })
             ) {
-              const [paged, total] = await Promise.all([logPage(f, logSort), rowsTotal(f)]);
+              const [paged, total] = await Promise.all([
+                logPage(f, logSort),
+                q.cursor == null ? rowsTotal(f) : 0,
+              ]);
               Object.assign(result, {
                 rows: logRows(paged.table, q.limit).rows,
                 total,

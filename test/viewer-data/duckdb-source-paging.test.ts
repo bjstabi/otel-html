@@ -204,7 +204,7 @@ describe('paging the lists to the end returns main`s answer', () => {
         const r = await source.querySpans(
           spanQuery({ sort: { column: 'start', dir }, cursor, needs: ['rows'] }),
         );
-        expect(r.total).toBe(main.length);
+        if (cursor === null) expect(r.total).toBe(main.length);
         expect(r.rows.length).toBeLessThanOrEqual(4);
         got.push(...(r.rows as SpanRow[]));
         pages++;
@@ -231,7 +231,7 @@ describe('paging the lists to the end returns main`s answer', () => {
       let cursor: RowCursor | null = null;
       for (;;) {
         const r = await source.queryLogs({ ...q, cursor });
-        expect(r.total).toBe(main.length);
+        if (cursor === null) expect(r.total).toBe(main.length);
         got.push(...(r.rows as unknown as { ref: string }[]).map((x) => x.ref));
         if (r.next == null) break;
         cursor = r.next;
@@ -255,7 +255,7 @@ describe('paging the lists to the end returns main`s answer', () => {
       let cursor: RowCursor | null = null;
       for (;;) {
         const r = await source.querySpans(spanQuery({ mode: 'traces', sort, cursor }));
-        expect(r.total).toBe(main.total);
+        if (cursor === null) expect(r.total).toBe(main.total);
         got.push(...(r.rows as TraceRow[]));
         if (r.next == null) break;
         cursor = r.next;
@@ -296,6 +296,41 @@ describe('paging the lists to the end returns main`s answer', () => {
     expect(all.total).toBe(names.length);
     expect(some.total).toBe(34);
     expect(some.next ?? null).toBeNull();
+  });
+});
+
+describe('a page after a cursor asks the rows only', () => {
+  const noTotal = (statements: { sql: string }[]): void => {
+    // rows statements only (more than one when the cutoff reads further files)
+    expect(statements.length).toBeGreaterThan(0);
+    for (const s of statements) {
+      expect(s.sql.toLowerCase()).toContain('order by');
+      expect(s.sql.toLowerCase()).not.toMatch(/as "total"/);
+    }
+  };
+
+  test('spans, logs and traces: rows statements only, no count', async () => {
+    const { source, statements } = recording();
+    const sort = { column: 'start', dir: 'desc' } as const;
+    const s1 = await source.querySpans(spanQuery({ sort, limit: 3 }));
+    statements.length = 0;
+    await source.querySpans(spanQuery({ sort, limit: 3, cursor: s1.next ?? null }));
+    noTotal(statements);
+    const l1 = await source.queryLogs(logQuery({ limit: 3 }));
+    statements.length = 0;
+    await source.queryLogs(logQuery({ limit: 3, cursor: l1.next ?? null }));
+    noTotal(statements);
+    const t1 = await source.querySpans(spanQuery({ mode: 'traces', sort, limit: 3 }));
+    expect(t1.total).toBeGreaterThan(0);
+    statements.length = 0;
+    await source.querySpans(spanQuery({ mode: 'traces', sort, limit: 3, cursor: t1.next ?? null }));
+    noTotal(statements);
+  });
+
+  test('the first page still carries the total', async () => {
+    const { source } = recording();
+    expect((await source.querySpans(spanQuery({ limit: 3 }))).total).toBeGreaterThan(3);
+    expect((await source.queryLogs(logQuery({ limit: 3 }))).total).toBeGreaterThan(3);
   });
 });
 

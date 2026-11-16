@@ -94,7 +94,7 @@ export interface LogQuery {
   limit: number;
   /** Only this trace's logs (on top of `condition`). */
   traceId?: TraceId | null;
-  /** The last row of the page before (`LogQueryResult.next`): a time-sorted list continues after it. */
+  /** The last row of the page before (`LogQueryResult.next`): a time-sorted list continues after it. The page asks rows only: `total` is the first page's and is 0 here. */
   cursor?: RowCursor | null;
   /** What to compute; absent parts are empty. */
   needs: readonly LogNeed[];
@@ -156,7 +156,7 @@ export interface SpanQuery {
   needs: readonly SpanNeed[];
   /** Restrict facets to these keys; null means every core facet plus attributes. */
   facetKeys: readonly string[] | null;
-  /** The last row of the page before (`SpanQueryResult.next`): a start-sorted list continues after it. */
+  /** The last row of the page before (`SpanQueryResult.next`): a start-sorted list continues after it. The page asks rows only: `total` is the first page's and is 0 here. */
   cursor?: RowCursor | null;
   /**
    * Contiguous `[fromNs, toNs)` bins the `durations` need counts into (exact per bin); absent, the bins span the
