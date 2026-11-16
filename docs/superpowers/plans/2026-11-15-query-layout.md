@@ -7,8 +7,7 @@ number of requests. Lists page by a cursor. Each page's statements leave the vie
 answer in one request each.
 
 **Architecture:** PR 1 keeps the format. It holds the layout measurement tool (Task 1), makes rollups carry the
-attribute keys that dashboard widget conditions test, lists files newest first in the views, and adds a per-page
-ratchet. Format 7 was dropped after Task 1's measurement (see "Amendment 2026-11-16"). PR 2 changes the viewer's list reads: a newest-first file cutoff, keyset pages of 200 rows loaded on
+attribute keys that dashboard widget conditions test, and adds a per-page ratchet. Format 7 was dropped after Task 1's measurement (see "Amendment 2026-11-16"). PR 2 changes the viewer's list reads: a newest-first file cutoff, keyset pages of 200 rows loaded on
 scroll, totals out of the rows statement, and a `queryBatch` seam on the engine. A docs PR records the live numbers
 after a release.
 
@@ -25,7 +24,7 @@ vitest, Playwright, mise.
 
 | #   | branch                  | PR title                                                                | closes            | status |
 | --- | ----------------------- | ----------------------------------------------------------------------- | ----------------- | ------ |
-| 1   | `perf/rollup-keys`      | `perf(writer): rollups carry the keys dashboard widgets test; views read newest first` |  |        |
+| 1   | `perf/rollup-keys`      | `perf(writer): rollups carry the keys dashboard widgets test` |  |        |
 | 2   | `perf/paged-lists`      | `perf(viewer): lists page by cursor from the newest files; batched statements` | #290 |        |
 | 3   | `docs/query-layout-record` | `docs: query-layout live record`                                     | #281; #229/#287 per record |        |
 
@@ -81,7 +80,7 @@ Task 1 (commits af20c0c3..b5b6a6b5) measured 4 sorts × 3 row-group sizes on the
 newest-first view order only. #291 (`trace.get`) stays open. #284 and #240 are out of this plan. The tables are in
 PR 1's body.
 
-## PR 1: rollup keys, newest-first views, ratchet
+## PR 1: rollup keys, ratchet
 
 ### Task 1: measure the layout candidates (decides Tasks 3–5's values)
 
@@ -216,7 +215,14 @@ PR 1's body.
   toplists routed to rollups. Assert it in `test/viewer-data/route.test.ts` with the CI config.
 - [ ] **Step 6:** commit `perf(writer): rollups carry the attribute keys dashboard widgets test`.
 
-### Task 5: views read newest first
+### Task 5: views read newest first — DROPPED (ruling 2026-11-16)
+
+Measured: newest-first views help descending lists (3–4 serial requests on most spans/traces entries) but make
+ascending row scans worse (`spans.rows.all` 35 → 79, `spans.rows.long` 59 → 77). The catalogue's spans and logs
+rows, and the trace tabs, sort ascending; the trace explorer defaults to descending. The shared view's order cannot
+suit both, so the order moves into PR 2 Task 9: a rows statement reads its own file list in its sort's time
+direction.
+
 
 **Files:**
 - Modify: `src/query/sql/views.ts:89` (files listed by partition descending)
@@ -314,6 +320,10 @@ PR 1's body.
   - `src/viewer/data/duckdb-source.ts`: the rows paths at :459, :540–:590 and :920–:940 use `newestFiles` and the
     cursor, the total comes from the total need, and `traceList` uses `newestFiles` for the unconditioned list
     instead of grouping every traces file.
+  - A time-sorted rows statement reads its files from its own `read_parquet([...])` list in its sort's time
+    direction (newest partition first for `desc`, oldest first for `asc`), not from the shared view, whose order
+    stays oldest first. Moved here from Task 5; its test: `spans.rows.all`/`spans.rows.long` no worse than `main`
+    and the descending entries better.
   - A conditioned trace list (the *Runs* widget, spec §6.3) takes its spans files from `newestFiles` over spans,
     with `rollupCounts` when the condition is rollup-answerable.
   - `src/viewer/data/catalogue.ts`: the `*.rows` and `traces.list` entries ask a first page; a `*.rows.next` entry
