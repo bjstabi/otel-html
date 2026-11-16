@@ -29,6 +29,7 @@ import {
   rollupAllowed,
   rollupDimensions,
   rollupGroupLimit,
+  rollupKeyAllowed,
   rollupSumsFit,
   spanRollupRows,
   widestDimension,
@@ -43,8 +44,8 @@ export interface CompactOptions {
   rowGroupRows: number;
   statisticsKeys: Record<Table, string[]>;
   /**
-   * The statistics keys only a widget condition asked for, per table. A recomputed rollup keeps one only when every
-   * input's rollup groups by it: the writer weighed it per flush (`#rollupOf`) and may have left it out of some.
+   * The statistics keys only a widget condition asked for, per table. A recomputed rollup keeps one that some input's
+   * rollup lacks only when the union passes the flush guards (`planRollup`), not because the inputs did.
    */
   widgetKeys?: Record<Table, string[]>;
   facetValueCap: number;
@@ -641,7 +642,12 @@ export async function latestTemplates(
 
 type RollupPlan =
   | { how: 'sum'; description: RollupDescription }
-  | { how: 'recompute'; description: RollupDescription };
+  | {
+      how: 'recompute';
+      description: RollupDescription;
+      /** The description with the widget keys some input's rollup lacks added: weighed against `description` on the union. */
+      wide?: RollupDescription;
+    };
 
 const sameDescription = (a: RollupDescription, b: RollupDescription): boolean =>
   a.grainNs === b.grainNs &&
@@ -653,8 +659,10 @@ const sameDescription = (a: RollupDescription, b: RollupDescription): boolean =>
  * How the compacted partition gets the rollup of `table`: null when no input has rows of its base table; the inputs'
  * rollups added up when every input with base rows has one and the descriptions are all equal; else recomputed from
  * the rows of the merge, with the dimensions this report's statistics keys give, less a widget-only key that some input's
- * rollup lacks: that input's writer weighed it and found it too large (or it never had it), and weighing it again for
- * the union would decode every row only to find the same, so it is left out and a widget on it reads the raw file.
+ * rollup lacks. That input's writer may have left it out for its own rows (too large for a small flush) or never had
+ * it, which says nothing about the union, so the recompute also sums the rows with those keys (`wide`) and
+ * `compactPartitions` keeps them when the union's rollup passes the same guards as a flush's (`rollupAllowed`,
+ * `rollupKeyAllowed`); otherwise a widget on the key reads the raw file.
  */
 function planRollup(
   entries: readonly PartitionEntry[],
@@ -670,16 +678,18 @@ function planRollup(
     return { how: 'sum', description: first };
   }
   const widget = new Set(opts.widgetKeys?.[base]);
-  const keys = opts.statisticsKeys[base].filter(
-    (k) => !widget.has(k) || descriptions.every((d) => d?.dimensions.includes(k) === true),
-  );
+  const everyInput = (k: string): boolean => descriptions.every((d) => d?.dimensions.includes(k) === true);
+  const keys = opts.statisticsKeys[base].filter((k) => !widget.has(k) || everyInput(k));
+  const disputed = opts.statisticsKeys[base].filter((k) => widget.has(k) && !everyInput(k));
+  const describe = (ks: readonly string[]): RollupDescription => ({
+    grainNs: ROLLUP_GRAIN_NS,
+    dimensions: rollupDimensions(base, ks),
+    ...(table === 'span_rollups' ? { durationBuckets: 'log2x8' as const } : {}),
+  });
   return {
     how: 'recompute',
-    description: {
-      grainNs: ROLLUP_GRAIN_NS,
-      dimensions: rollupDimensions(base, keys),
-      ...(table === 'span_rollups' ? { durationBuckets: 'log2x8' as const } : {}),
-    },
+    description: describe(keys),
+    ...(disputed.length === 0 ? {} : { wide: describe([...keys, ...disputed]) }),
   };
 }
 
@@ -894,6 +904,7 @@ export async function compactPartitions(
   }
   // Rollups recomputed from the rows the merge reads anyway, one chunk at a time.
   const recomputed: Partial<Record<RollupTable, RollupSum>> = {};
+  const recomputedWide: Partial<Record<RollupTable, RollupSum>> = {};
   const onRows = (table: Table): ((chunk: ColumnBatch) => void) | undefined => {
     const rt = table === 'spans' ? 'span_rollups' : table === 'logs' ? 'log_rollups' : null;
     const plan = rt === null ? undefined : plans[rt];
@@ -901,9 +912,13 @@ export async function compactPartitions(
     const sum = new RollupSum(groupLimitOf(entries, ROLLUP_OF[rt]));
     recomputed[rt] = sum;
     const make = rt === 'span_rollups' ? spanRollupRows : logRollupRows;
+    const wide = plan.wide;
+    const wideSum = wide === undefined ? undefined : new RollupSum(groupLimitOf(entries, ROLLUP_OF[rt]));
+    if (wideSum !== undefined) recomputedWide[rt] = wideSum;
     return (chunk) => {
-      if (sum.exceeded) return;
-      sum.add(make(chunk, plan.description.dimensions));
+      if (!sum.exceeded) sum.add(make(chunk, plan.description.dimensions));
+      if (wide !== undefined && wideSum !== undefined && !wideSum.exceeded)
+        wideSum.add(make(chunk, wide.dimensions));
     };
   };
   try {
@@ -920,8 +935,38 @@ export async function compactPartitions(
       let timeEndMax: string | null | undefined;
       let rollup: RollupDescription | undefined;
       if (rollupTable !== null && plan !== undefined) {
-        const rows = await rollupRowsOf(fs, out, entries, rollupTable, plan, recomputed[rollupTable], guard);
+        let rows = await rollupRowsOf(fs, out, entries, rollupTable, plan, recomputed[rollupTable], guard);
+        let description = plan.description;
         const baseRows = files[ROLLUP_OF[rollupTable]]?.rows ?? 0;
+        const wideSum = recomputedWide[rollupTable];
+        if (rows !== null && plan.how === 'recompute' && plan.wide !== undefined && wideSum !== undefined) {
+          const wideRows = wideSum.exceeded ? null : wideSum.rows();
+          const baseBytes = files[ROLLUP_OF[rollupTable]]?.bytes ?? 0;
+          const sized = (r: readonly Row[]): number =>
+            encodeColumns(rollupTable, batchFromRows(rollupTable, r), { rowGroupRows: opts.rowGroupRows })
+              .length;
+          let why: string | null = null;
+          let rollupBytes: number | undefined;
+          let rollupBytesWithout: number | undefined;
+          if (wideRows === null || !rollupSumsFit(wideRows) || !rollupAllowed(wideRows.length, baseRows)) {
+            why = 'does not shrink';
+          } else {
+            rollupBytes = sized(wideRows);
+            rollupBytesWithout = sized(rows);
+            if (!rollupKeyAllowed(rollupBytes - rollupBytesWithout, baseBytes)) why = 'too large';
+          }
+          if (why === null) {
+            rows = wideRows;
+            description = plan.wide;
+          } else {
+            for (const key of plan.wide.dimensions.filter((d) => !plan.description.dimensions.includes(d))) {
+              opts.warn?.(
+                `the ${ROLLUP_OF[rollupTable]} rollup of the compacted partition does not group by ${key}, which a widget condition tests: the rollup would be ${why}`,
+                { key, rollupRows: wideRows?.length, baseRows, rollupBytes, rollupBytesWithout, baseBytes },
+              );
+            }
+          }
+        }
         if (rows === null) {
           opts.warn?.(
             `the ${ROLLUP_OF[rollupTable]} rollup has more groups than ${rollupGroupLimit(baseRows)} and does not shrink this partition, so it is not written`,
@@ -937,7 +982,7 @@ export async function compactPartitions(
           continue;
         }
         if (!rollupAllowed(rows.length, baseRows)) {
-          const dimensions = plan.description.dimensions;
+          const dimensions = description.dimensions;
           const widest = widestDimension(rows, dimensions);
           opts.warn?.(
             `the ${ROLLUP_OF[rollupTable]} rollup does not shrink this partition, so it is not written`,
@@ -960,7 +1005,7 @@ export async function compactPartitions(
         await fs.writeBytes(at(out, path), bytes);
         size = bytes.length;
         stats = fileStatistics(table, batch, keys, opts.facetValueCap);
-        rollup = plan.description;
+        rollup = description;
       } else {
         if (!created) {
           await fs.mkdirp(dir);
