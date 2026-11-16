@@ -992,6 +992,26 @@ unused files, exports and dependencies
 
 biome ci, actionlint, the task graph and the formatting of mise.toml
 
+## `measure:layout`
+
+Measure the format-7 layout candidates (sort order x row-group size) on a live-shaped report
+Builds one report of the generator's `mixed` shape in today's layout (6 partitions of 150,000 spans in four scopes,
+about 40 s), rewrites it once per candidate (relayoutReport: the same rows, sorted and cut into row groups as the
+candidate says, no dictionary on ids and time columns, bloom filters on traces, logs and spans) and runs the
+LAYOUT_STATEMENTS (the spec's list, cursor, severity, toplist, trace-by-id and count shapes as SQL) and every catalogue
+entry cold in the counting engine, about 30 s per candidate. Prints modelled serial requests and megabytes per
+statement, the sum over the section 7 paths and the entries more than 10 % worse than today. `-- --candidates
+b:50000,c:16384` measures some candidates (sorts a time DESC, b scope + time DESC, c scope + service + time DESC, d hour
++ scope + service + time DESC); `-- --json <file>` keeps the numbers. About 7 minutes for the twelve candidates.
+
+
+- Depends: engine:assets
+
+- **Usage:** `measure:layout [args]…`
+
+### Arguments
+- **`[args]…`**
+
 ## `predict:queries`
 
 Print the requests, megabytes and modelled milliseconds the viewer's pages cost on named report shapes

@@ -49,6 +49,11 @@ export interface Shape {
    * window is the same at every retention step.
    */
   compacted?: boolean;
+  /**
+   * A live-shaped mix (`mise run measure:layout`): four scopes (`otel-html-ci` on a twentieth of the traces, with the
+   * step attribute), partitions an hour apart that each spread over 50 minutes. Without it the content is unchanged.
+   */
+  mixed?: boolean;
 }
 
 export interface ScalingReport {
@@ -133,6 +138,28 @@ const METRICS = ['scaling.load', 'scaling.queue'];
 const SUMMARY = 'scaling.latency';
 const SPACING_NS = { dense: 20n * 60n * 1_000_000_000n, sparse: 6n * 3600n * 1_000_000_000n } as const;
 const SPREAD_NS = 10n * 60n * 1_000_000_000n;
+const MIXED_SPACING_NS = 3600n * 1_000_000_000n;
+const MIXED_SPREAD_NS = 50n * 60n * 1_000_000_000n;
+const spreadOf = (shape: Shape): bigint => (shape.mixed === true ? MIXED_SPREAD_NS : SPREAD_NS);
+/** The scope of trace `t` in a `mixed` shape; the one name `scaling` otherwise. */
+const scopeOfTrace = (shape: Shape, t: number): string => {
+  if (shape.mixed !== true) return 'scaling';
+  const r = t % 20;
+  return r === 0 ? 'otel-html-ci' : r <= 2 ? 'playwright' : r === 3 ? 'otel-html' : 'vitest';
+};
+const scopeOfSpan = (shape: Shape, k: number): string => scopeOfTrace(shape, Math.floor(k / 8));
+const scopeOfLog = (shape: Shape, k: number): string => scopeOfTrace(shape, Math.floor(k / 2));
+/** The spans or logs of one service grouped by scope, in the order the scopes first appear. */
+function byScope<T>(items: readonly T[], scopeOf: (item: T) => string): [string, T[]][] {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const scope = scopeOf(item);
+    const own = groups.get(scope) ?? [];
+    groups.set(scope, own);
+    own.push(item);
+  }
+  return [...groups];
+}
 const SPAN_NS = 1_000_000n;
 /** Absolute nanosecond of the first partition's first span: an hour after the writer's clock. */
 const T0 = BigInt(EPOCH_NS) + 3600n * 1_000_000_000n;
@@ -149,13 +176,19 @@ const hex = (k: number, width: number): string => k.toString(16).padStart(width,
 const str = (key: string, value: string) => ({ key, value: { stringValue: value } });
 const COMPACTED_SPACING_NS = 12n * 3600n * 1_000_000_000n;
 const startOf = (shape: Shape, n: number): bigint =>
-  T0 + BigInt(n) * (shape.compacted === true ? COMPACTED_SPACING_NS : SPACING_NS[shape.spacing]);
+  T0 +
+  BigInt(n) *
+    (shape.compacted === true
+      ? COMPACTED_SPACING_NS
+      : shape.mixed === true
+        ? MIXED_SPACING_NS
+        : SPACING_NS[shape.spacing]);
 const rowsPerGroup = (shape: Shape): number => shape.rowGroupRows ?? ROW_GROUP_ROWS;
 const spanCount = (shape: Shape, n: number): number =>
   (n === FIRST_SLOT - shape.outside ? (shape.bigRowGroups ?? shape.rowGroups) : shape.rowGroups) *
   rowsPerGroup(shape);
 const spanStart = (shape: Shape, n: number, k: number): bigint =>
-  startOf(shape, n) + (BigInt(k) * SPREAD_NS) / BigInt(spanCount(shape, n));
+  startOf(shape, n) + (BigInt(k) * spreadOf(shape)) / BigInt(spanCount(shape, n));
 const MASK64 = (1n << 64n) - 1n;
 /** SplitMix64: a seeded, deterministic pseudo-random 64-bit value, so a report's bytes depend on its shape only. */
 function splitMix64(seed: bigint): bigint {
@@ -187,12 +220,18 @@ const spanRecord = (shape: Shape, n: number, k: number): unknown => {
     startTimeUnixNano: String(start),
     endTimeUnixNano: String(start + SPAN_NS),
     status: k % 16 === 15 ? { code: 2, message: 'failed' } : { code: 1 },
-    attributes: [str('http.request.method', 'GET'), str('http.route', routeOf(k))],
+    attributes: [
+      str('http.request.method', 'GET'),
+      str('http.route', routeOf(k)),
+      ...(shape.mixed === true && scopeOfSpan(shape, k) === 'otel-html-ci'
+        ? [str('github.job.step.number', String(k % 12))]
+        : []),
+    ],
   };
 };
 
 const logRecord = (shape: Shape, n: number, k: number, logCount: number): unknown => {
-  const time = String(startOf(shape, n) + (BigInt(k) * SPREAD_NS) / BigInt(logCount));
+  const time = String(startOf(shape, n) + (BigInt(k) * spreadOf(shape)) / BigInt(logCount));
   const withTrace = Math.floor(k / 2) % 2 === 0;
   return {
     timeUnixNano: time,
@@ -218,21 +257,34 @@ function* chunkedPartitionJson(shape: Shape, n: number): Generator<Record<string
   });
   for (const [i, service] of SERVICES.entries()) {
     for (let lo = 0; lo < count; lo += CHUNK_SPANS) {
-      const spans: unknown[] = [];
-      for (let k = lo + i; k < Math.min(count, lo + CHUNK_SPANS); k += 2) spans.push(spanRecord(shape, n, k));
+      const ks: number[] = [];
+      for (let k = lo + i; k < Math.min(count, lo + CHUNK_SPANS); k += 2) ks.push(k);
       yield {
-        resourceSpans: [{ resource: resource(service), scopeSpans: [{ scope: { name: 'scaling' }, spans }] }],
+        resourceSpans: [
+          {
+            resource: resource(service),
+            scopeSpans: byScope(ks, (k) => scopeOfSpan(shape, k)).map(([name, group]) => ({
+              scope: { name },
+              spans: group.map((k) => spanRecord(shape, n, k)),
+            })),
+          },
+        ],
       };
     }
   }
   for (const [i, service] of SERVICES.entries()) {
     for (let lo = 0; lo < logCount; lo += CHUNK_SPANS) {
-      const logs: unknown[] = [];
-      for (let k = lo + i; k < Math.min(logCount, lo + CHUNK_SPANS); k += 2)
-        logs.push(logRecord(shape, n, k, logCount));
+      const ks: number[] = [];
+      for (let k = lo + i; k < Math.min(logCount, lo + CHUNK_SPANS); k += 2) ks.push(k);
       yield {
         resourceLogs: [
-          { resource: resource(service), scopeLogs: [{ scope: { name: 'scaling' }, logRecords: logs }] },
+          {
+            resource: resource(service),
+            scopeLogs: byScope(ks, (k) => scopeOfLog(shape, k)).map(([name, group]) => ({
+              scope: { name },
+              logRecords: group.map((k) => logRecord(shape, n, k, logCount)),
+            })),
+          },
         ],
       };
     }
@@ -251,7 +303,7 @@ function metricsJson(shape: Shape, n: number): Record<string, unknown> {
         const series = j % 4;
         const point = Math.floor(j / 4);
         return {
-          timeUnixNano: String(startOf(shape, n) + (BigInt(point) * SPREAD_NS) / 16n),
+          timeUnixNano: String(startOf(shape, n) + (BigInt(point) * spreadOf(shape)) / 16n),
           asDouble: (n + 1) * (m + 1) + series + point / 16,
           attributes: [str('series', `s${series}`)],
         };
@@ -266,7 +318,7 @@ function metricsJson(shape: Shape, n: number): Record<string, unknown> {
       dataPoints: Array.from({ length: 4 * 16 }, (_, j) => {
         const point = Math.floor(j / 4);
         return {
-          timeUnixNano: String(startOf(shape, n) + (BigInt(point) * SPREAD_NS) / 16n),
+          timeUnixNano: String(startOf(shape, n) + (BigInt(point) * spreadOf(shape)) / 16n),
           count: String(j + 1),
           sum: j + 1,
           quantileValues: [
@@ -292,22 +344,28 @@ function metricsJson(shape: Shape, n: number): Record<string, unknown> {
 function partitionJson(shape: Shape, n: number): Record<string, unknown>[] {
   const count = spanCount(shape, n);
   const resourceAttrs = (service: string) => [str('service.name', service), str('run.id', `run-${n}`)];
-  const spans = SERVICES.map(() => [] as unknown[]);
-  for (let k = 0; k < count; k++) spans[k % 2]?.push(spanRecord(shape, n, k));
+  const spans = SERVICES.map(() => [] as number[]);
+  for (let k = 0; k < count; k++) spans[k % 2]?.push(k);
   const logCount = count / 8;
-  const logs = SERVICES.map(() => [] as unknown[]);
-  for (let k = 0; k < logCount; k++) logs[k % 2]?.push(logRecord(shape, n, k, logCount));
+  const logs = SERVICES.map(() => [] as number[]);
+  for (let k = 0; k < logCount; k++) logs[k % 2]?.push(k);
   return [
     {
       resourceSpans: SERVICES.map((service, i) => ({
         resource: { attributes: resourceAttrs(service) },
-        scopeSpans: [{ scope: { name: 'scaling' }, spans: spans[i] }],
+        scopeSpans: byScope(spans[i] ?? [], (k) => scopeOfSpan(shape, k)).map(([name, group]) => ({
+          scope: { name },
+          spans: group.map((k) => spanRecord(shape, n, k)),
+        })),
       })),
     },
     {
       resourceLogs: SERVICES.map((service, i) => ({
         resource: { attributes: resourceAttrs(service) },
-        scopeLogs: [{ scope: { name: 'scaling' }, logRecords: logs[i] }],
+        scopeLogs: byScope(logs[i] ?? [], (k) => scopeOfLog(shape, k)).map(([name, group]) => ({
+          scope: { name },
+          logRecords: group.map((k) => logRecord(shape, n, k, logCount)),
+        })),
       })),
     },
     metricsJson(shape, n),
@@ -431,7 +489,7 @@ export async function buildFreshReport(shape: Shape): Promise<ScalingReport> {
 
 /** The one key of a shape: reports and measurements of one key are one thing (`{}` and `{rowGroupRows: 8192}` are one). */
 export const shapeKey = (shape: Shape): string =>
-  `${shape.outside}-${shape.inside}-${shape.rowGroups}-${shape.spacing}-${rowsPerGroup(shape)}-${shape.bigRowGroups ?? 0}${shape.merged === true ? '-merged' : ''}${shape.compacted === true ? '-compacted' : ''}`;
+  `${shape.outside}-${shape.inside}-${shape.rowGroups}-${shape.spacing}-${rowsPerGroup(shape)}-${shape.bigRowGroups ?? 0}${shape.merged === true ? '-merged' : ''}${shape.compacted === true ? '-compacted' : ''}${shape.mixed === true ? '-mixed' : ''}`;
 
 /** The folder of the reports `prebuildScalingReports` made, set by the scaling global setup for the worker processes. */
 export const PREBUILT_ENV = 'OTEL_HTML_SCALING_REPORTS';

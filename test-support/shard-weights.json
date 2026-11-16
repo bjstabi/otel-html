@@ -74,6 +74,7 @@
     "test/format/parquet/bloom.test.ts": 5.2,
     "test/format/parquet/codec-reference.test.ts": 0.9,
     "test/format/parquet/codec.test.ts": 2.3,
+    "test/format/parquet/layout-options.test.ts": 1.2,
     "test/format/parquet/decode.test.ts": 0.1,
     "test/format/parquet/duration-bucket.test.ts": 1.5,
     "test/format/parquet/rows.test.ts": 0.1,
