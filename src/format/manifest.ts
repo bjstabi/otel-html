@@ -297,13 +297,13 @@ export const RollupPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObjec
 });
 
 /** A format-7 rollup file: its description may list `refused` widget keys. */
-const RollupPartitionFileSchemaV7: z.ZodType<PartitionFile> = z.strictObject({
+export const RollupPartitionFileSchemaV7: z.ZodType<PartitionFile> = z.strictObject({
   ...PartitionFileShape,
   rollup: RollupDescriptionSchemaV7,
 });
 
 /** A format-7 `widget_traces` file: `widgetIndex` states the conditions and variable keys it covers. */
-const WidgetTracesPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
+export const WidgetTracesPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
   ...PartitionFileShape,
   widgetIndex: z.strictObject({ conditions: z.array(z.string()), variables: z.array(z.string()) }),
 });

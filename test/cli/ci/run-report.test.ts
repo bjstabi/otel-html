@@ -507,9 +507,31 @@ describe('format 6 in a run report', () => {
     expect(back?.formatVersion).toBe(7);
     expect(back?.partitions).toEqual(plan.manifest.partitions);
   });
-  test('without shares a format-5 report stays format 5, and a format-7 report stays format 7', async () => {
+  test('a format-7 job update lifts a format-5 or format-6 run report to format 7', async () => {
+    const widgetPartition = (): UpdatePartition => ({
+      source: 'job:7#flush:0',
+      files: {
+        spans: file('partitions/0/spans.parquet', 3, '10', '20'),
+        span_rollups: {
+          ...file('partitions/0/span_rollups.parquet', 2, '10', '20'),
+          rollup: { grainNs: 65_536_000_000 as const, dimensions: ['name'], refused: ['attr:a'] },
+        },
+        widget_traces: {
+          ...file('partitions/0/widget_traces.parquet', 1, '10', '20'),
+          widgetIndex: { conditions: ['name == "x"'], variables: [] },
+        },
+      },
+      carried: true,
+    });
+    for (const formatVersion of [5, 6] as const) {
+      const m = { ...(await legacyManifest()), formatVersion };
+      const plan = sync(m, emptyRunState(1), [ju(push(1, [widgetPartition()]))]);
+      expect(plan.manifest.formatVersion).toBe(7);
+      expect(plan.manifest.partitions[0]?.files.widget_traces).toBeDefined();
+    }
+  });
+  test('without shares or an index a format-5 report stays format 5, and a format-7 report stays format 7', async () => {
     const m = await legacyManifest();
-    expect(sync(m, emptyRunState(1), [ju(upd(false))]).manifest.formatVersion).toBe(5);
     const six = sync(m, emptyRunState(1), [ju(upd(true))]);
     const later = sync(six.manifest, six.state, [ju({ ...upd(false), sequence: 2 })]);
     expect(later.manifest.formatVersion).toBe(7);

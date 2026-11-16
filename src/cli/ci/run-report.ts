@@ -128,12 +128,19 @@ function entryFrom(
 }
 
 /**
- * The manifest as a format-6 report when it is one or an added partition stores a service share (format 6, no stored
- * epoch: `manifestForWrite` drops it, and a read derives the anchor), else as it is.
+ * The manifest as a format-7 report when it is older and an added partition uses a format-6 or format-7 feature: a
+ * stored service share (format 6, no stored epoch: `manifestForWrite` drops it, and a read derives the anchor), a
+ * `widget_traces` file or a rollup's `refused` keys (format 7). Else as it is.
  */
 function withSharesFormat(manifest: ManifestV4, added: readonly PartitionEntry[]): ManifestV4 {
-  const shares = added.some((e) => e.files.traces?.serviceShare === true);
-  if (manifest.formatVersion >= 6 || !shares) return manifest;
+  const shares = manifest.formatVersion < 6 && added.some((e) => e.files.traces?.serviceShare === true);
+  const needs7 = added.some(
+    (e) =>
+      e.files.widget_traces !== undefined ||
+      e.files.span_rollups?.rollup?.refused !== undefined ||
+      e.files.log_rollups?.rollup?.refused !== undefined,
+  );
+  if (manifest.formatVersion >= 7 || !(shares || needs7)) return manifest;
   return { ...manifest, formatVersion: 7 };
 }
 
