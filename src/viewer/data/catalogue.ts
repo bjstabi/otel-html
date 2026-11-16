@@ -914,7 +914,10 @@ const BASELINE: Record<string, Declared> = {
   'spans.points.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
   }),
-  'spans.points.long': decl(['fixed', 'scan', 'files'], { allowed: { density: ROWS_PAGE } }),
+  // a long window prunes no file the statement does not read: it scans like the short one
+  'spans.points.long': decl(['fixed', 'scan', 'scan'], {
+    allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
+  }),
   'logs.points.short': decl(['fixed', 'files', 'files'], {
     allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
   }),
