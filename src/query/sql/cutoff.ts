@@ -2,7 +2,7 @@ import { column, Query, sql } from '@uwdata/mosaic-sql';
 import type { ManifestV4, PartitionFile } from '../../format/manifest.js';
 import { type SqlFilter, whereOf } from './filter.js';
 import type { Pruned } from './prune.js';
-import { splitFiles } from './rollup.js';
+import { splitFiles, windowProblem } from './rollup.js';
 
 type ListTable = 'spans' | 'logs' | 'traces';
 
@@ -86,7 +86,7 @@ export function newestFiles(
     for (const e of dated) {
       if (kept.has(e.path)) continue;
       const overlaps = desc
-        ? (e.max as bigint) >= bound || (table === 'traces' && e.end !== null && e.end >= bound)
+        ? (e.max as bigint) >= bound || (table === 'traces' && (e.end === null || e.end >= bound))
         : (e.min as bigint) <= bound;
       if (overlaps) kept.add(e.path);
     }
@@ -111,7 +111,7 @@ export interface RollupCounts {
  * One statement counting, per rollup file, the rows `f` matches, for the base files of `pruned` whose partition has a
  * rollup that holds everything `reads` names (the routing of `splitFiles`, durations not needed). A partition
  * whose rollup lacks a dimension, or has none, is absent from `baseOf`: its count is unknown. `f` is applied as the
- * rollup branch of `measuresRelation` applies it (no text search: the caller sends a text filter to no rollup).
+ * rollup branch of `measuresRelation` applies it (a text search, or a window that is not long and grain-aligned, gives no query: every count is unknown).
  * Names are manifest paths, as `prunePartitions` gives them without a `resolve`.
  */
 export function rollupCounts(
@@ -121,6 +121,8 @@ export function rollupCounts(
   f: SqlFilter,
   reads: ReadonlySet<string>,
 ): RollupCounts {
+  // what a rollup cannot answer exactly gives no counts (every count unknown), never a wrong one
+  if (f.text !== null || windowProblem(f) !== null) return { query: null, baseOf: new Map() };
   const split = splitFiles(manifest, table, pruned, reads, { durations: false, rawOnly: false });
   if (split.rollup.length === 0) return { query: null, baseOf: new Map() };
   const rollupTable = table === 'spans' ? 'span_rollups' : 'log_rollups';
@@ -133,7 +135,6 @@ export function rollupCounts(
   }
   const own: SqlFilter = {
     ...f,
-    text: null,
     files: { files: split.rollup, all: false, total: split.rollup.length },
   };
   const query = Query.from(rollupTable)

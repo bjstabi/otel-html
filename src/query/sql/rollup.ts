@@ -165,6 +165,16 @@ export function groupKeyOf(key: string): MeasureKey {
 const selectOf = (keys: readonly MeasureKey[], branch: 'raw' | 'rollup'): Record<string, ExprNode> =>
   Object.fromEntries(keys.map((k) => [k.name, branch === 'rollup' ? (k.rollup ?? k.raw) : k.raw]));
 
+/** Why a rollup cannot answer `f`'s window, or null: a window is read as a rollup only when long and aligned to the rollup grain (the branches compare grain starts and exact starts). */
+export function windowProblem(f: SqlFilter): string | null {
+  if (f.window === null) return null;
+  if (!f.long) return 'a window is read as a rollup only under the long-window rules';
+  if (f.window.start % GRAIN_BIG !== 0n || f.window.end % GRAIN_BIG !== 0n) {
+    return 'a long window must be aligned to the rollup grain';
+  }
+  return null;
+}
+
 /**
  * Rows (…keys, n and, for spans when `durations`, duration_bucket, duration_sum, duration_min, duration_max): the rollup
  * rows of `split.rollup` `UNION ALL` the same shape grouped from `split.raw`. The rollup branch applies the filter's
@@ -180,17 +190,8 @@ export function measuresRelation(
   keys: readonly MeasureKey[],
   durations: boolean,
 ): Query {
-  if (!f.long && f.window !== null) {
-    throw new OtelHtmlError('usage', {
-      message: 'measuresRelation: a window is read as a rollup only under the long-window rules',
-    });
-  }
-  if (f.window !== null && (f.window.start % GRAIN_BIG !== 0n || f.window.end % GRAIN_BIG !== 0n)) {
-    // the rollup branch compares grain starts, the raw branch exact starts: they agree only on a window of whole grains
-    throw new OtelHtmlError('usage', {
-      message: 'measuresRelation: a long window must be aligned to the rollup grain',
-    });
-  }
+  const problem = windowProblem(f);
+  if (problem !== null) throw new OtelHtmlError('usage', { message: `measuresRelation: ${problem}` });
   const branches: Query[] = [];
   if (split.rollup.length > 0) {
     const own: SqlFilter = {

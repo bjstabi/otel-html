@@ -1,3 +1,4 @@
+import { sql } from '@uwdata/mosaic-sql';
 import { describe, expect, test } from 'vitest';
 import type { ManifestV4, PartitionFile } from '../../../src/format/manifest.js';
 import { ROLLUP_GRAIN_NS } from '../../../src/format/manifest.js';
@@ -217,6 +218,24 @@ describe('rollupCounts', () => {
     expect(text).toContain('partitions/000000/rollup.parquet');
     expect(text).not.toContain('partitions/000001/rollup.parquet');
     expect([...c.baseOf]).toEqual([['partitions/000000/rollup.parquet', base(0)]]);
+  });
+
+  test('a text search, a short window or an unaligned window gives no counts; an aligned long one does', () => {
+    const m = manifestOf([{ min: '1', max: '9', rollup: [] }]);
+    const p = all(m);
+    const G = BigInt(ROLLUP_GRAIN_NS);
+    const none = (f: SqlFilter): unknown => rollupCounts(m, 'spans', p, f, new Set()).query;
+    expect(none({ ...filter(p), text: sql`true` })).toBeNull();
+    expect(none({ ...filter(p), window: { start: 0n, end: G } })).toBeNull();
+    expect(none({ ...filter(p), long: true, window: { start: 1n, end: G } })).toBeNull();
+    expect(none({ ...filter(p), long: true, window: { start: 0n, end: G } })).not.toBeNull();
+  });
+
+  test('a traces file without timeEndMax is kept as possibly overlapping', () => {
+    const specs = ten().map((s) => ({ ...s, end: s.max }));
+    specs[3] = { min: '31', max: '39', end: null };
+    const m = manifestOf(specs, 'traces');
+    expect(idx(newestFiles(m, 'traces', all(m, 'traces'), 100).files.files)).toEqual([3, 9]);
   });
 
   test('no usable rollup means no query', () => {
