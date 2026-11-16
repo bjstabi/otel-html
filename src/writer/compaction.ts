@@ -42,6 +42,11 @@ export interface CompactOptions {
   nextPartition: number;
   rowGroupRows: number;
   statisticsKeys: Record<Table, string[]>;
+  /**
+   * The statistics keys only a widget condition asked for, per table. A recomputed rollup keeps one only when every
+   * input's rollup groups by it: the writer weighed it per flush (`#rollupOf`) and may have left it out of some.
+   */
+  widgetKeys?: Record<Table, string[]>;
   facetValueCap: number;
   /** `local` also writes each final file's base64 script after it (never for the merge temporaries). */
   format?: ReportFormat;
@@ -647,7 +652,9 @@ const sameDescription = (a: RollupDescription, b: RollupDescription): boolean =>
 /**
  * How the compacted partition gets the rollup of `table`: null when no input has rows of its base table; the inputs'
  * rollups added up when every input with base rows has one and the descriptions are all equal; else recomputed from
- * the rows of the merge, with the dimensions this report's statistics keys give.
+ * the rows of the merge, with the dimensions this report's statistics keys give, less a widget-only key that some input's
+ * rollup lacks: that input's writer weighed it and found it too large (or it never had it), and weighing it again for
+ * the union would decode every row only to find the same, so it is left out and a widget on it reads the raw file.
  */
 function planRollup(
   entries: readonly PartitionEntry[],
@@ -662,11 +669,15 @@ function planRollup(
   if (first !== undefined && descriptions.every((d) => d !== undefined && sameDescription(d, first))) {
     return { how: 'sum', description: first };
   }
+  const widget = new Set(opts.widgetKeys?.[base]);
+  const keys = opts.statisticsKeys[base].filter(
+    (k) => !widget.has(k) || descriptions.every((d) => d?.dimensions.includes(k) === true),
+  );
   return {
     how: 'recompute',
     description: {
       grainNs: ROLLUP_GRAIN_NS,
-      dimensions: rollupDimensions(base, opts.statisticsKeys[base]),
+      dimensions: rollupDimensions(base, keys),
       ...(table === 'span_rollups' ? { durationBuckets: 'log2x8' as const } : {}),
     },
   };

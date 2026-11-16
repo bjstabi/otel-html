@@ -88,6 +88,17 @@ calibrated cost model):
 
 ### 6.1 Format 7: files laid out for newest-first reads (writer)
 
+> **Amendment 2026-11-16: dropped.** The measurement this section asks for (plan Task 1, `mixed` shape, 4 sorts ×
+> 3 row-group sizes) found the following:
+>
+> - A spans bloom filter makes opening a trace worse: 27 requests becomes 33–41, one range request per row group's
+>   filter.
+> - The one passing layout, without that filter, saves 10 % on the §7 paths (123 → 110) and leaves the CI dashboard
+>   unchanged.
+>
+> The maintainer chose to skip format 7 and keep §6.2–§6.5. The report stays format 6, and #291 stays open. The rest
+> of this section is kept as the record of what was tried.
+
 - **Sort.**
   - Today's leading `scope_name` (and `service_name`) clustering is what lets
     `instrumentation_scope.name == "otel-html-ci"` read 3 requests instead of the whole file. A pure time sort
@@ -128,7 +139,8 @@ calibrated cost model):
 - **Views.** Views list files newest first (`src/query/sql/views.ts:89`).
 - **List statements.** List statements for spans, logs and traces become
   `ORDER BY time DESC, filename, file_row_number LIMIT 200` with a keyset cursor
-  `(time, filename, file_row_number) < (…)` for the next page. Under a time-sorted layout the cursor's predicate
+  `time < t OR (time = t AND (filename, file_row_number) > (f, r))` for the next page (the tie-breakers stay
+  ascending, as in the ORDER BY). Under a time-sorted layout the cursor's predicate
   prunes row groups by their statistics.
 - **Paging.** The virtualised list asks for the next page when the user scrolls near the end. `listCap` keeps
   capping the total rows held, and its default stays 10,000.
@@ -144,6 +156,10 @@ calibrated cost model):
 - **Time cutoff.** Before a list's first page, use manifest per-file `timeMin`/`timeMax`/`rows` (unfiltered) or
   rollup counts (filtered) to find the smallest newest-first set of files that holds 200 rows. Only those files
   are listed in the statement, and the next page extends the set.
+  - Every other file whose `timeMax` is at or above the kept set's smallest `timeMin` also joins, because
+    partitions can overlap in time. An ascending time sort takes the oldest files first, by the mirror rule.
+  - A filtered page without rollup counts that comes up short reads the next older group, until it fills or no
+    file is left.
 - **Trace list.** The unconditioned trace list stops grouping every traces file (`src/query/sql/spans.ts:116`).
   It groups only the files the cutoff keeps.
   - The cutoff also pulls in any older file whose `timeEndMax` reaches past the kept set's start, so a trace that

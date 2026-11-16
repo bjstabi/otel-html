@@ -1,5 +1,11 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
+import { parse } from 'yaml';
+import { ConfigSchema } from '../../src/config/schema.js';
+import { statisticsKeysFor } from '../../src/format/parquet/stats.js';
+import { translateCondition } from '../../src/query/sql/ottl.js';
 import { type RequestShape, type RouteNeed, rawOnly, routeOf } from '../../src/viewer/data/route.js';
+import { rollupDimensions } from '../../src/writer/rollup-rows.js';
 
 const shape = (over: Partial<RequestShape>): RequestShape => ({
   table: 'spans',
@@ -72,4 +78,29 @@ describe('rawOnly', () => {
     expect(rawOnly(shape({ reads: new Set(['attr:http.route', 'service_name']) }))).toBe(false);
     expect(rawOnly(shape({}))).toBe(false);
   });
+});
+
+describe('the CI dashboard toplists', () => {
+  const config = ConfigSchema.parse(parse(readFileSync('.github/otel-html-ci.yaml', 'utf8')));
+  const dimensions = rollupDimensions('spans', statisticsKeysFor('spans', config));
+  const toplists = config.dashboards.flatMap((d) =>
+    d.dashboard.widgets.flatMap((w) => (w.type === 'toplist' && w.signal === 'spans' ? [w] : [])),
+  );
+
+  test('there are the Steps and Slowest steps toplists', () => {
+    expect(toplists.map((w) => w.title)).toEqual(['Steps', 'Slowest steps']);
+  });
+
+  test.each(toplists.map((w) => [w.title, w.query] as const))(
+    '%s reads only rollup dimensions: its partitions go to their rollups, not to the raw spans',
+    (_title, query) => {
+      const t = translateCondition(query ?? '', 'span');
+      expect(t.residual).toBeNull();
+      expect(t.reads).toContain('attr:github.job.step.number');
+      for (const key of t.reads) expect(dimensions, key).toContain(key);
+      const asked = shape({ need: 'groups', reads: new Set(t.reads), residual: t.residual !== null });
+      expect(rawOnly(asked)).toBe(false);
+      expect(routeOf(asked)).toBe('measures');
+    },
+  );
 });

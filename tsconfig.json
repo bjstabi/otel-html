@@ -17,6 +17,7 @@
     "test-support/scripted-loader.ts",
     "test-support/scaling/**",
     "scripts/scaling-reports.ts",
+    "scripts/measure-layout.ts",
     "test/scaling/**"
   ]
 }

@@ -26,7 +26,9 @@ import {
   PAGE_CALLS,
   PAGE_THRESHOLD,
   PAGES,
+  pageOn,
   shapeFile,
+  TRACE_PAGE,
 } from './scaling-pages-support.js';
 
 const IDS = new Set(CATALOGUE.map((e) => e.id));
@@ -102,6 +104,55 @@ describe('the pages ask only catalogued requests', () => {
       }
     },
     60_000,
+  );
+});
+
+/**
+ * What each page asks of the `mixed` shape (the live-shaped mix: four scopes, hourly partitions), pinned at the measured
+ * value + 10 % rounded up: a page that asks for more fails here until the number is raised on purpose. The shape's files
+ * are all under the production small-file limit, which prepares them in parallel and leaves no serial request, so the
+ * serial requests are pinned with preparing off (`pageOn` at threshold 0: what a report of large files costs) and the
+ * requests of both kinds with the production limit.
+ */
+const PAGE_SERIAL_MAX: Readonly<Record<string, number>> = {
+  '#/dashboards/ci': 95,
+  '#/traces?mode=traces': 54,
+  '#/traces': 28,
+  '#/logs': 31,
+  '#/metrics': 14,
+  [TRACE_PAGE]: 54,
+};
+const PAGE_REQUESTS_MAX: Readonly<Record<string, number>> = {
+  '#/dashboards/ci': 18,
+  '#/traces?mode=traces': 9,
+  '#/traces': 5,
+  '#/logs': 9,
+  '#/metrics': 5,
+  [TRACE_PAGE]: 15,
+};
+
+describe('a page asks no more requests than pinned on the mixed shape (+10 % of the measured value)', () => {
+  let live: ScalingReport;
+  beforeAll(async () => {
+    live = await buildScalingReport({ ...BASE, mixed: true });
+  }, 120_000);
+  afterAll(async () => {
+    await live.close();
+  });
+
+  test.each(PAGES)(
+    '%s',
+    async (hash) => {
+      const off = await pageOn(live, hash, 0);
+      const prepared = await pageOn(live, hash, PAGE_THRESHOLD);
+      expect(off.serial, `${hash}: serial requests, files not prepared`).toBeLessThanOrEqual(
+        PAGE_SERIAL_MAX[hash] ?? 0,
+      );
+      expect(prepared.serial + prepared.parallel, `${hash}: requests`).toBeLessThanOrEqual(
+        PAGE_REQUESTS_MAX[hash] ?? 0,
+      );
+    },
+    120_000,
   );
 });
 

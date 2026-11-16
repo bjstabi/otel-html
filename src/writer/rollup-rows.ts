@@ -43,6 +43,14 @@ export function rollupAllowed(rollupRows: number, baseRows: number): boolean {
   return rollupRows <= rollupGroupLimit(baseRows);
 }
 
+/** The most a rollup may weigh, as a share of its base file's bytes, for a key only a widget condition asked for. */
+const ROLLUP_KEY_SHARE = 0.15;
+
+/** A rollup grouped by one more widget key is worth keeping while it weighs at most 15 % of the base file. */
+export function rollupKeyAllowed(rollupBytes: number, baseBytes: number): boolean {
+  return rollupBytes <= baseBytes * ROLLUP_KEY_SHARE;
+}
+
 const INT64_LIMIT = 2n ** 63n;
 
 /** True when every rollup row's `duration_sum` fits the `int64` column; a row that does not fit is refused by `checkRow`, never wrapped. */

@@ -1,4 +1,5 @@
 import type { ResolvedDashboard } from '../../config/schema.js';
+import { widgetConditionKeys } from '../../config/widget-keys.js';
 import type { AnyValue, Attributes } from '../../model/anyvalue.js';
 import { attributesFromJson } from '../columns.js';
 import type { PartitionFile } from '../manifest.js';
@@ -153,15 +154,43 @@ export function timeEndMaxOf(batch: ColumnBatch): string | null {
   return max === null ? null : max.toString();
 }
 
-/** The statistics keys for `table`: only keys the table can answer (others would be `null`, i.e. not listed). */
+/** The keys the writer is told to keep for `table`: dashboard variables and `writer.statisticsKeys`. */
+function explicitKeysFor(
+  table: Table,
+  config: { dashboards: readonly ResolvedDashboard[]; writer: { statisticsKeys: readonly string[] } },
+): Set<string> {
+  const out = new Set<string>(FIXED_STATISTICS_COLUMNS[table]);
+  for (const d of config.dashboards) for (const v of d.dashboard.variables) out.add(`resource:${v.key}`);
+  for (const k of config.writer.statisticsKeys) out.add(k);
+  return out;
+}
+
+/**
+ * The statistics keys for `table`: only keys the table can answer (others would be `null`, i.e. not listed).
+ * They are the fixed columns, the dashboard variables, `writer.statisticsKeys` and the attribute keys the dashboards'
+ * widget conditions test (`widgetConditionKeys`), so a rollup can answer those widgets.
+ */
 export function statisticsKeysFor(
   table: Table,
   config: { dashboards: readonly ResolvedDashboard[]; writer: { statisticsKeys: readonly string[] } },
 ): string[] {
-  const out = new Set<string>(FIXED_STATISTICS_COLUMNS[table]);
-  for (const d of config.dashboards) for (const v of d.dashboard.variables) out.add(`resource:${v.key}`);
-  for (const k of config.writer.statisticsKeys) out.add(k);
+  const out = explicitKeysFor(table, config);
+  for (const k of widgetConditionKeys(config.dashboards)) out.add(k);
   return [...out].filter((k) => sourceOf(table, k) !== null);
+}
+
+/**
+ * The keys of `statisticsKeysFor` that only widget conditions asked for (neither a variable nor in
+ * `writer.statisticsKeys`): the ones a rollup keeps only while they are cheap (`rollupKeyAllowed`).
+ */
+export function widgetOnlyKeysFor(
+  table: Table,
+  config: { dashboards: readonly ResolvedDashboard[]; writer: { statisticsKeys: readonly string[] } },
+): string[] {
+  const explicit = explicitKeysFor(table, config);
+  return widgetConditionKeys(config.dashboards).filter(
+    (k) => !explicit.has(k) && sourceOf(table, k) !== null,
+  );
 }
 
 /**

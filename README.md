@@ -416,7 +416,7 @@ report/
 - `site` is for a report served over http: the viewer reads the `.parquet` files and loads `assets/duckdb.<v>.wasm`, `duckdb.<v>.worker.js` and DuckDB's signed `parquet.<v>.duckdb_extension.wasm` and `json.<v>.duckdb_extension.wasm`.
 - `local` opens from `file://`, where nothing can be fetched: every `.parquet.js` wrapper and the engine's `duckdb.<v>.wasm.gz.b64.js`, `duckdb.<v>.worker.b64.js` and the two extensions' `duckdb.<v>.parquet.ext.gz.b64.js` and `duckdb.<v>.json.ext.gz.b64.js` are classic scripts that register their bytes. Wrappers are a third larger than the Parquet, so a large report is better served as `site` (the writer warns past `writer.localWarnBytes`). Either way a report makes no network request: the extensions DuckDB would otherwise download at first use travel in `assets/` (about 3.9 MB plain, 1.2 MB wrapped).
 - Service share (format 6): `traces.parquet` has a `service_share` column, each trace's exclusive time per service as JSON, so the trace list draws its "Latency by service" bar without reading spans. It is exact only for a trace that has spans in one `traces` row of the report; the viewer computes the share from the spans otherwise (see [docs/format/schema.md](docs/format/schema.md#service_share)).
-- Rollup files (format 5): a partition that holds spans also holds `span_rollups.parquet`, and one that holds logs also holds `log_rollups.parquet`, unless the size guard refused the rollup (it would have more than an eighth of its rows, and more than 4,096) or the partition came from a report that wrote none. A rollup file has one row per 65.536 s grain of the signal's time × the core facet dimensions plus the report's statistics keys (span rollups also × a duration bucket); span rollups carry the count, sum, min and max of the durations of the group, log rollups a count. The manifest describes each one (`rollup`: the grain and the dimensions). The spans and traces files also state `timeEndMax`, the latest time any row reaches (the larger of its start and end, so never below `timeMin`). Nothing reads the rollup files yet; the viewer registers them and gives each table a view (empty when a partition has no such file), and a later release will answer long time windows from them. A partition may lack them: the viewer reads it raw.
+- Rollup files (format 5): a partition that holds spans also holds `span_rollups.parquet`, and one that holds logs also holds `log_rollups.parquet`, unless the size guard refused the rollup (it would have more than an eighth of its rows, and more than 4,096) or the partition came from a report that wrote none. A rollup file has one row per 65.536 s grain of the signal's time × the core facet dimensions plus the report's statistics keys, which include the attribute keys the dashboards' toplist and table widgets test by equality or presence in their `query` (`attributes["k"] != nil`), so a rollup can answer those widgets (span rollups also × a duration bucket). A key only a widget asked for is left out of a partition's rollup, with a warning naming it, when the rollup with it would weigh more than 15 % of that partition's spans or logs file more than without it (or would not shrink the table); a widget on it then reads that partition's raw file; span rollups carry the count, sum, min and max of the durations of the group, log rollups a count. The manifest describes each one (`rollup`: the grain and the dimensions). The spans and traces files also state `timeEndMax`, the latest time any row reaches (the larger of its start and end, so never below `timeMin`). The viewer registers the rollup files and gives each table a view (empty when a partition has no such file), and answers a summary from a partition's rollup when its dimensions cover the question, and from its raw file otherwise. A partition may lack them: the viewer reads it raw.
 - Closing a report compacts its flush partitions into one sorted partition when there are two or more.
 - `assetsBase` (default `assets/`) names where the viewer and engine files load from. A site that publishes them once for many reports sets it to a shared relative path such as `../../assets/0.3.0/`, and the report then carries no `assets/` of its own.
 
@@ -701,7 +701,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | `title` | none | Report title. Env: `OTEL_HTML_TITLE`. |
 | `writer.format` | `local` | Report format: `local` (the default) or `site`, which write format 6 (Parquet partitions; `site` is for a published site with shared assets). Closing the report compacts its flush partitions into sorted partitions when there are two or more, grouped by time so that no compacted file covers more than 24 hours between its first and last row (a flush that covers more than that on its own, or that no other flush is within 24 hours of, is kept as it is unless its patterns must take a newer template; a compacted partition's `source` is `compact:<first>..<last>`, the numbers of its first and last member, not every number between, and a pattern keeps the latest template across all the groups); if the compaction fails, the failure is logged and the report keeps its flush partitions, still complete and valid. `chunks` (format 3) is no longer written and fails with "format 3 (chunks) is no longer written; use local or site (otel-html merge converts an older report)". Env: `OTEL_HTML_FORMAT`. |
 | `writer.rowGroupRows` | 50000 | Rows per Parquet row group in formats 5 and 6 (50000 to 100000). |
-| `writer.statisticsKeys` | `[]` | Extra columns whose statistics are kept per partition file in formats 5 and 6, beyond those the dashboards and views use. Each entry is a column name, `attr:<key>` (a span, log or metric point attribute) or `resource:<key>` (a resource attribute); a bare attribute key is accepted but matches nothing, so it prunes nothing. |
+| `writer.statisticsKeys` | `[]` | Extra columns whose statistics are kept per partition file in formats 5 and 6, beyond those the dashboards and views use (a dashboard's variables, and the attribute keys its toplist and table widgets test in `query`, are added without listing them). Each entry is a column name, `attr:<key>` (a span, log or metric point attribute) or `resource:<key>` (a resource attribute); a bare attribute key is accepted but matches nothing, so it prunes nothing. |
 | `writer.localWarnBytes` | 256000000 | The size, in bytes of Parquet, past which a `local` report warns (once per session) that `--format site` serves large reports better. The base64 scripts a `local` report loads are about a third larger. |
 | `writer.compactOnMerge` | `false` | With `merge`: compact each format-5 or format-6 input's copied partitions into one partition per 24-hour time group (`merge --compact`). Without it they are copied as they are. |
 | `writer.assetsBase` | `assets/` | Where a report loads the viewer assets from: `assets/`, or a relative path such as `../../assets/0.3.0/`. |
@@ -991,6 +991,26 @@ unused files, exports and dependencies
 - **Usage:** `lint`
 
 biome ci, actionlint, the task graph and the formatting of mise.toml
+
+## `measure:layout`
+
+Measure the format-7 layout candidates (sort order x row-group size) on a live-shaped report
+Builds one report of the generator's `mixed` shape in today's layout (6 partitions of 150,000 spans in four scopes,
+about 40 s), rewrites it once per candidate (relayoutReport: the same rows, sorted and cut into row groups as the
+candidate says, no dictionary on ids and time columns, bloom filters on traces, logs and spans) and runs the
+LAYOUT_STATEMENTS (the spec's list, cursor, severity, toplist, trace-by-id and count shapes as SQL) and every catalogue
+entry cold in the counting engine, about 30 s per candidate. Prints modelled serial requests and megabytes per
+statement, the sum over the section 7 paths and the entries more than 10 % worse than today. `-- --candidates
+b:50000,c:16384` measures some candidates (sorts a time DESC, b scope + time DESC, c scope + service + time DESC, d hour
++ scope + service + time DESC); `-- --json <file>` keeps the numbers. About 7 minutes for the twelve candidates.
+
+
+- Depends: engine:assets
+
+- **Usage:** `measure:layout [args]…`
+
+### Arguments
+- **`[args]…`**
 
 ## `predict:queries`
 

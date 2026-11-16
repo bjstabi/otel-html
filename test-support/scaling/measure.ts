@@ -26,7 +26,7 @@ import { MEASURED_ENV } from './report-cache.js';
 
 export const AXES: readonly Axis[] = ['retention', 'density', 'window'];
 
-interface Live {
+export interface Live {
   report: ScalingReport;
   counting: CountingEngine;
   sizes: Map<string, number>;
@@ -40,7 +40,7 @@ const MeasuredSchema = z.object({
   small: z.number(),
   large: z.number(),
 });
-type Measured = z.infer<typeof MeasuredSchema>;
+export type Measured = z.infer<typeof MeasuredSchema>;
 
 const lives = new Map<string, Promise<Live>>();
 const measured = new Map<string, Promise<Measured>>();
@@ -57,18 +57,23 @@ const thresholdOf = (opts: MeasureOptions | undefined): number => opts?.threshol
 const keyOf = (shape: Shape, threshold: number): string =>
   threshold === HARNESS_SMALL_FILE_BYTES ? shapeKey(shape) : `${shapeKey(shape)}-t${threshold}`;
 
+/** A counting engine over `report`: what `measureCold` runs entries on (the layout measurement builds its own reports). */
+export async function openLive(
+  report: ScalingReport,
+  threshold: number = HARNESS_SMALL_FILE_BYTES,
+): Promise<Live> {
+  const counting = await openCountingEngine(report.dir, report.manifest, { threshold });
+  const sizes = new Map<string, number>();
+  for (const p of report.manifest.partitions)
+    for (const f of Object.values(p.files)) sizes.set(f.path, f.bytes);
+  return { report, counting, sizes, turn: Promise.resolve() };
+}
+
 function liveOf(shape: Shape, threshold: number): Promise<Live> {
   const key = keyOf(shape, threshold);
   const hit = lives.get(key);
   if (hit !== undefined) return hit;
-  const made = (async (): Promise<Live> => {
-    const report = await buildScalingReport(shape);
-    const counting = await openCountingEngine(report.dir, report.manifest, { threshold });
-    const sizes = new Map<string, number>();
-    for (const p of report.manifest.partitions)
-      for (const f of Object.values(p.files)) sizes.set(f.path, f.bytes);
-    return { report, counting, sizes, turn: Promise.resolve() };
-  })();
+  const made = buildScalingReport(shape).then((report) => openLive(report, threshold));
   lives.set(key, made);
   return made;
 }
@@ -88,7 +93,11 @@ const costOfEvents = (events: readonly ReadEvent[]): Cost => costOf(events, new 
  * source), so the entry's cost is its own request. Nothing else is warmed.
  */
 async function measure(entry: CatalogueEntry, shape: Shape, threshold: number): Promise<Measured> {
-  const live = await liveOf(shape, threshold);
+  return measureCold(await liveOf(shape, threshold), entry);
+}
+
+/** `entry` cold on an open `Live`: the body of `measure`. */
+export function measureCold(live: Live, entry: CatalogueEntry): Promise<Measured> {
   const run = live.turn.then(async (): Promise<Measured> => {
     const { counting, report, sizes } = live;
     const ds = createDuckDbDataSource({ engine: counting.engine, manifest: report.manifest });

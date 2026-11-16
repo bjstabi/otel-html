@@ -5,6 +5,7 @@
     "test/viewer-data/**/*",
     "test/scaling/**/*",
     "scripts/scaling-reports.ts",
+    "scripts/measure-layout.ts",
     "test-support/perf-context.d.ts"
   ]
 }

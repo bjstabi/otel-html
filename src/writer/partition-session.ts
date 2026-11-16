@@ -9,7 +9,12 @@ import { batchFromRows, type ColumnBatch } from '../format/parquet/batch.js';
 import { checkRow, encodeColumns } from '../format/parquet/codec.js';
 import { ROLLUP_OF, type RollupTable, TABLE_COLUMNS, TABLES, type Table } from '../format/parquet/columns.js';
 import { applyNormalization, logRow, pointRow, type Row, spanRow } from '../format/parquet/rows.js';
-import { completeStatistics, fileStatistics, statisticsKeysFor } from '../format/parquet/stats.js';
+import {
+  completeStatistics,
+  fileStatistics,
+  statisticsKeysFor,
+  widgetOnlyKeysFor,
+} from '../format/parquet/stats.js';
 import { type PanicGuard, readColumns } from '../format/parquet/stream.js';
 import {
   DEFAULT_ASSETS_BASE,
@@ -67,6 +72,7 @@ import {
   logRollupRows,
   rollupAllowed,
   rollupDimensions,
+  rollupKeyAllowed,
   rollupSumsFit,
   spanRollupRows,
   widestDimension,
@@ -237,6 +243,10 @@ class PartitionSession implements WriterSession {
   #frozen: { dedupe: string; metricStreams: string; drain: string } | null = null;
   readonly #writer: PartitionWriter;
   readonly #statisticsKeys: Record<Table, string[]>;
+  /** The statistics keys only a widget condition asked for, per table: a rollup keeps one while it is cheap (`rollupKeyAllowed`). */
+  readonly #widgetKeys: Record<Table, string[]>;
+  /** The (table, key) pairs a widget key was left out of a rollup for, already warned about this session. */
+  readonly #toldKeys = new Set<string>();
   readonly #createdAt: string;
   readonly #title: string;
   /** The anchor this session's own records are relative to: its own first record's time, fixed once data is accepted. Times in files are absolute. */
@@ -291,6 +301,10 @@ class PartitionSession implements WriterSession {
       Table,
       string[]
     >;
+    this.#widgetKeys = Object.fromEntries(TABLES.map((t) => [t, widgetOnlyKeysFor(t, config)])) as Record<
+      Table,
+      string[]
+    >;
     this.#writer = new PartitionWriter(deps.fs, {
       out,
       rowGroupRows: deps.rowGroupRows ?? config.writer.rowGroupRows,
@@ -328,13 +342,23 @@ class PartitionSession implements WriterSession {
   /**
    * The rollup rows of `batch` (rows of `base`) with this report's dimensions and their description; null, with a
    * warning, when the guard refuses them (a duration sum beyond int64, or a rollup that does not shrink the table).
+   * A key only a widget condition asked for is added to the dimensions one at a time, and dropped, with a warning
+   * naming it, when the rollup with it would exceed the row guard or weigh over 15 % of the encoded `batch`
+   * (`rollupKeyAllowed`): a widget on a dropped key reads the partition's raw file, as before.
+   * `baseBytes` is the size of the base file when the caller has it; otherwise it is measured by encoding `batch`.
    */
   #rollupOf(
     base: 'spans' | 'logs',
     batch: ColumnBatch,
+    baseBytes?: number,
   ): { rows: Row[]; description: RollupDescription } | null {
-    const dimensions = rollupDimensions(base, this.#statisticsKeys[base]);
-    const made = (base === 'spans' ? spanRollupRows : logRollupRows)(batch, dimensions);
+    const make = (dims: readonly string[]): Row[] =>
+      (base === 'spans' ? spanRollupRows : logRollupRows)(batch, dims);
+    const widget = new Set(this.#widgetKeys[base]);
+    const fixed = this.#statisticsKeys[base].filter((k) => !widget.has(k));
+    let kept: string[] = fixed;
+    let dimensions = rollupDimensions(base, kept);
+    let made = make(dimensions);
     if (!rollupSumsFit(made)) {
       this.#deps.logger.warn(
         `the ${base} rollup has a duration sum beyond the int64 range, so it is not written`,
@@ -355,6 +379,47 @@ class PartitionSession implements WriterSession {
       });
       return null;
     }
+    const rollupTable = base === 'spans' ? 'span_rollups' : 'log_rollups';
+    let size = baseBytes;
+    let current: number | undefined;
+    const encodedSize = (rows: readonly Row[]): number =>
+      encodeColumns(rollupTable, batchFromRows(rollupTable, rows), this.#encodeOptions()).length;
+    for (const key of this.#statisticsKeys[base].filter((k) => widget.has(k))) {
+      const tryDimensions = rollupDimensions(base, [...kept, key]);
+      const tried = make(tryDimensions);
+      let why: string | null = null;
+      let rollupBytes: number | undefined;
+      if (!rollupSumsFit(tried) || !rollupAllowed(tried.length, batch.length)) why = 'does not shrink';
+      else {
+        size ??= encodeColumns(base, batch, this.#encodeOptions()).length;
+        current ??= encodedSize(made);
+        rollupBytes = encodedSize(tried);
+        // the key's own contribution: a rollup has a fixed cost (schema, statistics) that the key does not add
+        if (!rollupKeyAllowed(rollupBytes - current, size)) why = 'too large';
+      }
+      if (why !== null) {
+        // once per session and (table, key): every later flush would say the same
+        const told = `${base}\0${key}`;
+        const log = this.#toldKeys.has(told) ? 'debug' : 'warn';
+        this.#toldKeys.add(told);
+        this.#deps.logger[log](
+          `the ${base} rollup does not group by ${key}, which a widget condition tests: the rollup would be ${why}`,
+          {
+            key,
+            rollupRows: tried.length,
+            baseRows: batch.length,
+            rollupBytes,
+            rollupBytesWithout: current,
+            baseBytes: size,
+          },
+        );
+        continue;
+      }
+      kept = [...kept, key];
+      current = rollupBytes;
+      dimensions = tryDimensions;
+      made = tried;
+    }
     return {
       rows: made,
       description: {
@@ -363,6 +428,10 @@ class PartitionSession implements WriterSession {
         ...(base === 'spans' ? { durationBuckets: 'log2x8' as const } : {}),
       },
     };
+  }
+
+  #encodeOptions(): { rowGroupRows: number } {
+    return { rowGroupRows: this.#deps.rowGroupRows ?? this.#config.writer.rowGroupRows };
   }
 
   /** The rollup rows of a cut and their descriptions; a table whose rollup the guard refuses gets neither, and a warning. */
@@ -974,7 +1043,13 @@ class PartitionSession implements WriterSession {
     const bytes = baseBytes.get(base);
     const wanted = rollupDimensions(base, this.#statisticsKeys[base]);
     const have = f.rollup.dimensions;
-    if (bytes === undefined || (have.length === wanted.length && have.every((d, i) => d === wanted[i]))) {
+    // A widget-only key the rollup lacks but whose statistics the file records was weighed and dropped by the writer
+    // that wrote it (`#rollupOf`; the statistics of a key a writer never listed are absent): weighing it again would
+    // decode the partition on every merge only to drop it again.
+    const widget = new Set(this.#widgetKeys[base]);
+    const have0 = new Set(have);
+    const need = wanted.filter((d) => have0.has(d) || !(widget.has(d) && f.values[d] !== undefined));
+    if (bytes === undefined || (have.length === need.length && have.every((d, i) => d === need[i]))) {
       return null;
     }
     const names = TABLE_COLUMNS[base].map((c) => c.name);
@@ -993,13 +1068,11 @@ class PartitionSession implements WriterSession {
         if (into !== undefined) for (const v of cols[i] ?? []) into.push(v);
       }
     }
-    const made = this.#rollupOf(base, { length, cells: Object.fromEntries(cells) });
+    const made = this.#rollupOf(base, { length, cells: Object.fromEntries(cells) }, bytes.length);
     if (made === null) return 'refused';
     for (const [i, row] of made.rows.entries()) checkRow(table, row, i);
     const batch = batchFromRows(table, made.rows);
-    const out = encodeColumns(table, batch, {
-      rowGroupRows: this.#deps.rowGroupRows ?? this.#config.writer.rowGroupRows,
-    });
+    const out = encodeColumns(table, batch, this.#encodeOptions());
     return {
       bytes: out,
       file: {
@@ -1174,6 +1247,7 @@ class PartitionSession implements WriterSession {
         nextPartition: n,
         rowGroupRows: this.#deps.rowGroupRows ?? this.#config.writer.rowGroupRows,
         statisticsKeys: this.#statisticsKeys,
+        widgetKeys: this.#widgetKeys,
         facetValueCap: this.#config.writer.facetValueCap,
         format: this.#config.writer.format,
         // the group's first and last partition numbers, not every number between (a group is made by time)
