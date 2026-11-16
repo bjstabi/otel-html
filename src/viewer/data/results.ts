@@ -102,6 +102,15 @@ export interface LogQuery {
   facetKeys: readonly string[] | null;
 }
 
+/** The logs `logPoints` plots: the filter of a `LogQuery`, one sorted statement of up to `limit` logs. */
+export type LogPointsQuery = Pick<LogQuery, 'condition' | 'text' | 'window' | 'sort' | 'limit'>;
+
+/** One log of a scatter: its time (relative ns) and severity number. */
+export interface LogPoint {
+  time: number;
+  severity: number;
+}
+
 export type LogQueryResult = {
   /** Matched logs; traces in traces mode. */
   total: number;

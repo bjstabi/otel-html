@@ -23,6 +23,7 @@ import {
   type LogTraceSort,
   logByRefQuery,
   logCountQuery,
+  logPointsQuery,
   logRowsQuery,
   logTimelineQuery,
   logTotalQuery,
@@ -92,6 +93,7 @@ import { durationAxis } from '../traces/views.js';
 import type { DataSource, TraceDetail } from './data-source.js';
 import { metricMethods } from './duckdb-metrics.js';
 import { afterCursor, inReadOrder, readPage } from './list-pages.js';
+import { pagesLogList, pagesSpanList } from './list-paging.js';
 import { checkSurroundingCount, type LogRef, type LogRow, refParts } from './log-query.js';
 import {
   type LogRowEntry,
@@ -109,6 +111,8 @@ import type { QueryEngine } from './query-engine.js';
 import { dropResidualTable, idTable, residualRows, servedResidual } from './residual.js';
 import type {
   LogNeed,
+  LogPoint,
+  LogPointsQuery,
   LogQuery,
   LogQueryResult,
   PatternQuery,
@@ -560,7 +564,13 @@ export function createDuckDbDataSource(opts: {
 
     /** A start-sorted trace list that pages: any list the trace-by-start rules of a long window do not take over. */
     const pagesTraces = (sort: TraceSort): boolean =>
-      sort.column === 'start' && residual === null && !(rule.long && filter.window !== null);
+      pagesSpanList({
+        mode: 'traces',
+        sortColumn: sort.column,
+        residual,
+        idTable: useIds,
+        longWindow: rule.long && filter.window !== null,
+      });
 
     /**
      * A page of the start-sorted trace list (no long window, no browser condition): `q.limit` traces. The first page
@@ -796,7 +806,16 @@ export function createDuckDbDataSource(opts: {
                 tables: interned.tables,
                 total: exhausted ? rows.length : Math.max(candidates, rows.length),
               });
-            } else if (spanSort !== null && spanSort.column === 'start') {
+            } else if (
+              spanSort !== null &&
+              pagesSpanList({
+                mode: 'spans',
+                sortColumn: spanSort.column,
+                residual,
+                idTable: useIds,
+                longWindow: false,
+              })
+            ) {
               const [paged, total] = await Promise.all([spanPage(f, spanSort), rowsTotal(f)]);
               const decoded = spanRows(paged.table, epoch, paged.shown);
               Object.assign(result, { ...decoded, total, next: paged.next });
@@ -1071,6 +1090,32 @@ export function createDuckDbDataSource(opts: {
     p.files.logs === undefined ? [] : [p.files.logs.path],
   );
 
+  async function logPoints(q: LogPointsQuery, signal?: AbortSignal): Promise<readonly LogPoint[]> {
+    throwIfAborted(signal);
+    checkLimit(q.limit);
+    const sort = sortOf(LOG_SORTS, q.sort, 'logs');
+    const rule = rules(q.window);
+    const { filter, residual } = buildFilter({
+      manifest,
+      table: 'logs',
+      condition: q.condition,
+      text: q.text,
+      window: rule.window,
+      long: rule.long,
+    });
+    if (residual !== null) {
+      // terms only the browser can evaluate need whole rows: the list's own statement, reduced to its two fields
+      const r = await queryLogs({ ...q, mode: 'logs', needs: ['rows'], facetKeys: [] }, signal);
+      return r.mode === 'logs' ? r.rows.map((x) => ({ time: x.time, severity: x.log.severityNumber })) : [];
+    }
+    if (filter.files.files.length === 0) return [];
+    const table = await read(['logs'], filter.files, logPointsQuery(filter, sort, q.limit), signal);
+    return rowsOf(table).map((r) => ({
+      time: toNumber(cell(r, 'time_rel'), 'time_rel'),
+      severity: toNumber(cell(r, 'severity_number') ?? 0, 'severity_number'),
+    }));
+  }
+
   async function queryLogs(q: LogQuery, signal?: AbortSignal): Promise<LogQueryResult> {
     throwIfAborted(signal);
     checkLimit(q.limit);
@@ -1240,7 +1285,10 @@ export function createDuckDbDataSource(opts: {
               if (logSort.column === 'time' && !exhausted) candidates = await rowsTotal(f);
               const total = exhausted ? rows.length : Math.max(candidates, rows.length);
               Object.assign(result, { rows: rows.map((e) => e.row), total, matched: total });
-            } else if (logSort !== null && logSort.column === 'time') {
+            } else if (
+              logSort !== null &&
+              pagesLogList({ mode: 'logs', sortColumn: logSort.column, residual, idTable: useIds })
+            ) {
               const [paged, total] = await Promise.all([logPage(f, logSort), rowsTotal(f)]);
               Object.assign(result, {
                 rows: logRows(paged.table, q.limit).rows,
@@ -1611,6 +1659,7 @@ export function createDuckDbDataSource(opts: {
     },
     services,
     queryLogs,
+    logPoints,
     getLog,
     traceLogs,
     surroundingLogs,

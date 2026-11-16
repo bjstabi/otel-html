@@ -4,7 +4,15 @@ import { parseUnixNanos, type SpanId, type TraceId } from '../../model/ids.js';
 import { Chart } from '../components/chart.js';
 import { ColumnPicker } from '../components/column-picker.js';
 import { ExplorerControls } from '../components/explorer-controls.js';
-import { ErrorCard, NoMatch, PILL, parseSort, QueryNote, sortableOf } from '../components/explorer-states.js';
+import {
+  ErrorCard,
+  NoMatch,
+  PageStatus,
+  PILL,
+  parseSort,
+  QueryNote,
+  sortableOf,
+} from '../components/explorer-states.js';
 import {
   downloadBlob,
   type ExportFormat,
@@ -20,6 +28,7 @@ import { HistogramCard, SPAN_STATUS_SERIES } from '../components/histogram-card.
 import { ResultsTable, type SortState } from '../components/results-table.js';
 import { copyWidgetItem } from '../dashboards/copy-widget.js';
 import type { DataSource } from '../data/data-source.js';
+import { pagesSpanList, residualOf } from '../data/list-paging.js';
 import { manifestRange } from '../data/manifest-range.js';
 import {
   CORE_SPAN_FACET_KEYS,
@@ -32,6 +41,7 @@ import { isLongWindow } from '../data/time-window.js';
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome, useWidgetCopy } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
+import { pageSize, useListPages } from '../state/list-pages.js';
 import {
   PAGE_OPTIONS,
   type PageMode,
@@ -173,7 +183,16 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       window: sel.window,
       mode,
       sort: { column: sort.column, dir: sort.dir },
-      limit: manifest.config.viewer.listCap,
+      // a start-sorted list reads a page and loads the next on scroll; any other is one statement
+      limit: pagesSpanList({
+        mode,
+        sortColumn: sort.column,
+        residual: residualOf(sel.condition, 'span'),
+        idTable: false,
+        longWindow: long && sel.window !== null,
+      })
+        ? pageSize(manifest.config.viewer.listCap)
+        : manifest.config.viewer.listCap,
       // Grouping is a presentation concern in M1: group-by views are built from the result's facets.
       groupBy: null,
       measureBy: null,
@@ -210,10 +229,17 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       ).facets,
     shown?.facets ?? null,
   );
-  const result = useMemo(
-    () => (shown === null || loadedFacets === null ? shown : { ...shown, facets: loadedFacets }),
-    [shown, loadedFacets],
+  const pages = useListPages(shown, JSON.stringify(query), manifest.config.viewer.listCap, (cursor, signal) =>
+    // facets, the timeline and the durations belong to the first page and stay as they are while scrolling
+    dataSource.querySpans({ ...query, cursor, needs: ['rows'] }, signal),
   );
+  const result = useMemo(() => {
+    if (shown === null) return null;
+    const rows = pages.rows === shown.rows ? shown.rows : pages.rows;
+    return loadedFacets === null && rows === shown.rows
+      ? shown
+      : { ...shown, rows, facets: loadedFacets ?? shown.facets };
+  }, [shown, loadedFacets, pages.rows]);
 
   const clearFilters = (): void => {
     sel.clear('condition');
@@ -235,7 +261,8 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
             : `Export is unavailable because the last query failed: ${state.message}`,
         );
       }
-      const all = state.result.rows;
+      // what the list holds: the first page and the pages scrolled to
+      const all = pages.rows;
       const exportedSpans = all.filter(isSpanRow);
       let ctx: Parameters<typeof exportRows>[2];
       if (format === 'otlp-json') {
@@ -441,6 +468,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                           selectedId={sel.spanId}
                           epoch={epoch}
                           colors={colors}
+                          onEndReached={pages.loadMore}
                         />
                       ) : (
                         <ResultsTable
@@ -455,8 +483,10 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                           epoch={epoch}
                           colors={colors}
                           serviceShare={dataSource.serviceShare}
+                          onEndReached={pages.loadMore}
                         />
                       )}
+                      <PageStatus loading={pages.loading} error={pages.error} />
                     </div>
                   )}
                 </div>

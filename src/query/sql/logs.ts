@@ -124,6 +124,23 @@ export function logRowsQuery(
     .limit(limit);
 }
 
+/**
+ * (`time_rel`, `severity_number`) of the filtered logs in the order of `logRowsQuery`, up to `limit`: the two columns a
+ * scatter plots, and no others, so it reads no body or attribute.
+ */
+export function logPointsQuery(f: SqlFilter, sort: LogSort, limit: number): Query {
+  return Query.from('logs')
+    .select({ time_rel: effectiveRel(f.epoch), severity_number: column('severity_number') })
+    .where(...whereOf(f, 'logs'))
+    .orderby(
+      dirOf(LOG_SORT[sort.column], sort.dir),
+      asc(sql`time_rel`),
+      asc('filename'),
+      asc('file_row_number'),
+    )
+    .limit(limit);
+}
+
 /** One row, `total`: the number of filtered logs, from a statement that reads no log row. */
 export function logTotalQuery(f: SqlFilter): Query {
   return Query.from('logs')

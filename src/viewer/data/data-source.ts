@@ -6,6 +6,8 @@ import type { FacetValueKind } from '../components/filter-tokens.js';
 import type { LogRef, LogRow } from './log-query.js';
 import type { MetricMethods } from './metric-results.js';
 import type {
+  LogPoint,
+  LogPointsQuery,
   LogQuery,
   LogQueryResult,
   PatternQuery,
@@ -58,6 +60,8 @@ export interface DataSource extends MetricMethods {
     signal?: AbortSignal,
   ): Promise<ServicesResult>;
   queryLogs(q: LogQuery, signal?: AbortSignal): Promise<LogQueryResult>;
+  /** Time and severity of up to `q.limit` logs in `q.sort` order, from one statement that reads those two columns. */
+  logPoints(q: LogPointsQuery, signal?: AbortSignal): Promise<readonly LogPoint[]>;
   /** Rejects with a `usage` error when the report has no such log. */
   getLog(ref: LogRef): Promise<LogRow>;
   /** The trace's logs, time-ascending (ref tiebreak); [] when there are none. Works for traces without spans. */

@@ -83,3 +83,19 @@ export function NoMatch(props: {
     </section>
   );
 }
+
+/** Under a list that loads pages as the reader scrolls: that the next page is on its way, or why it failed. */
+export function PageStatus(props: { loading: boolean; error: string | null }): JSX.Element | null {
+  if (props.error !== null)
+    return (
+      <p role="alert" className="text-sm text-ink-2">
+        The next page could not be loaded: {props.error}. Scroll again to retry.
+      </p>
+    );
+  if (!props.loading) return null;
+  return (
+    <p role="status" className="text-sm text-muted">
+      Loading more
+    </p>
+  );
+}

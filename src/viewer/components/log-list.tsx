@@ -40,6 +40,8 @@ export function LogList(props: {
   hasTrace?: TraceCheck;
   /** Refs to mark as matches (accent rule, `data-match`); with the set given, the other rows are muted. */
   highlighted?: ReadonlySet<string>;
+  /** The reader scrolled near the last row (see `ResultsTable`'s `onEndReached`). */
+  onEndReached?: () => void;
 }): JSX.Element {
   const [lines, setLines] = useState<number>(1);
   const { extraColumns: extra, hasTrace, highlighted } = props;
@@ -86,6 +88,7 @@ export function LogList(props: {
           : { rowMark: (r: LogRow) => (highlighted.has(r.ref) ? ('match' as const) : ('muted' as const)) })}
         {...(props.height === undefined ? {} : { height: props.height })}
         {...(props.moveEnabled === undefined ? {} : { moveEnabled: props.moveEnabled })}
+        {...(props.onEndReached === undefined ? {} : { onEndReached: props.onEndReached })}
       />
     </div>
   );

@@ -117,7 +117,10 @@ describe('the pages ask only catalogued requests', () => {
 const PAGE_SERIAL_MAX: Readonly<Record<string, number>> = {
   '#/dashboards/ci': 95,
   '#/traces?mode=traces': 54,
-  '#/traces': 28,
+  // 29 measured: the first page asks 201 rows, which DuckDB plans as a TOP_N with a dynamic filter pushed into the scan
+  // (the 10,001 rows of the one statement before paging were a full sort); the same bytes, read in an order that breaks
+  // four read-ahead streams on these small files. 29 + 10 % rounded up.
+  '#/traces': 32,
   '#/logs': 31,
   '#/metrics': 14,
   [TRACE_PAGE]: 54,

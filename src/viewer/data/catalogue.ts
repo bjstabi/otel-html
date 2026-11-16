@@ -573,6 +573,25 @@ export const CATALOGUE = [
       run: (ds, ctx) => ds.resourceValues('service.name', { window: ctx.window }),
     }),
   ),
+  ...WINDOWED.map(
+    (v): Entry<'logPoints'> => ({
+      id: `logs.points.${v.suffix}`,
+      family: 'rows page',
+      method: 'logPoints',
+      builders: ['logPointsQuery'],
+      spacing: v.spacing,
+      window: true,
+      // the scatter's own statement: time and severity of up to `listCap` logs, the newest first
+      run: (ds, ctx) =>
+        ds.logPoints({
+          condition: null,
+          text: '',
+          window: ctx.window,
+          sort: { column: 'time', dir: 'desc' },
+          limit: 10_000,
+        }),
+    }),
+  ),
   point({
     id: 'patterns',
     family: 'patterns',
@@ -870,6 +889,13 @@ const BASELINE: Record<string, Declared> = {
     allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
   }),
   'logs.rows.long': decl(['fixed', 'files', 'files'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
+  // the scatter's own statement: time and severity of up to `listCap` logs, no row of the list
+  'logs.points.short': decl(['fixed', 'files', 'files'], {
+    allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
+  }),
+  'logs.points.long': decl(['fixed', 'files', 'files'], {
+    allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
+  }),
   'logs.traces.short': decl(['fixed', 'files', 'files'], {
     allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
   }),

@@ -248,6 +248,7 @@ export function fusionSource(over: Partial<DataSource> = {}): DataSource {
     ...dataSourceOf(fixtureManifest),
     querySpans: (q) => Promise.resolve(spanResult(q)),
     queryLogs: (q) => Promise.resolve(logResult(q)),
+    logPoints: () => Promise.resolve([]),
     getTrace: () => Promise.resolve({ ...detailOf(SPANS), traceId: FIXTURE_TRACE }),
     hasTrace: () => Promise.resolve(true),
     metricPoints: () => Promise.resolve(fixturePoints()),
