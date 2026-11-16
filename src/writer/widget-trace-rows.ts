@@ -116,10 +116,14 @@ export class WidgetTraceSet {
       const s = starts[i];
       if (typeof s === 'bigint' && (origin === null || s < origin)) origin = s;
     }
-    if (origin === null) return;
+    if (origin === null) {
+      // No decoded start (a path that returned numbers): the offsets cannot be computed, so the set is not exact.
+      if (batch.length > 0) this.#exact = false;
+      return;
+    }
     for (let i = 0; i < batch.length; i++) {
       for (const t of [starts[i], ends[i]])
-        if (typeof t === 'bigint' && t - origin > MAX_SAFE) this.#exact = false;
+        if (typeof t === 'bigint' && (t - origin > MAX_SAFE || origin - t > MAX_SAFE)) this.#exact = false;
     }
     // Rows of one resource and scope are many: their JSON is decoded once per distinct value in this chunk.
     const memo = new Map<string, DecodedShared>();

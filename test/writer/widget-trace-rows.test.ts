@@ -300,6 +300,30 @@ describe('WidgetTraceSet', () => {
     expect(far.exact).toBe(false);
   });
 
+  test('a chunk whose end lies more than 2^53 ns before its smallest start is not exact', async () => {
+    const set = new WidgetTraceSet(await ciIndex());
+    set.add(batchOf({ resource: RUN, end: EPOCH + 10n - 2n ** 53n - 10n }));
+    expect(set.exact).toBe(false);
+  });
+
+  test('a chunk with no bigint start is not exact', async () => {
+    const set = new WidgetTraceSet(await ciIndex());
+    const whole = batchOf({ resource: RUN });
+    const cell = (name: string): readonly unknown[] =>
+      Object.entries(whole.cells).find(([k]) => k === name)?.[1] ?? [];
+    const numbers = (c: readonly unknown[]): unknown[] =>
+      c.map((v) => (typeof v === 'bigint' ? Number(v) : v));
+    set.add({
+      length: whole.length,
+      cells: {
+        ...whole.cells,
+        start_time_unix_nano: numbers(cell('start_time_unix_nano')),
+        end_time_unix_nano: numbers(cell('end_time_unix_nano')),
+      },
+    });
+    expect(set.exact).toBe(false);
+  });
+
   test('compileWidgetIndex is null without a condition and describes the rest', async () => {
     expect(compileWidgetIndex({ conditions: [], variables: ['k'], notRowLocal: [] })).toBeNull();
     const index = await ciIndex();
