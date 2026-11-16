@@ -209,8 +209,9 @@ export function widgetOnlyKeysFor(
 /**
  * `entry` with every key of `keys` it lacks (absent: "not computed") computed by decoding the file: values
  * already recorded are kept, a recorded `null` ("over the cap") too, so it is not decoded again. A key stays `null` when its distinct values exceed `cap` (as `fileStatistics` applies it)
- * or the table cannot answer it. `read` is called only when a key is missing, and the file is streamed, unless `decoded`
- * gives the file's rows whole (a caller that holds them for another use): they are then counted in one batch.
+ * or the table cannot answer it. `read` is called only when a key is missing, and the file is streamed, unless `chunks`
+ * gives the file's rows (a caller that feeds them to another consumer too, or holds them whole): `chunks` is then always
+ * iterated, even with no key missing, and `read` is not called.
  */
 export async function completeStatistics(
   table: Table,
@@ -219,29 +220,29 @@ export async function completeStatistics(
   cap: number,
   read: () => Promise<Uint8Array>,
   guard?: PanicGuard,
-  decoded?: () => Promise<ColumnBatch>,
+  chunks?: () => AsyncIterable<ColumnBatch>,
 ): Promise<PartitionFile> {
   const missing = keys.filter((k) => entry.values[k] === undefined);
-  if (missing.length === 0) return entry;
-  if (decoded !== undefined) {
-    const st = fileStatistics(table, await decoded(), missing, cap);
-    const values = { ...entry.values };
-    for (const k of missing) values[k] = st.values[k] ?? null;
-    return { ...entry, values };
-  }
+  if (missing.length === 0 && chunks === undefined) return entry;
   const sets = new Map<string, Set<string> | null>(missing.map((k) => [k, new Set<string>()]));
-  const bytes = await read();
   const names = TABLE_COLUMNS[table].map((c) => c.name);
-  for await (const cols of readColumns(
-    table,
-    new Blob([bytes as Uint8Array<ArrayBuffer>]),
-    entry.path,
-    undefined,
-    guard,
-  )) {
-    const cells: Record<string, unknown[]> = {};
-    for (const [i, name] of names.entries()) cells[name] = cols[i] ?? [];
-    const st = fileStatistics(table, { length: cols[0]?.length ?? 0, cells }, missing, cap);
+  const streamed = async function* (): AsyncGenerator<ColumnBatch> {
+    const bytes = await read();
+    for await (const cols of readColumns(
+      table,
+      new Blob([bytes as Uint8Array<ArrayBuffer>]),
+      entry.path,
+      undefined,
+      guard,
+    )) {
+      const cells: Record<string, unknown[]> = {};
+      for (const [i, name] of names.entries()) cells[name] = cols[i] ?? [];
+      yield { length: cols[0]?.length ?? 0, cells };
+    }
+  };
+  for await (const batch of chunks === undefined ? streamed() : chunks()) {
+    if (missing.length === 0) continue;
+    const st = fileStatistics(table, batch, missing, cap);
     for (const k of missing) {
       const set = sets.get(k);
       if (set === null || set === undefined) continue;

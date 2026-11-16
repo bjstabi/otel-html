@@ -329,6 +329,7 @@
     "test/writer/merge-format6.test.ts": 0.9,
     "test/writer/merge-rollups.test.ts": 0.4,
     "test/writer/merge-statistics.test.ts": 0.5,
+    "test/writer/merge-widget-index.test.ts": 1.5,
     "test/writer/merge.test.ts": 1.1,
     "test/writer/metric-memory.test.ts": 0.1,
     "test/writer/node-fs-short-write.test.ts": 0.1,
@@ -347,7 +348,6 @@
     "test/writer/upgrade-v4.test.ts": 0.8,
     "test/writer/upgrade.test.ts": 0.9,
     "test/writer/wasm-panic.test.ts": 0.1,
-    "test/writer/merge-widget-index.test.ts": 1.5,
     "test/writer/widget-index-flush.test.ts": 1.5,
     "test/writer/widget-trace-rows.test.ts": 0.5
   },

@@ -5,13 +5,16 @@ import { join } from 'node:path';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { ResolvedConfig } from '../../src/config/schema.js';
 import { widgetTraceConditions } from '../../src/config/widget-traces.js';
+import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../../src/format/data-file.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
+import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { mergeReports } from '../../src/writer/merge.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { openSession } from '../../src/writer/session.js';
+import { WidgetTraceSet } from '../../src/writer/widget-trace-rows.js';
 import { createTestWriter, testConfig } from '../../test-support/writer-deps.js';
 import { manifestOf, tableRowsOf } from './helpers.js';
-import { type CiSpan, ciConfig, ciRequest, filler } from './widget-index-helpers.js';
+import { type CiSpan, ciConfig, ciRequest, filler, T0 } from './widget-index-helpers.js';
 
 const reads = vi.hoisted(() => ({ tables: [] as string[] }));
 vi.mock('../../src/format/parquet/stream.js', async (orig) => {
@@ -74,6 +77,17 @@ async function configWithoutTraces(): Promise<ResolvedConfig> {
       dashboard: { ...d.dashboard, widgets: d.dashboard.widgets.filter((w) => w.type !== 'traces') },
     })),
   };
+}
+
+/** The report at `out` as an older writer left it: the dashboards listed, no widget_traces file. */
+async function dropIndex(w: ReturnType<typeof createTestWriter>, out: string): Promise<void> {
+  const key = `${out}/data/manifest.js`;
+  const raw = reviveDataJson(unwrapDataFile(w.fs.snapshot().get(key) ?? '', MANIFEST_KEY)) as {
+    partitions: { files: Record<string, unknown> }[];
+  };
+  for (const p of raw.partitions) Reflect.deleteProperty(p.files, 'widget_traces');
+  await w.fs.writeTextAtomic(key, wrapDataFile(MANIFEST_KEY, raw));
+  expect(manifestOf(w, out).partitions[0]?.files.widget_traces).toBeUndefined();
 }
 
 beforeEach(() => {
@@ -217,5 +231,89 @@ describe('a merge and the widget trace index of the partitions it copies', () =>
     expect(told(w)[0]?.msg).toBe(
       'the widget trace index of this partition is not written: it would weigh over 5 % of the spans file',
     );
+  });
+});
+
+/** A traces widget on the scope alone: no statistics key beyond the defaults, so the copied rollups are current. */
+const scopeConfig = () =>
+  testConfig({
+    dashboards: [
+      {
+        id: 'd',
+        title: 'D',
+        widgets: [
+          { type: 'traces', query: 'instrumentation_scope.name == "otel-html-ci"', x: 0, y: 0, w: 6, h: 6 },
+        ],
+      },
+    ],
+  });
+
+describe('a merge and the memory of its copy', () => {
+  test('a spans file of several chunks reaches the index one chunk at a time', async () => {
+    const config = scopeConfig();
+    const w = createTestWriter();
+    const small = openSession(
+      { ...w.deps, rowGroupRows: 1_000 },
+      { out: 'in', config: testConfig(), mode: 'replace' },
+    );
+    const s = await small;
+    await s.add(ciRequest([{ i: 1 }, ...filler(3000)]), 'a.json');
+    await s.flush();
+    await dropIndex(w, 'in');
+    const sizes: number[] = [];
+    const add = WidgetTraceSet.prototype.add;
+    const spy = vi.spyOn(WidgetTraceSet.prototype, 'add').mockImplementation(function (
+      this: WidgetTraceSet,
+      b,
+    ) {
+      sizes.push(b.length);
+      add.call(this, b);
+    });
+    try {
+      await merge(w, 'in', config);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(sizes.length).toBeGreaterThan(1);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(1_000);
+    expect(sizes.reduce((a, b) => a + b, 0)).toBe(3001);
+    expect(manifestOf(w, 'm').partitions[0]?.files.widget_traces?.rows).toBe(1);
+  });
+});
+
+describe('a merge and the exactness and the dashboards of the index', () => {
+  test('two matching spans 2^53 + 10 ns apart give no widget_traces and one warning', async () => {
+    const config = await ciConfig();
+    const w = createTestWriter();
+    const far = T0 + BigInt(Number.MAX_SAFE_INTEGER);
+    const s = await openSession(w.deps, { out: 'in', config: testConfig(), mode: 'replace' });
+    await s.add(ciRequest([{ i: 1, scope: 'other', start: T0, end: T0 + 1n }]), 'a.json');
+    await s.add(
+      ciRequest([
+        { i: 2, trace: 2, start: T0 - 10n, end: T0 - 5n },
+        { i: 3, trace: 3, start: far - 5n, end: far },
+      ]),
+      'b.json',
+    );
+    await s.close();
+    await merge(w, 'in', config);
+    expect(manifestOf(w, 'm').partitions[0]?.files.widget_traces).toBeUndefined();
+    expect(told(w)).toHaveLength(1);
+    expect(told(w)[0]?.msg).toBe(
+      'the widget trace index of this partition is not written: its span times are more than 2^53 ns apart',
+    );
+  });
+
+  test('a merge whose config has no dashboards indexes the source report dashboards', async () => {
+    const config = await ciConfig();
+    const w = createTestWriter();
+    await write(w, 'ref', config);
+    await write(w, 'in', config);
+    await dropIndex(w, 'in');
+    await merge(w, 'in', testConfig());
+    expect(manifestOf(w, 'm').partitions[0]?.files.widget_traces?.widgetIndex).toEqual(
+      manifestOf(w, 'ref').partitions[0]?.files.widget_traces?.widgetIndex,
+    );
+    expect(tableRowsOf(w, 'm', 'widget_traces')).toEqual(tableRowsOf(w, 'ref', 'widget_traces'));
   });
 });
