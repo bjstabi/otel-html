@@ -297,6 +297,7 @@
     "test/writer/assets-cleanup.test.ts": 0.6,
     "test/writer/background-checkpoint.test.ts": 0.8,
     "test/writer/bun-embedded-assets.test.ts": 0.1,
+    "test/writer/compaction-widget-keys.test.ts": 0.6,
     "test/writer/compaction.test.ts": 6.3,
     "test/writer/crash.test.ts": 0.6,
     "test/writer/dedupe.test.ts": 0.1,
