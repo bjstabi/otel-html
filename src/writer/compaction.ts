@@ -945,14 +945,26 @@ export async function compactPartitions(
           const sized = (r: readonly Row[]): number =>
             encodeColumns(rollupTable, batchFromRows(rollupTable, r), { rowGroupRows: opts.rowGroupRows })
               .length;
-          if (
-            wideRows !== null &&
-            rollupSumsFit(wideRows) &&
-            rollupAllowed(wideRows.length, baseRows) &&
-            rollupKeyAllowed(sized(wideRows) - sized(rows), baseBytes)
-          ) {
+          let why: string | null = null;
+          let rollupBytes: number | undefined;
+          let rollupBytesWithout: number | undefined;
+          if (wideRows === null || !rollupSumsFit(wideRows) || !rollupAllowed(wideRows.length, baseRows)) {
+            why = 'does not shrink';
+          } else {
+            rollupBytes = sized(wideRows);
+            rollupBytesWithout = sized(rows);
+            if (!rollupKeyAllowed(rollupBytes - rollupBytesWithout, baseBytes)) why = 'too large';
+          }
+          if (why === null) {
             rows = wideRows;
             description = plan.wide;
+          } else {
+            for (const key of plan.wide.dimensions.filter((d) => !plan.description.dimensions.includes(d))) {
+              opts.warn?.(
+                `the ${ROLLUP_OF[rollupTable]} rollup of the compacted partition does not group by ${key}, which a widget condition tests: the rollup would be ${why}`,
+                { key, rollupRows: wideRows?.length, baseRows, rollupBytes, rollupBytesWithout, baseBytes },
+              );
+            }
           }
         }
         if (rows === null) {

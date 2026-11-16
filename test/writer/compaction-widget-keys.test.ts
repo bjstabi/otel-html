@@ -72,6 +72,9 @@ describe('compacting flushes that disagree on a key only a widget condition test
     expect(file).toBeDefined();
     const dimensions = file?.rollup?.dimensions ?? [];
     expect(dimensions).not.toContain(WK);
+    const told = w.logs.filter((l) => l.level === 'warn' && l.msg.includes(WK) && l.msg.includes('compact'));
+    expect(told).toHaveLength(1);
+    expect(told[0]?.msg).toContain('too large');
     const raw = tableRowsOf(w, 'r', 'spans');
     expect(raw).toHaveLength(4_000);
     expect(canon(addRollupRows(tableRowsOf(w, 'r', 'span_rollups'), []))).toEqual(
