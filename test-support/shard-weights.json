@@ -118,6 +118,7 @@
     "test/query/sql/ottl-equivalence.test.ts": 2.7,
     "test/query/sql/ottl.test.ts": 1.5,
     "test/query/sql/points.test.ts": 9.5,
+    "test/query/sql/cutoff.test.ts": 0.2,
     "test/query/sql/prune.test.ts": 0.2,
     "test/query/sql/residual.test.ts": 0.1,
     "test/query/sql/rollup.test.ts": 1.9,
