@@ -26,19 +26,15 @@ const dashboardWith = (widgets: object[]) =>
   }).dashboards;
 
 describe('widgetConditionKeys', () => {
-  test('the CI dashboard names the step, task run id and result keys', async () => {
+  test('the CI dashboard names the step key, and not the keys only its traces widget tests', async () => {
     const keys = widgetConditionKeys(await ciDashboards());
-    expect(keys).toEqual(
-      expect.arrayContaining([
-        'attr:github.job.step.number',
-        'attr:cicd.pipeline.task.run.id',
-        'attr:cicd.pipeline.task.run.result',
-      ]),
-    );
+    expect(keys).toContain('attr:github.job.step.number');
+    expect(keys).not.toContain('attr:cicd.pipeline.task.run.id');
+    expect(keys).not.toContain('attr:cicd.pipeline.task.run.result');
     expect(keys).toEqual([...new Set(keys)].sort());
   });
 
-  test('toplist, table and traces conditions by equality or presence, resource keys included', () => {
+  test('toplist and table conditions by equality or presence, resource keys included', () => {
     const keys = widgetConditionKeys(
       dashboardWith([
         {
@@ -55,10 +51,10 @@ describe('widgetConditionKeys', () => {
           ...layout,
           query: 'attributes["b"] == "y" or attributes["a"] == 1',
         },
-        { type: 'traces', ...layout, query: 'IsRootSpan() or attributes["c"] != "z"' },
+        { type: 'traces', ...layout, query: 'attributes["c"] != "z"' },
       ]),
     );
-    expect(keys).toEqual(['attr:a', 'attr:b', 'attr:c', 'resource:r']);
+    expect(keys).toEqual(['attr:a', 'attr:b', 'resource:r']);
   });
 
   test('a metric widget and ordering comparisons contribute nothing', () => {

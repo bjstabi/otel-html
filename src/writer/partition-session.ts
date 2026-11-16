@@ -1037,7 +1037,13 @@ class PartitionSession implements WriterSession {
     const bytes = baseBytes.get(base);
     const wanted = rollupDimensions(base, this.#statisticsKeys[base]);
     const have = f.rollup.dimensions;
-    if (bytes === undefined || (have.length === wanted.length && have.every((d, i) => d === wanted[i]))) {
+    // A widget-only key the rollup lacks but whose statistics the file records was weighed and dropped by the writer
+    // that wrote it (`#rollupOf`; the statistics of a key a writer never listed are absent): weighing it again would
+    // decode the partition on every merge only to drop it again.
+    const widget = new Set(this.#widgetKeys[base]);
+    const have0 = new Set(have);
+    const need = wanted.filter((d) => have0.has(d) || !(widget.has(d) && f.values[d] !== undefined));
+    if (bytes === undefined || (have.length === need.length && have.every((d, i) => d === need[i]))) {
       return null;
     }
     const names = TABLE_COLUMNS[base].map((c) => c.name);

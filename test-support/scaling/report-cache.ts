@@ -12,6 +12,7 @@ import { BASE, CROSS, isMerged, type Shape, shapeKey, stepsOf } from './generato
  */
 export const REPORT_CACHE_SOURCES: readonly string[] = [
   'pnpm-lock.yaml',
+  '.github/otel-html-ci.yaml',
   'src/config/**',
   'src/format/**',
   'src/model/**',

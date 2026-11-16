@@ -379,8 +379,11 @@ export async function buildFreshReport(shape: Shape): Promise<ScalingReport> {
   const w = createTestWriter();
   w.deps.rowGroupRows = rowsPerGroup(shape);
   // the shipped CI dashboard: the writer keeps the attribute keys its widgets test in the rollups, as in the live report
-  const dashboards = (parse(readFileSync('.github/otel-html-ci.yaml', 'utf8')) as { dashboards: unknown[] })
-    .dashboards;
+  const dashboards = (
+    parse(readFileSync(join(import.meta.dirname, '../../.github/otel-html-ci.yaml'), 'utf8')) as {
+      dashboards: unknown[];
+    }
+  ).dashboards;
   const config = testConfig({
     dashboards: dashboards as ConfigInput['dashboards'],
     writer: {

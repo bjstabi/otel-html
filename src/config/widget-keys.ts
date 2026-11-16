@@ -2,8 +2,11 @@ import type { Expr, Value } from '../ottl/ast.js';
 import { parseCondition } from '../ottl/parse.js';
 import type { ResolvedDashboard } from './schema.js';
 
-/** The widget types whose `query` a rollup can answer when it keeps the attributes the condition tests. */
-const QUERY_WIDGETS = new Set(['toplist', 'table', 'traces']);
+/**
+ * The widget types whose `query` a rollup can answer when it keeps the attributes the condition tests. A traces widget
+ * lists traces from raw spans, so its keys would only bloat the statistics and the rollups.
+ */
+const QUERY_WIDGETS = new Set(['toplist', 'table']);
 
 /** `attr:<key>` / `resource:<key>` of a path reading one attribute by its first key; null for any other path. */
 function keyOf(v: Value): string | null {
@@ -41,7 +44,7 @@ function collect(e: Expr, out: Set<string>): void {
 }
 
 /**
- * The `attr:` / `resource:` statistics keys the conditions of the dashboards' toplist, table and traces widgets test
+ * The `attr:` / `resource:` statistics keys the conditions of the dashboards' toplist and table widgets test
  * by equality or presence (`attributes["k"] == "v"`, `... != nil`): the keys a rollup must group by to answer them.
  * A condition that does not parse contributes nothing (the config's own validation reports it). Sorted and distinct.
  */

@@ -70,3 +70,89 @@ describe('a merge and the rollups of the partitions it copies', () => {
     }
   });
 });
+
+describe('a merge and a key only a widget condition tests', () => {
+  const WK = 'attr:step.number';
+  const widgetConfig = () =>
+    testConfig({
+      dashboards: [
+        {
+          id: 'd',
+          title: 'D',
+          widgets: [
+            {
+              type: 'toplist',
+              signal: 'spans',
+              groupBy: 'span.name',
+              query: 'attributes["step.number"] != nil',
+              x: 0,
+              y: 0,
+              w: 6,
+              h: 6,
+            },
+          ],
+        },
+      ],
+    });
+  const spansWith = (n: number, value: (i: number) => string) =>
+    otlp(
+      traceRequest(
+        Array.from({ length: n }, (_, i) =>
+          span({
+            traceId: traceIdOf(i),
+            spanId: spanIdOf(i),
+            name: `step-${i % 4}`,
+            startTimeUnixNano: String(1_700_000_000_000_000_000n + BigInt(i)),
+            endTimeUnixNano: String(1_700_000_000_000_000_000n + BigInt(i) + 10n),
+            attributes: [{ key: 'step.number', value: { stringValue: value(i) } }],
+          }),
+        ),
+      ),
+    );
+  const write = async (
+    w: TestWriter,
+    out: string,
+    config: ReturnType<typeof testConfig>,
+    spans: number,
+    v: (i: number) => string,
+  ) => {
+    const s = await openSession(w.deps, { out, config, mode: 'replace' });
+    await s.add(spansWith(spans, v), 'in.json');
+    await s.close();
+  };
+  const mergeWith = (w: TestWriter, input: string) =>
+    mergeReports(w.deps, [input], { out: 'm', config: widgetConfig(), mode: 'replace' });
+  const small = (i: number): string => String(i % 5);
+  const unique = (i: number): string =>
+    `${(i * 2654435761).toString(16)}-${(i * 40503 + 7).toString(36)}-${'x'.repeat(i % 40)}`;
+
+  test('an older rollup without the key is computed again and equals the rollup written with it', async () => {
+    const w = createTestWriter();
+    await write(w, 'old', testConfig(), 2_000, small);
+    await write(w, 'new', widgetConfig(), 2_000, small);
+    expect(manifestOf(w, 'old').partitions[0]?.files.span_rollups?.rollup?.dimensions).not.toContain(WK);
+    await mergeWith(w, 'old');
+    const m = manifestOf(w, 'm').partitions[0]?.files.span_rollups;
+    expect(m?.rollup?.dimensions).toContain(WK);
+    const fresh = manifestOf(w, 'new').partitions[0]?.files.span_rollups;
+    const a = await w.fs.readBytes(`m/${m?.path}`);
+    const b = await w.fs.readBytes(`new/${fresh?.path}`);
+    expect(Array.from(a)).toEqual(Array.from(b));
+  });
+
+  test('a key dropped for size is not weighed again: the rollup is copied byte for byte, with no new warning', async () => {
+    const w = createTestWriter();
+    await write(w, 'dropped', widgetConfig(), 300, unique);
+    const was = manifestOf(w, 'dropped').partitions[0]?.files.span_rollups;
+    expect(was?.rollup?.dimensions).not.toContain(WK);
+    const warned = (): number => w.logs.filter((l) => l.level === 'warn' && l.msg.includes(WK)).length;
+    expect(warned()).toBe(1);
+    await mergeWith(w, 'dropped');
+    expect(warned()).toBe(1);
+    const now = manifestOf(w, 'm').partitions[0]?.files.span_rollups;
+    expect(now?.rollup).toEqual(was?.rollup);
+    const x = await w.fs.readBytes(`dropped/${was?.path}`);
+    const y = await w.fs.readBytes(`m/${now?.path}`);
+    expect(Array.from(y)).toEqual(Array.from(x));
+  });
+});
