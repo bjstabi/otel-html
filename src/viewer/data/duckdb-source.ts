@@ -610,9 +610,9 @@ export function createDuckDbDataSource(opts: {
                 pruned: none ? prunePartitions(manifest, 'traces', new Map(), null) : f.files,
                 need,
                 dir: sort.dir,
-                // a conditioned list reads main's files: a trace's rank is its earliest span's, which may lie in a file
-                // the spans cutoff leaves out
-                cutoff: none && !siblingsReadRaw(f),
+                // a trace's rank is its earliest span's, which may lie in a file that does not overlap the newest ones
+                // in time, so every file is read: a cutoff by time overlap cannot say which trace rows are complete
+                cutoff: false,
                 read: async (files) => {
                   const t = none
                     ? await read(['traces'], files, allTraceRowsQuery(f, sort, need, null, { files }), signal)
