@@ -203,6 +203,13 @@ export function asFormat5Manifest(
   };
 }
 
+/** Whether a partition entry carries a field only format 7 has: a `widget_traces` file or a recorded `attributeKeys`. */
+export function hasFormat7Fields(manifest: ManifestV4): boolean {
+  return manifest.partitions.some(
+    (p) => p.files.widget_traces !== undefined || Object.values(p.files).some((f) => 'attributeKeys' in f),
+  );
+}
+
 /**
  * The test stand-in for a format-5 report: every traces file of `dir` rewritten without its `service_share` column,
  * `serviceShare` dropped from the listing, and the manifest written as format 5 with the epoch `manifest` carries.
