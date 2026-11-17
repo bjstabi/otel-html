@@ -88,6 +88,7 @@ describe('declared classes', () => {
       'traces.list.long',
       'traces.list.short',
       'traces.list.statkey.long',
+      'traces.list.widget.long',
     ]);
     for (const entry of SMALL_TABLE_ENTRIES)
       expect(DECLARED[entry.id]?.aboveThreshold?.perRowGroup, entry.id).toBe(2);

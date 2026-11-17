@@ -105,6 +105,8 @@ export interface WidgetScope {
   highlightTrace: TraceId | null;
   /** The widget's own query, the variables and the trace filter, joined with `and`. */
   condition: string | null;
+  /** The variables bound for this widget's dashboard (what `condition` carries as `variableCondition`). */
+  vars: readonly VariableBinding[];
   /** The selection window does not overlap the page's time range, so it is not applied. */
   outside: boolean;
 }
@@ -239,6 +241,7 @@ export function scopeFor(
       traceFilter: null,
       highlightTrace: null,
       condition: own,
+      vars: ctx.vars,
       outside: false,
     };
   }
@@ -253,6 +256,7 @@ export function scopeFor(
     band: rule.band && !outside ? ctx.sel.t : null,
     traceFilter,
     highlightTrace: rule.trace === 'highlight' || rule.trace === 'resources' ? ctx.sel.trace : null,
+    vars: ctx.vars,
     condition: andConditions(own, traceFilter === null ? null : traceCondition(traceFilter)),
     outside,
   };

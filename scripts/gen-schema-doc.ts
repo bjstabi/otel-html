@@ -63,7 +63,9 @@ const PARTITION_FILE_FIELDS = {
   serviceShare:
     'format 6, `traces` files only, optional: `true` when the file has the `service_share` column, so its rows may carry a share (a row that does not, such as a trace compacted from a format-5 input, is null and a reader falls back to the spans; see [`service_share`](#service_share))',
   widgetIndex:
-    'format 7, `widget_traces` files only, required: `{ conditions, variables }`, the sorted condition hashes and `var:` keys the file covers',
+    "format 7, `widget_traces` files only, required: `{ evaluator?, conditions, variables }`, the sorted condition hashes and `var:` keys the file covers, and the `evaluator` version of the OTTL evaluation that wrote them (a number; a merge copies the file, and the viewer reads it, only when it equals the reader's own, otherwise the traces are computed from the spans; absent in a report written before the field, which counts as a mismatch)",
+  attributeKeys:
+    "format 7, `spans` and `logs` files only, optional: `{ <attribute key>: count }`, how many of the file's attribute entries hold a scalar value (a string, int, double or bool, the empty string included; not a null, array, nested set or bytes) for each key. The sum over a report's files is the key's total as the viewer's facet scan counts it, so the viewer lists the report's facet keys without reading the file. Counts are positive integers. Absent when the writer did not record it (a report written before the field, a merged copy of such a file counts it again), or when the file has more than 1000 distinct keys; a report with one such file is scanned",
 } satisfies Record<keyof PartitionFile, string>;
 
 const fieldRows = (fields: Readonly<Record<string, string>>): string =>

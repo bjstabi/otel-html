@@ -9,6 +9,7 @@
   },
   "include": [
     "e2e/**/*",
+    "scripts/measure-live.ts",
     "playwright.config.ts",
     "test-support/calibrate.ts",
     "test-support/otel/sdk.ts",

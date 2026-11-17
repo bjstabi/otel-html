@@ -1,5 +1,6 @@
 import type { Table } from '@uwdata/flechette';
 import { and, column, type ExprNode, eq, literal, type Query, sql } from '@uwdata/mosaic-sql';
+import { andConditions } from '../../dashboards/conditions.js';
 import type { ManifestV4 } from '../../format/manifest.js';
 import type { Table as TableName } from '../../format/parquet/columns.js';
 import { durationBucket } from '../../format/parquet/duration-bucket.js';
@@ -87,6 +88,7 @@ import {
 } from '../../query/sql/spans.js';
 import { bucketSpec } from '../../query/sql/time.js';
 import { partitionOfFilename, rollupViewStatements } from '../../query/sql/views.js';
+import type { WidgetIndexRoute } from '../../query/sql/widget-index.js';
 import { FacetCounts } from '../../rollups/facets.js';
 import { TimeBuckets } from '../../rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS } from '../../semconv/severity.js';
@@ -152,6 +154,7 @@ import {
 import { alignLongWindow, isLongWindow, type TimeWindow } from './time-window.js';
 import { traceNotFound } from './trace-detail.js';
 import { buildTraceTree, dedupeSpanIds, shareSpanOf } from './trace-tree.js';
+import { routeWidgetIndex } from './widget-index-route.js';
 
 /** The explorer's duration facet has this many bins. */
 const DURATION_BIN_COUNT = 24;
@@ -327,7 +330,9 @@ export function createDuckDbDataSource(opts: {
     pruned: Pruned | undefined,
     q: Query,
     signal?: AbortSignal,
-  ): ReturnType<QueryEngine['query']> => runPrepared(sink, q, filesFor(manifest, tables, pruned), signal);
+    extra?: readonly string[],
+  ): ReturnType<QueryEngine['query']> =>
+    runPrepared(sink, q, filesFor(manifest, tables, pruned, extra), signal);
 
   /**
    * The views of the rollup tables are bound by the first statement that reads a rollup file: binding reads every
@@ -527,6 +532,21 @@ export function createDuckDbDataSource(opts: {
         extra,
         durations,
       );
+    // A traces widget's list may read the widget trace index of the partitions that hold it (Plan notes 1, 6, 7 and 12):
+    // only a trace list, whose condition is exactly the hint's, with no text, translated whole to SQL, and under no
+    // window or a long one (a short window filters the matching spans by time, which the index does not hold).
+    const hint = q.widgetIndex;
+    const indexed =
+      hint !== undefined &&
+      q.mode === 'traces' &&
+      residual === null &&
+      q.text === '' &&
+      q.condition !== null &&
+      q.condition === andConditions(hint.query, hint.variables) &&
+      (filter.window === null || rule.long);
+    /** `scan` with the spans files the index answers moved to the route (nothing moves when the hint is not eligible). */
+    const routeOf = (scan: Pruned): { scan: Pruned; route: WidgetIndexRoute | null } =>
+      indexed ? routeWidgetIndex(manifest, scan, hint) : { scan, route: null };
     const needs = new Set(q.needs);
     const aggregates = AGGREGATE_NEEDS.some((n) => needs.has(n));
     const spanSort = q.mode === 'spans' ? sortOf(SPAN_SORTS, q.sort, 'spans') : null;
@@ -563,16 +583,29 @@ export function createDuckDbDataSource(opts: {
     ): ReturnType<QueryEngine['query']> => {
       const { window } = f;
       if (!rule.long || window === null) {
-        return unconditioned(f)
-          ? read(['traces'], undefined, allTraceRowsQuery(f, sort, limit), signal)
-          : read(['spans', 'traces'], f.files, traceRowsQuery(f, sort, limit), signal);
+        if (unconditioned(f)) return read(['traces'], undefined, allTraceRowsQuery(f, sort, limit), signal);
+        const r = routeOf(f.files);
+        return read(
+          ['spans', 'traces'],
+          r.scan,
+          traceRowsQuery({ ...f, files: r.scan }, sort, limit, undefined, r.route),
+          signal,
+          r.route?.files,
+        );
       }
       if (f.predicate === null && f.text === null) {
         return read(['traces'], undefined, allTraceRowsQuery(f, sort, limit, window), signal);
       }
       const traces = prunePartitions(manifest, 'traces', new Map(), null);
-      const own: SqlFilter = { ...f, files: await namedSpans(f, window, traces) };
-      return read(['spans', 'traces'], own.files, windowTraceRowsQuery(own, traces, sort, limit), signal);
+      const r = routeOf(await namedSpans(f, window, traces));
+      const own: SqlFilter = { ...f, files: r.scan };
+      return read(
+        ['spans', 'traces'],
+        own.files,
+        windowTraceRowsQuery(own, traces, sort, limit, r.route),
+        signal,
+        r.route?.files,
+      );
     };
 
     /** A start-sorted trace list that pages: any list the trace-by-start rules of a long window do not take over. */
@@ -598,34 +631,50 @@ export function createDuckDbDataSource(opts: {
       const need = q.limit + 1;
       const cursor = q.cursor ?? null;
       const none = unconditioned(f);
+      // routed partitions answer from their index in one statement over every file: the index rows are not files the
+      // page reader could step through, and the answer is the same
+      const r = none ? { scan: f.files, route: null } : routeOf(f.files);
       const table =
-        cursor !== null
-          ? await (none
-              ? read(['traces'], undefined, allTraceRowsQuery(f, sort, need, null, { cursor }), signal)
-              : read(['spans', 'traces'], f.files, traceRowsQuery(f, sort, need, { cursor }), signal))
-          : (
-              await readPage({
-                manifest,
-                table: none ? 'traces' : 'spans',
-                pruned: none ? prunePartitions(manifest, 'traces', new Map(), null) : f.files,
-                need,
-                dir: sort.dir,
-                // a trace's rank is its earliest span's, which may lie in a file that does not overlap the newest ones
-                // in time, so every file is read: a cutoff by time overlap cannot say which trace rows are complete
-                cutoff: false,
-                read: async (files) => {
-                  const t = none
-                    ? await read(['traces'], files, allTraceRowsQuery(f, sort, need, null, { files }), signal)
-                    : await read(
-                        ['spans', 'traces'],
-                        files,
-                        traceRowsQuery({ ...f, files }, sort, need, {}),
-                        signal,
-                      );
-                  return { rows: t.numRows, value: t, edge: edgeOf(t, 'start_ns', epoch, need) };
-                },
-              })
-            ).value;
+        r.route !== null
+          ? await read(
+              ['spans', 'traces'],
+              r.scan,
+              traceRowsQuery({ ...f, files: r.scan }, sort, need, cursor !== null ? { cursor } : {}, r.route),
+              signal,
+              r.route.files,
+            )
+          : cursor !== null
+            ? await (none
+                ? read(['traces'], undefined, allTraceRowsQuery(f, sort, need, null, { cursor }), signal)
+                : read(['spans', 'traces'], f.files, traceRowsQuery(f, sort, need, { cursor }), signal))
+            : (
+                await readPage({
+                  manifest,
+                  table: none ? 'traces' : 'spans',
+                  pruned: none ? prunePartitions(manifest, 'traces', new Map(), null) : f.files,
+                  need,
+                  dir: sort.dir,
+                  // a trace's rank is its earliest span's, which may lie in a file that does not overlap the newest ones
+                  // in time, so every file is read: a cutoff by time overlap cannot say which trace rows are complete
+                  cutoff: false,
+                  read: async (files) => {
+                    const t = none
+                      ? await read(
+                          ['traces'],
+                          files,
+                          allTraceRowsQuery(f, sort, need, null, { files }),
+                          signal,
+                        )
+                      : await read(
+                          ['spans', 'traces'],
+                          files,
+                          traceRowsQuery({ ...f, files }, sort, need, {}),
+                          signal,
+                        );
+                    return { rows: t.numRows, value: t, edge: edgeOf(t, 'start_ns', epoch, need) };
+                  },
+                })
+              ).value;
       const rows = rowsOf(table);
       const last = rows[q.limit - 1];
       const start = last === undefined ? null : cell(last, 'start_ns');
@@ -647,10 +696,17 @@ export function createDuckDbDataSource(opts: {
     /** The traces the list of `f` holds, which a page does not count. */
     const traceTotal = async (f: SqlFilter): Promise<number> => {
       const split = unconditioned(f) ? null : plan(f, 'total', [], false);
+      const r = routeOf(f.files);
       const t = unconditioned(f)
         ? await read(['traces'], undefined, allTraceCountQuery(null), signal)
         : split === null
-          ? await read(['spans'], f.files, spanCountQuery(f, 'traces'), signal)
+          ? await read(
+              ['spans'],
+              r.scan,
+              spanCountQuery({ ...f, files: r.scan }, 'traces', r.route),
+              signal,
+              r.route?.files,
+            )
           : await readMeasures(
               split,
               rollupTotalQuery(measuresRelation(f, 'spans', split, [], false)),
@@ -942,7 +998,16 @@ export function createDuckDbDataSource(opts: {
                     ? await read(['traces'], undefined, allTraceCountQuery(f.window), signal)
                     : // by the trace's start, as the list's total is
                       await traceList(f, traceSort ?? { column: 'start', dir: 'asc' }, 1)
-                  : await read(['spans'], f.files, spanCountQuery(f, q.mode), signal)
+                  : await (async () => {
+                      const r = q.mode === 'traces' ? routeOf(f.files) : { scan: f.files, route: null };
+                      return read(
+                        ['spans'],
+                        r.scan,
+                        spanCountQuery({ ...f, files: r.scan }, q.mode, r.route),
+                        signal,
+                        r.route?.files,
+                      );
+                    })()
                 : await readMeasures(
                     split,
                     rollupTotalQuery(measuresRelation(f, 'spans', split, [], false)),

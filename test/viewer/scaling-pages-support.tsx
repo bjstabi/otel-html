@@ -116,7 +116,8 @@ export async function pageOn(
       </ThemeProvider>,
     );
     await recording.settled(PAGE_CALLS[hash] ?? []);
-    const cost = costWith(await counting.take(), counting.prepared());
+    const events = await counting.take();
+    const cost = costWith(events, counting.prepared());
     cleanup();
     return { ...cost, batches };
   } finally {

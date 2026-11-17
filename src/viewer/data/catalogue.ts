@@ -43,6 +43,8 @@ export interface ScalingIds {
   service: string;
   resource: string;
   runId: string;
+  /** A trace-list condition the report's per-partition index holds (the first of the generator's config). */
+  widgetQuery: string;
   route: string;
   text: string;
   metric: string;
@@ -142,7 +144,7 @@ interface SpanSpec {
   builders: readonly string[];
   /** The builders under a long window (the router sends the need to the measures relation), where they differ. */
   long?: readonly string[];
-  over?: Partial<SpanQuery>;
+  over?: Partial<SpanQuery> | ((ids: ScalingIds) => Partial<SpanQuery>);
   when?: (ids: ScalingIds) => Condition;
   variants?: readonly Variant[];
 }
@@ -161,7 +163,7 @@ function spanEntries(specs: readonly SpanSpec[]): Entry<'querySpans'>[] {
         run: async (ds, ctx) => {
           const first = spanQuery({
             ...(s.when?.(ctx.ids) ?? NONE),
-            ...s.over,
+            ...(typeof s.over === 'function' ? s.over(ctx.ids) : s.over),
             needs: s.needs,
             window: v.window ? ctx.window : null,
           });
@@ -350,6 +352,18 @@ const TRACE_LIST: SpanSpec[] = [
       over: { mode: 'traces' },
       when: ATTR,
       long: WINDOW_TRACES,
+    }),
+    family: 'trace list',
+    variants: [LONG],
+  },
+  {
+    // a trace list routed to the per-partition index of an indexed condition, where the index covers the partition
+    ...span('traces.list.widget', ['rows'], [...WINDOW_TRACES], {
+      over: (ids) => ({
+        mode: 'traces',
+        condition: ids.widgetQuery,
+        widgetIndex: { query: ids.widgetQuery, variables: null, bindings: [] },
+      }),
     }),
     family: 'trace list',
     variants: [LONG],
@@ -882,6 +896,7 @@ const BASELINE: Record<string, Declared> = {
     allowed: { density: TRACE_LIST_SCAN, window: TRACE_LIST_SCAN },
     scanOf: 'traces.list.long',
   }),
+  'traces.list.widget.long': decl(['files', 'files', 'files']),
   'trace.get': decl(['files', 'scan', null], { needed: ONE_GROUP }),
   'trace.share': decl(['files', 'files', null], { needed: ONE_GROUP }),
   'trace.has': decl(['files', 'files', null], { needed: ONE_GROUP }),

@@ -60,9 +60,9 @@ describe('a push update of a report written with the CI config', () => {
     });
     const files = built?.update.partitions?.flatMap((p) => Object.keys(p.files)) ?? [];
     expect(files).toContain('widget_traces');
-    const listed =
-      built?.update.partitions?.flatMap((p) => [p.files.span_rollups, p.files.log_rollups]) ?? [];
-    expect(listed.length).toBeGreaterThan(0);
+    const indexed = built?.update.partitions?.flatMap((p) => p.files.widget_traces ?? []) ?? [];
+    expect(indexed.length).toBeGreaterThan(0);
+    for (const entry of indexed) expect(entry.widgetIndex).toBeDefined();
 
     const u = await readUpdate(deps.fs, out);
     const parsed = resolveConfig({

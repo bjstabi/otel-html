@@ -361,6 +361,39 @@ export function withoutRollups(f: Format4Fixture): Format4Fixture {
 }
 
 /**
+ * The report without the `widget_traces` file of partition `n`, or of every partition when `n` is omitted: a partition
+ * written before the index (or one that refused it) is scanned.
+ */
+export function withoutWidgetIndex(f: Format4Fixture, n?: number): Format4Fixture {
+  const files = new Map(f.files);
+  const manifest: ManifestV4 = {
+    ...f.manifest,
+    partitions: f.manifest.partitions.map((p) => {
+      const entry = p.files.widget_traces;
+      if (entry === undefined || (n !== undefined && p.n !== n)) return p;
+      files.delete(entry.path);
+      const { widget_traces: _dropped, ...kept } = p.files;
+      return { ...p, files: kept };
+    }),
+  };
+  return { ...f, manifest, files };
+}
+
+/** The report whose `widget_traces` entries lack `widgetIndex.evaluator`, as written before the field existed. */
+export function withoutIndexEvaluator(f: Format4Fixture): Format4Fixture {
+  const manifest: ManifestV4 = {
+    ...f.manifest,
+    partitions: f.manifest.partitions.map((p) => {
+      const entry = p.files.widget_traces;
+      if (entry?.widgetIndex === undefined) return p;
+      const { evaluator: _dropped, ...widgetIndex } = entry.widgetIndex;
+      return { ...p, files: { ...p.files, widget_traces: { ...entry, widgetIndex } } };
+    }),
+  };
+  return { ...f, manifest };
+}
+
+/**
  * `rich` with the rollup of partition `n` (its `table`) replaced by `plain`'s: the same rows with the core dimensions
  * only. When `noValue`, its statistics record "no value" for the keys of `rich` it does not hold, as a rollup written
  * with a smaller `statisticsKeys` list would not, but a careless pruning would read them.

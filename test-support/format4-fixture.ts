@@ -1,7 +1,13 @@
 import type { ConfigInput } from '../src/config/schema.js';
 import { reviveDataJson, unwrapDataFile } from '../src/format/data-file.js';
 import { ENGINE_VERSION } from '../src/format/engine.js';
-import { isPartitioned, type ManifestV4, parseAnyManifest } from '../src/format/manifest.js';
+import {
+  isPartitioned,
+  type ManifestV4,
+  manifestAnchor,
+  manifestForWrite,
+  parseAnyManifest,
+} from '../src/format/manifest.js';
 import { TABLES } from '../src/format/parquet/columns.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
 import { parseAnySessionState } from '../src/format/state.js';
@@ -9,7 +15,7 @@ import type { OtlpRequest } from '../src/model/otlp-json.js';
 import { viewStatements } from '../src/query/sql/views.js';
 import { openSession } from '../src/writer/session.js';
 import { openTestDb, type TestDb } from './duckdb-node.js';
-import { asFormat5Manifest, withoutServiceShare } from './format6.js';
+import { asFormat5Manifest, hasFormat7Fields, withoutServiceShare } from './format6.js';
 import { span, traceRequest } from './otlp-builders.js';
 import { createTestWriter, EPOCH_NS, otlp, testConfig } from './writer-deps.js';
 
@@ -21,10 +27,10 @@ export interface Format4Fixture {
 
 const OUT = 'r';
 
-/** A `site`-format report written by the real partition session into a memory file system: one flush per `requests` entry, so each is a partition; `close: false` leaves them uncompacted; `rowGroupRows` is `WriterDeps.rowGroupRows` (below the configured minimum). */
+/** A `site`-format report written by the real partition session into a memory file system: one flush per `requests` entry, so each is a partition; `close: false` leaves them uncompacted; `keepAttributeKeys` keeps the files' `attributeKeys` and a report with an index file or recorded keys is returned as the parsed format 7 manifest (a format-5 manifest has neither); `rowGroupRows` is `WriterDeps.rowGroupRows` (below the configured minimum). */
 export async function buildFormat4Report(
   requests: readonly OtlpRequest[],
-  opts: { config?: ConfigInput; close?: boolean; rowGroupRows?: number } = {},
+  opts: { config?: ConfigInput; close?: boolean; rowGroupRows?: number; keepAttributeKeys?: boolean } = {},
 ): Promise<Format4Fixture> {
   const w = createTestWriter();
   if (opts.rowGroupRows !== undefined) w.deps.rowGroupRows = opts.rowGroupRows;
@@ -52,8 +58,15 @@ export async function buildFormat4Report(
     }
   }
   const epoch = sessionEpoch(w.fs.snapshot()) ?? BigInt(manifest.epochUnixNano);
-  const sized = asFormat5Manifest(manifest, epoch.toString(), (p) => files.get(p)?.length ?? 0);
-  return { manifest: sized, files, epoch };
+  const sized = asFormat5Manifest(manifest, epoch.toString(), (p) => files.get(p)?.length ?? 0, {
+    keepAttributeKeys: opts.keepAttributeKeys === true,
+  });
+  if (!hasFormat7Fields(sized)) return { manifest: sized, files, epoch };
+  // A manifest that keeps format-7 fields (an index file, recorded keys) is a format 7 one: stored without the epoch and
+  // parsed as the viewer loads it, which derives the anchor from the range.
+  const v7 = parseAnyManifest(manifestForWrite({ ...sized, formatVersion: 7 }));
+  if (!isPartitioned(v7)) throw new Error('not a partition manifest');
+  return { manifest: v7, files, epoch: manifestAnchor(v7) };
 }
 
 /** The epoch of the newest session state in a report's snapshot (format 6 no longer stores one in the manifest). */

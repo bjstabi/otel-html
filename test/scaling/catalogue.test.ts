@@ -85,6 +85,7 @@ const PLAN_IDS = [
   'traces.list.long',
   'traces.list.statkey.long',
   'traces.list.attr.long',
+  'traces.list.widget.long',
   'trace.get',
   'trace.share',
   'trace.has',
@@ -164,9 +165,13 @@ describe('the catalogue', () => {
   });
 
   test('the catalogue names no CI key, widget kind or dashboard', () => {
+    // the one routed entry names the request's own field (`widgetIndex`), its id, and the id of its query
+    const own = /traces\.list\.widget|widgetIndex|widgetQuery/g;
     const text = JSON.stringify(CATALOGUE.map((e) => [e.id, e.needs, e.builders]));
-    expect(text).not.toMatch(/cicd|widget|dashboard/i);
-    expect(readFileSync('src/viewer/data/catalogue.ts', 'utf8')).not.toMatch(/cicd|widget|dashboard/i);
+    expect(text.replace(own, '')).not.toMatch(/cicd|widget|dashboard/i);
+    expect(readFileSync('src/viewer/data/catalogue.ts', 'utf8').replace(own, '')).not.toMatch(
+      /cicd|widget|dashboard/i,
+    );
   });
 });
 

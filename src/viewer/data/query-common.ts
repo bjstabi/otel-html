@@ -22,14 +22,23 @@ export const cmp = <T extends string | number>(a: T, b: T): number => (a < b ? -
 
 /**
  * The files a statement over `tables` reads: every file of each table, except that `pruned` (the filter's kept files)
- * stands for the first table's. The views read all files of a table, so what `pruned` leaves out is not read.
+ * stands for the first table's. The views read all files of a table, so what `pruned` leaves out is not read. `extra`
+ * lists files a statement reads inline (a widget index's), which the views do not name.
  */
-export function filesFor(manifest: ManifestV4, tables: readonly Table[], pruned?: Pruned): readonly string[] {
+export function filesFor(
+  manifest: ManifestV4,
+  tables: readonly Table[],
+  pruned?: Pruned,
+  extra: readonly string[] = [],
+): readonly string[] {
   // the resolver of `tableFiles` is the identity here: the manifest's paths are the paths the engine registers
   const keep = (path: string): string => path;
-  return tables.flatMap((table, i) =>
-    i === 0 && pruned !== undefined ? pruned.files : tableFiles(manifest, table, keep),
-  );
+  return [
+    ...tables.flatMap((table, i) =>
+      i === 0 && pruned !== undefined ? pruned.files : tableFiles(manifest, table, keep),
+    ),
+    ...extra,
+  ];
 }
 
 /** The one way the data layer runs a statement: the engine prepares `files` first, then runs `q`. */

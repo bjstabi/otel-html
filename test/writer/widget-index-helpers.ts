@@ -28,6 +28,8 @@ export interface CiSpan {
   scope?: string;
   run?: string;
   task?: string;
+  /** An int-valued `cicd.pipeline.task.name`. */
+  taskInt?: number;
   start?: bigint;
   end?: bigint;
   trace?: number;
@@ -44,6 +46,9 @@ export function ciRequest(spans: readonly CiSpan[]): ReturnType<typeof otlp> {
           str('cicd.pipeline.name', 'ci'),
           str('cicd.pipeline.run.id', s.run ?? '7'),
           ...(s.task === undefined ? [] : [str('cicd.pipeline.task.name', s.task)]),
+          ...(s.taskInt === undefined
+            ? []
+            : [{ key: 'cicd.pipeline.task.name', value: { intValue: String(s.taskInt) } }]),
         ],
       },
       scopeSpans: [

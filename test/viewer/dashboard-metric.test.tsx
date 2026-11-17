@@ -156,6 +156,7 @@ const scopeOf = (highlightTrace: TraceId | null = null): WidgetScope => ({
   narrowed: false,
   band: null,
   traceFilter: null,
+  vars: [],
   highlightTrace,
   condition: null,
   outside: false,

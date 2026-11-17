@@ -46,6 +46,7 @@ const SCOPE: WidgetScope = {
   narrowed: false,
   band: null,
   traceFilter: null,
+  vars: [],
   highlightTrace: null,
   condition: null,
   outside: false,
@@ -317,6 +318,94 @@ describe('the Top list and Table widgets', () => {
     mount(ds, { type: 'table', signal: 'logs', groupBy: 'severity' }, { window });
     expect(await screen.findByText(/values in this window/)).toBeTruthy();
     expect(screen.queryByText(/is not a facet/)).toBeNull();
+  });
+
+  test('two empty widgets of one data source read the report keys once', async () => {
+    const base = fusionSource();
+    let scans = 0;
+    const ds: DataSource = {
+      ...base,
+      querySpans: (q, signal) => {
+        if (q.facetKeys === null) scans++;
+        return base.querySpans(q, signal);
+      },
+    };
+    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'name' });
+    expect(await screen.findByText(/is not a facet of this report/)).toBeTruthy();
+    cleanup();
+    mount(ds, { type: 'table', signal: 'spans', groupBy: 'nope' });
+    expect(await screen.findByText(/is not a facet of this report/)).toBeTruthy();
+    expect(scans).toBe(1);
+  });
+
+  test('a manifest that records the attribute keys names them without a scan', async () => {
+    const base = fusionSource();
+    const file = (attributeKeys?: Record<string, number>) => ({
+      path: 'data/partitions/000000/spans.parquet',
+      bytes: 1,
+      rows: 1,
+      timeMin: null,
+      timeMax: null,
+      values: {},
+      ...(attributeKeys === undefined ? {} : { attributeKeys }),
+    });
+    const withFiles = (...files: ReturnType<typeof file>[]): DataSource['manifest'] => ({
+      ...base.manifest,
+      partitions: files.map((f, n) => ({ n, source: `flush:${n}`, files: { spans: f } })),
+    });
+    let scans = 0;
+    const source = (manifest: DataSource['manifest']): DataSource => ({
+      ...base,
+      manifest,
+      querySpans: (q, signal) => {
+        if (q.facetKeys === null) scans++;
+        return base.querySpans(q, signal);
+      },
+    });
+    mount(source(withFiles(file({ 'http.route': 3, other: 1 }), file({ 'http.route': 1 }))), {
+      type: 'toplist',
+      signal: 'spans',
+      groupBy: 'route',
+    });
+    expect(await screen.findByText(/is not a facet of this report/)).toBeTruthy();
+    expect(screen.getByText('http.route')).toBeTruthy();
+    expect(scans).toBe(0);
+    cleanup();
+    // one file without the record: the scan answers
+    mount(source(withFiles(file({ 'http.route': 3 }), file())), {
+      type: 'toplist',
+      signal: 'spans',
+      groupBy: 'route',
+    });
+    expect(await screen.findByText(/is not a facet of this report/)).toBeTruthy();
+    expect(scans).toBe(1);
+  });
+
+  test('two empty widgets mounted while the report keys load share the one read', async () => {
+    const base = fusionSource();
+    let scans = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const ds: DataSource = {
+      ...base,
+      querySpans: async (q, signal) => {
+        if (q.facetKeys === null) {
+          scans++;
+          await gate;
+        }
+        return base.querySpans(q, signal);
+      },
+    };
+    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'name' });
+    await waitFor(() => expect(scans).toBe(1));
+    mount(ds, { type: 'table', signal: 'spans', groupBy: 'nope' });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(scans).toBe(1);
+    release();
+    await waitFor(() => expect(screen.getAllByText(/is not a facet of this report/)).toHaveLength(2));
+    expect(scans).toBe(1);
   });
 
   test('the report keys are read only when a widget has no values, and no message shows until they load', async () => {

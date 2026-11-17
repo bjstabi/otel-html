@@ -350,6 +350,25 @@ describe('manifest format 7', () => {
     expect(manifestAnchor(m)).toBe(-5n);
   });
 
+  test('widgetIndex.evaluator is optional, and a positive integer when present', () => {
+    const withEvaluator = (evaluator: unknown): Raw => {
+      const raw = v7Raw();
+      const first = raw.partitions[0];
+      const file = first?.files.widget_traces as { widgetIndex: Record<string, unknown> };
+      const files = {
+        ...first?.files,
+        widget_traces: { ...file, widgetIndex: { ...file.widgetIndex, evaluator } },
+      };
+      return { ...raw, partitions: [{ ...first, files }] };
+    };
+    const parsed = (m: Raw) =>
+      (parseAnyManifest(m) as ManifestV4).partitions[0]?.files.widget_traces?.widgetIndex;
+    expect(parsed(v7Raw())?.evaluator).toBeUndefined();
+    expect(parsed(withEvaluator(1))?.evaluator).toBe(1);
+    expect(parsed(withEvaluator(7))?.evaluator).toBe(7);
+    for (const bad of [0, -1, 1.5]) expect(() => parseAnyManifest(withEvaluator(bad))).toThrow(OtelHtmlError);
+  });
+
   test('formats 5 and 6 reject a widget_traces entry and, separately, a refused field', () => {
     const raw = v7Raw();
     const first = raw.partitions[0];
@@ -368,6 +387,54 @@ describe('manifest format 7', () => {
       expect(() => parseAnyManifest(at(noIndex))).toThrow(OtelHtmlError);
       expect(parseAnyManifest(at(noRefused)).formatVersion).toBe(formatVersion);
     }
+  });
+
+  describe('attributeKeys on a spans or logs file', () => {
+    const withKeys = (table: 'spans' | 'logs', attributeKeys: unknown): Raw => {
+      const raw = v7Raw();
+      const first = raw.partitions[0];
+      const file = {
+        path: partitionFilePath(0, table),
+        bytes: 10,
+        rows: 1,
+        timeMin: null,
+        timeMax: null,
+        values: {},
+        ...(attributeKeys === undefined ? {} : { attributeKeys }),
+      };
+      return { ...raw, partitions: [{ ...first, files: { ...first?.files, [table]: file } }] };
+    };
+    const keysOf = (m: Raw, table: 'spans' | 'logs') =>
+      (parseAnyManifest(m) as ManifestV4).partitions[0]?.files[table]?.attributeKeys;
+
+    test('is accepted with and without the field', () => {
+      for (const table of ['spans', 'logs'] as const) {
+        expect(keysOf(withKeys(table, undefined), table)).toBeUndefined();
+        expect(keysOf(withKeys(table, { a: 2, b: 1 }), table)).toEqual({ a: 2, b: 1 });
+        expect(keysOf(withKeys(table, {}), table)).toEqual({});
+      }
+    });
+
+    test('rejects a negative, zero or non-integer count', () => {
+      for (const table of ['spans', 'logs'] as const) {
+        for (const bad of [-1, 0, 1.5, '3', null]) {
+          expect(() => parseAnyManifest(withKeys(table, { a: bad }))).toThrow(OtelHtmlError);
+        }
+        expect(() => parseAnyManifest(withKeys(table, ['a']))).toThrow(OtelHtmlError);
+      }
+    });
+
+    test('formats 5 and 6 do not know the field', () => {
+      const raw = withKeys('spans', { a: 1 });
+      const first = raw.partitions[0];
+      const { widget_traces: _w, span_rollups: _r, ...base } = first?.files ?? {};
+      for (const formatVersion of [5, 6]) {
+        const older = { ...raw, formatVersion, ...(formatVersion === 5 ? { epochUnixNano: '1' } : {}) };
+        expect(() => parseAnyManifest({ ...older, partitions: [{ ...first, files: base }] })).toThrow(
+          OtelHtmlError,
+        );
+      }
+    });
   });
 
   test('a format-7 widget_traces entry without widgetIndex is invalid-report', () => {

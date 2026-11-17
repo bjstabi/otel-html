@@ -10,6 +10,7 @@ import { type FacetSource, toplist } from '../../components/facet-views.js';
 import { GroupTable } from '../../components/group-table.js';
 import { mergeEchartsOption } from '../../components/metric-chart-option.js';
 import type { DataSource } from '../../data/data-source.js';
+import { recordedFacetKeys } from '../../data/recorded-keys.js';
 import type { LogQuery, SpanQuery, SpanQueryResult } from '../../data/results.js';
 import { useLogQuery } from '../../logs/use-log-query.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
@@ -74,7 +75,7 @@ const ALL_KEYS = {
   window: null,
   facetKeys: null,
 } as const;
-const spanKeys = async (d: DataSource): Promise<string[]> =>
+const scanSpanKeys = async (d: DataSource): Promise<string[]> =>
   knownKeys(
     (
       await d.querySpans({
@@ -87,8 +88,36 @@ const spanKeys = async (d: DataSource): Promise<string[]> =>
       })
     ).facets,
   );
-const logKeys = async (d: DataSource): Promise<string[]> =>
+const scanLogKeys = async (d: DataSource): Promise<string[]> =>
   knownKeys((await d.queryLogs({ ...ALL_KEYS, mode: 'logs', sort: SORT.logs, needs: ['facets'] })).facets);
+
+/**
+ * The scan reads the attributes of every spans (or logs) file, and no smaller source holds the same keys (the
+ * manifest's statistics keys and the rollup dimensions list only configured keys), so it runs once per data source and
+ * every empty widget shares it. A failed scan is forgotten so the next widget retries.
+ */
+const scans = new WeakMap<DataSource, { Spans?: Promise<string[]>; Logs?: Promise<string[]> }>();
+function sharedKeys(noun: 'Spans' | 'Logs', d: DataSource): Promise<string[]> {
+  const entry = scans.get(d) ?? {};
+  scans.set(d, entry);
+  const known = entry[noun];
+  if (known !== undefined) return known;
+  const run = (noun === 'Spans' ? scanSpanKeys : scanLogKeys)(d);
+  entry[noun] = run;
+  run.catch(() => {
+    if (entry[noun] === run) delete entry[noun];
+  });
+  return run;
+}
+/** The keys the writer recorded in the manifest, else the shared scan (a report written before the record). */
+const spanKeys = (d: DataSource): Promise<string[]> => {
+  const recorded = recordedFacetKeys(d.manifest, 'spans');
+  return recorded === null ? sharedKeys('Spans', d) : Promise.resolve(recorded);
+};
+const logKeys = (d: DataSource): Promise<string[]> => {
+  const recorded = recordedFacetKeys(d.manifest, 'logs');
+  return recorded === null ? sharedKeys('Logs', d) : Promise.resolve(recorded);
+};
 // Module-level so they are stable: `useKeyedAsync` reloads on a new `load`.
 // A pinned key is known before its first observation, so a report without it still says "no values".
 const knownKeys = (f: FacetCounts): string[] => [...new Set([...f.keys(), ...f.pinned])];

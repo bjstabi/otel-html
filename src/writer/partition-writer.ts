@@ -14,6 +14,8 @@ import { type RollupTable, type StatisticsTable, TABLES, type Table } from '../f
 import type { Row } from '../format/parquet/rows.js';
 import { fileStatistics, hasTimeEndMax, statisticsKeysOf, timeEndMaxOf } from '../format/parquet/stats.js';
 import { partitionDir, partitionFilePath, partitionKey, partitionWrapperPath } from '../format/paths.js';
+import type { Attributes } from '../model/anyvalue.js';
+import { AttributeKeyCounts } from './attribute-keys.js';
 import { at } from './checkpoint.js';
 import type { FileSystem } from './ports.js';
 import { type CompiledWidgetIndex, encodeWidgetTraces } from './widget-trace-rows.js';
@@ -56,6 +58,16 @@ const LIST_ELEMENT_BYTES = 8;
 /** A non-null number, bigint or boolean cell: the column's in-memory width (a null cell adds nothing). */
 const FIXED_CELL_BYTES = 8;
 
+/** The `attributeKeys` field of a flushed `spans` or `logs` file; nothing for another table or past the key limit. */
+function attributeKeysOf(
+  table: Table,
+  counts: { spans: AttributeKeyCounts; logs: AttributeKeyCounts },
+): { attributeKeys?: Record<string, number> } {
+  if (table !== 'spans' && table !== 'logs') return {};
+  const attributeKeys = counts[table].record();
+  return attributeKeys === undefined ? {} : { attributeKeys };
+}
+
 function emptyHeld(): Record<Table, MutableBatch> {
   const held = {} as Record<Table, MutableBatch>;
   for (const t of TABLES) held[t] = { length: 0, cells: emptyColumns(t) };
@@ -70,6 +82,8 @@ export class PartitionWriter {
   readonly #fs: FileSystem;
   readonly #opts: PartitionWriterOptions;
   #held: Record<Table, MutableBatch> = emptyHeld();
+  /** The attribute keys of the held `spans` and `logs` rows, counted as each row is added (no row is decoded again). */
+  #keys = { spans: new AttributeKeyCounts(), logs: new AttributeKeyCounts() };
   #rows = 0;
   #bytes = 0;
   #next: number;
@@ -83,9 +97,14 @@ export class PartitionWriter {
 
   /**
    * Holds a copy of the row's cells. The row must have passed `checkRow`: held rows are not checked again when they
-   * are encoded (derived rows are).
+   * are encoded (derived rows are). A `spans` or `logs` row's `attributes` are counted for the file's `attributeKeys`, from `attributes` when given (the row's, before it is stored) and else from the row's stored JSON.
    */
-  add(table: Table, row: Row): void {
+  add(table: Table, row: Row, attributes?: Attributes): void {
+    if (table === 'spans' || table === 'logs') {
+      const { attributes: stored } = row;
+      if (attributes !== undefined) this.#keys[table].addAttributes(attributes);
+      else this.#keys[table].addJson(stored);
+    }
     const h = this.#held[table];
     pushRow(table, h.cells, row);
     h.length++;
@@ -136,7 +155,9 @@ export class PartitionWriter {
     for (const t of TABLES) taken[t] = this.#held[t];
     const takenRows = this.#rows;
     const takenBytes = this.#bytes;
+    const takenKeys = this.#keys;
     this.#held = emptyHeld();
+    this.#keys = { spans: new AttributeKeyCounts(), logs: new AttributeKeyCounts() };
     this.#rows = 0;
     this.#bytes = 0;
     try {
@@ -198,6 +219,7 @@ export class PartitionWriter {
           ...(rollup === undefined ? {} : { rollup }),
           ...(table === 'traces' ? { serviceShare: true as const } : {}),
           ...(table === 'widget_traces' && wi !== undefined ? { widgetIndex: wi.index.description } : {}),
+          ...attributeKeysOf(table, takenKeys),
         };
       }
       derived?.commit?.(); // before the number advances: a throw here leaves the cut retryable
@@ -205,6 +227,8 @@ export class PartitionWriter {
       return { n, source, files };
     } catch (e) {
       for (const table of TABLES) this.#held[table] = concatBatches(table, taken[table], this.#held[table]);
+      this.#keys.spans.addCounts(takenKeys.spans);
+      this.#keys.logs.addCounts(takenKeys.logs);
       this.#rows += takenRows;
       this.#bytes += takenBytes;
       throw e;

@@ -47,6 +47,15 @@ function make(nextPartition = 0, derive?: PartitionWriterOptions['derive']) {
 }
 
 describe('PartitionWriter', () => {
+  test('a row added without its attributes is counted from the stored attributes', async () => {
+    const { w } = make();
+    w.add('spans', span(1, 'a', 100n));
+    w.add('logs', { ...log(1, 'a'), attributes: '{"region":"west"}' });
+    const entry = await w.cut('src');
+    expect(entry?.files.spans?.attributeKeys).toEqual({ a: 1 });
+    expect(entry?.files.logs?.attributeKeys).toEqual({ region: 1 });
+  });
+
   test('cut writes one file per held table and returns the entry', async () => {
     const { fs, w } = make();
     w.add('spans', span(2, 'zeta', 200n));

@@ -34,6 +34,7 @@ import { encodeBatches, type PanicGuard, readColumns } from '../format/parquet/s
 import { partitionDir, partitionFilePath, partitionKey, partitionWrapperPath } from '../format/paths.js';
 import { encodeServiceShare, type ShareSpan, serviceShareOf } from '../format/service-share.js';
 import { OtelHtmlError } from '../model/errors.js';
+import { AttributeKeyCounts } from './attribute-keys.js';
 import { at } from './checkpoint.js';
 import type { FileSystem } from './ports.js';
 import {
@@ -971,6 +972,8 @@ export async function compactPartitions(
       let stats: FileStatistics;
       let timeEndMax: string | null | undefined;
       let rollup: RollupDescription | undefined;
+      let attrKeys: AttributeKeyCounts | undefined;
+      let counted: AttributeKeyCounts | undefined;
       if (rollupTable !== null && plan !== undefined) {
         let rows = await rollupRowsOf(fs, out, entries, rollupTable, plan, recomputed[rollupTable], guard);
         let description = plan.description;
@@ -1075,6 +1078,15 @@ export async function compactPartitions(
           stats = fileStatistics(table, batch, keys, opts.facetValueCap);
           if (hasTimeEndMax(table)) timeEndMax = timeEndMaxOf(batch);
         } else {
+          // The inputs' records sum when every input has one; else the keys are counted from the rows merged here.
+          if (table === 'spans' || table === 'logs') {
+            attrKeys = new AttributeKeyCounts();
+            if (inputs.every((f) => f.attributeKeys !== undefined)) {
+              for (const f of inputs) attrKeys.addRecord(f.attributeKeys ?? {});
+            } else counted = attrKeys;
+          }
+          const feed = onRows(table);
+          const tally = counted;
           ({ size, stats, timeEndMax } = await mergeTable(
             fs,
             dir,
@@ -1083,7 +1095,12 @@ export async function compactPartitions(
             at(out, path),
             opts,
             guard,
-            onRows(table),
+            tally === undefined
+              ? feed
+              : (chunk) => {
+                  feed?.(chunk);
+                  tally.addBatch(chunk);
+                },
           ));
           const expected = inputs.reduce((sum, f) => sum + f.rows, 0);
           if (stats.rows !== expected) {
@@ -1105,6 +1122,7 @@ export async function compactPartitions(
           at(out, path),
         );
       }
+      const recorded = attrKeys?.record();
       files[table] = {
         path,
         bytes: size,
@@ -1112,6 +1130,7 @@ export async function compactPartitions(
         ...(table === 'traces' ? { serviceShare: true as const } : {}),
         ...(timeEndMax === undefined ? {} : { timeEndMax }),
         ...(rollup === undefined ? {} : { rollup }),
+        ...(recorded === undefined ? {} : { attributeKeys: recorded }),
       };
     }
     const spansFile = files.spans;
