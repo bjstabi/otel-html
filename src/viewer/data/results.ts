@@ -9,6 +9,7 @@ import { DEFAULT_LOG_FACETS, DEFAULT_SPAN_FACETS } from '../../semconv/default-f
 import type { LogSeverityKey } from '../../semconv/severity.js';
 import type { LogMode, LogRow, LogTraceRow, PatternRow } from './log-query.js';
 import type { TimeWindow } from './time-window.js';
+import type { WidgetIndexHint } from './widget-index-route.js';
 
 /** The core facet keys: what the Traces page asks for under a long window, where attribute facets wait for the reader. */
 export const CORE_SPAN_FACET_KEYS: readonly string[] = DEFAULT_SPAN_FACETS.map((f) => f.key);
@@ -173,6 +174,11 @@ export interface SpanQuery {
    * matching spans' own min to max.
    */
   durationAxis?: readonly { fromNs: number; toNs: number }[];
+  /**
+   * A traces widget's own query and variable bindings. When the condition is exactly the two joined, the data source
+   * answers a trace list from the partitions' `widget_traces` index where it covers them (the answer is the scan's).
+   */
+  widgetIndex?: WidgetIndexHint;
 }
 
 /** `span`'s resource and scope refs index the `RowTables` returned beside the rows. */

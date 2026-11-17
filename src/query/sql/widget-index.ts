@@ -1,5 +1,6 @@
-import { type ExprNode, Query, sql, verbatim } from '@uwdata/mosaic-sql';
+import { Query, type SelectQuery, sql, verbatim } from '@uwdata/mosaic-sql';
 import { VAR_COLUMN_PREFIX } from '../../format/parquet/columns.js';
+import { OtelHtmlError } from '../../model/errors.js';
 
 /**
  * Partitions whose `widget_traces` index answers a traces widget's condition: their index files, the condition id and
@@ -19,7 +20,12 @@ const ident = (text: string): string => `"${text.replaceAll('"', '""')}"`;
  * The files are read inline with `union_by_name`: partitions differ in their `var:` columns, and only bound keys are
  * filtered (the router sends only partitions whose index holds every bound key).
  */
-export function widgetIndexRelation(route: WidgetIndexRoute): ExprNode {
+export function widgetIndexRelation(route: WidgetIndexRoute): SelectQuery {
+  if (route.files.length === 0) {
+    throw new OtelHtmlError('usage', {
+      message: 'widgetIndexRelation: a route names at least one index file',
+    });
+  }
   const terms = [
     `condition = ${quoted(route.condition)}`,
     ...route.bindings.map((b) => `${ident(VAR_COLUMN_PREFIX + b.key)} = ${quoted(b.value)}`),

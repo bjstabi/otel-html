@@ -10,6 +10,7 @@ import {
   or,
   Query,
   type SelectQuery,
+  type SetOperation,
   sql,
   verbatim,
 } from '@uwdata/mosaic-sql';
@@ -171,14 +172,18 @@ export function traceRowsQuery(
  * The trace ids of the matching spans: `terms` over the spans files `f.files` names. With a `route` the index relation
  * of the routed partitions joins the scan by `UNION`; the scan arm is left out when no spans file is read.
  */
-function matchingTraces(f: SqlFilter, terms: ExprNode[], route?: WidgetIndexRoute | null): SelectQuery {
+function matchingTraces(
+  f: SqlFilter,
+  terms: ExprNode[],
+  route?: WidgetIndexRoute | null,
+): SelectQuery | SetOperation {
   const scan = Query.from('spans')
     .select('trace_id')
     .distinct()
     .where(...terms);
   if (route == null) return scan;
-  const index = widgetIndexRelation(route) as unknown as SelectQuery;
-  return f.files.files.length === 0 ? index : (Query.union(scan, index) as unknown as SelectQuery);
+  const index = widgetIndexRelation(route);
+  return f.files.files.length === 0 ? index : Query.union(scan, index);
 }
 
 /**
