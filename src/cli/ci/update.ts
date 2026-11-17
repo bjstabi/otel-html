@@ -2,11 +2,12 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { PartitionFile } from '../../format/manifest.js';
 import {
+  LogsPartitionFileSchemaV7,
   PartitionFileSchema,
   RollupPartitionFileSchemaV7,
   ShareTracesPartitionFileSchema,
   SOURCE_RE,
-  TimeEndPartitionFileSchema,
+  SpansPartitionFileSchemaV7,
   WidgetTracesPartitionFileSchema,
 } from '../../format/manifest.js';
 import type { Table } from '../../format/parquet/columns.js';
@@ -51,8 +52,9 @@ const posInt = z.number().int().positive();
 const partitionShape = {
   source: z.string().regex(SOURCE_RE, 'a source like job:7#compact:3'),
   files: z.strictObject({
-    spans: z.exactOptional(TimeEndPartitionFileSchema),
-    logs: z.exactOptional(PartitionFileSchema),
+    // format 7: `attributeKeys` on a spans or logs file
+    spans: z.exactOptional(SpansPartitionFileSchemaV7),
+    logs: z.exactOptional(LogsPartitionFileSchemaV7),
     points: z.exactOptional(PartitionFileSchema),
     // format 6: a traces file may state `serviceShare: true` (an update of a format-5 job never does)
     traces: z.exactOptional(ShareTracesPartitionFileSchema),

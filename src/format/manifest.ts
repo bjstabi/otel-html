@@ -198,6 +198,12 @@ export interface PartitionFile extends FileStatistics {
   serviceShare?: true;
   /** Format 7, the `widget_traces` file only, where it is required. */
   widgetIndex?: WidgetIndexDescription;
+  /**
+   * Format 7, `spans` and `logs` files: each attribute key and how many of the file's attribute entries hold a scalar
+   * value for it (what `attributeFacetsQuery` counts as the key's total). Absent when the writer did not record it
+   * (an older file, or one with more than 1000 distinct keys).
+   */
+  attributeKeys?: Record<string, number>;
 }
 
 /** The five base tables are always listed; the two rollup tables only when the report has rollups. */
@@ -281,7 +287,7 @@ const RollupDescriptionSchemaV7: z.ZodType<RollupDescription> = z.strictObject({
   refused: z.exactOptional(z.array(z.string())),
 });
 
-export const TimeEndPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
+const TimeEndPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
   ...PartitionFileShape,
   timeEndMax: z.exactOptional(int64Text.nullable()),
 });
@@ -291,6 +297,21 @@ export const ShareTracesPartitionFileSchema: z.ZodType<PartitionFile> = z.strict
   ...PartitionFileShape,
   timeEndMax: z.exactOptional(int64Text.nullable()),
   serviceShare: z.exactOptional(z.literal(true)),
+});
+
+const AttributeKeysSchema = z.record(z.string(), z.number().int().positive());
+
+/** A format-7 `spans` file: `timeEndMax` and, when recorded, `attributeKeys`. */
+export const SpansPartitionFileSchemaV7: z.ZodType<PartitionFile> = z.strictObject({
+  ...PartitionFileShape,
+  timeEndMax: z.exactOptional(int64Text.nullable()),
+  attributeKeys: z.exactOptional(AttributeKeysSchema),
+});
+
+/** A format-7 `logs` file: `attributeKeys` when recorded. */
+export const LogsPartitionFileSchemaV7: z.ZodType<PartitionFile> = z.strictObject({
+  ...PartitionFileShape,
+  attributeKeys: z.exactOptional(AttributeKeysSchema),
 });
 
 const RollupPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
@@ -399,8 +420,8 @@ const partitionsV5 = (traces: z.ZodType<PartitionFile>) =>
 
 const partitionsV7 = partitionEntry(
   z.strictObject({
-    spans: z.exactOptional(TimeEndPartitionFileSchema),
-    logs: z.exactOptional(PartitionFileSchema),
+    spans: z.exactOptional(SpansPartitionFileSchemaV7),
+    logs: z.exactOptional(LogsPartitionFileSchemaV7),
     points: z.exactOptional(PartitionFileSchema),
     traces: z.exactOptional(ShareTracesPartitionFileSchema),
     patterns: z.exactOptional(PartitionFileSchema),

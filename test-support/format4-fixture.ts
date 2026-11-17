@@ -21,10 +21,10 @@ export interface Format4Fixture {
 
 const OUT = 'r';
 
-/** A `site`-format report written by the real partition session into a memory file system: one flush per `requests` entry, so each is a partition; `close: false` leaves them uncompacted; `rowGroupRows` is `WriterDeps.rowGroupRows` (below the configured minimum). */
+/** A `site`-format report written by the real partition session into a memory file system: one flush per `requests` entry, so each is a partition; `close: false` leaves them uncompacted; `keepAttributeKeys` keeps the files' `attributeKeys` (a format-5 manifest has none); `rowGroupRows` is `WriterDeps.rowGroupRows` (below the configured minimum). */
 export async function buildFormat4Report(
   requests: readonly OtlpRequest[],
-  opts: { config?: ConfigInput; close?: boolean; rowGroupRows?: number } = {},
+  opts: { config?: ConfigInput; close?: boolean; rowGroupRows?: number; keepAttributeKeys?: boolean } = {},
 ): Promise<Format4Fixture> {
   const w = createTestWriter();
   if (opts.rowGroupRows !== undefined) w.deps.rowGroupRows = opts.rowGroupRows;
@@ -52,7 +52,9 @@ export async function buildFormat4Report(
     }
   }
   const epoch = sessionEpoch(w.fs.snapshot()) ?? BigInt(manifest.epochUnixNano);
-  const sized = asFormat5Manifest(manifest, epoch.toString(), (p) => files.get(p)?.length ?? 0);
+  const sized = asFormat5Manifest(manifest, epoch.toString(), (p) => files.get(p)?.length ?? 0, {
+    keepAttributeKeys: opts.keepAttributeKeys === true,
+  });
   return { manifest: sized, files, epoch };
 }
 

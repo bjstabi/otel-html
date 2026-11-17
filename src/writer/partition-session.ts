@@ -54,6 +54,7 @@ import { Drain } from '../rollups/drain.js';
 import { StreamNormalizer } from '../rollups/metric-streams.js';
 import { severityKey } from '../semconv/severity.js';
 import { assetsInside, linkedAssetsHint, pruneOwnAssets } from './assets-cleanup.js';
+import { AttributeKeyCounts } from './attribute-keys.js';
 import {
   at,
   loadPartitionCheckpoint,
@@ -307,6 +308,15 @@ async function* tapped(
     tap(chunk);
     yield chunk;
   }
+}
+
+/** The `attributeKeys` a copied file keeps: its own record, else the one counted from its rows (none past the key limit). */
+function copiedKeys(
+  f: PartitionFile,
+  counted: AttributeKeyCounts | undefined,
+): { attributeKeys?: Record<string, number> } {
+  const attributeKeys = f.attributeKeys ?? counted?.record();
+  return attributeKeys === undefined ? {} : { attributeKeys };
 }
 
 /** Whether a copied file's index (undefined for a format 5 or 6 file) holds every condition and variable `index` writes. */
@@ -893,7 +903,7 @@ class PartitionSession implements WriterSession {
     }
     for (const { span, row } of staged) {
       this.#live(this.#dedupe).seen(span.traceId, span.spanId);
-      this.#writer.add('spans', row);
+      this.#writer.add('spans', row, span.attributes);
       this.#totals.spans++;
       this.#extend(ctx, span.start, Math.max(span.start, span.end));
     }
@@ -996,7 +1006,7 @@ class PartitionSession implements WriterSession {
     }
     for (const { log, row } of staged) {
       const t = logTime(log);
-      this.#writer.add('logs', row);
+      this.#writer.add('logs', row, log.attributes);
       this.#totals.logs++;
       this.#extend(ctx, t, t);
     }
@@ -1341,13 +1351,24 @@ class PartitionSession implements WriterSession {
         // The input may not have recorded a key this report lists (another config wrote it): compute it from the bytes.
         // For `spans` one pass over the file also feeds the widget index (no more than a chunk is held at a time),
         // or the whole decode a rollup repair needs.
+        // A `spans` or `logs` file with no `attributeKeys` record gets one counted from the same pass.
+        const counts =
+          (table === 'spans' || table === 'logs') && f.attributeKeys === undefined
+            ? new AttributeKeyCounts()
+            : undefined;
         let chunks: (() => AsyncIterable<ColumnBatch>) | undefined;
-        if (table === 'spans' && (indexSet !== null || spansRepair)) {
-          const set = indexSet;
+        if (counts !== undefined || (table === 'spans' && (indexSet !== null || spansRepair))) {
+          const set = table === 'spans' ? indexSet : null;
+          const repair = table === 'spans' && spansRepair;
           chunks = () =>
             tapped(
-              spansRepair ? wholeOf(decode('spans')) : streamBatches('spans', bytes, f.path, watch.guard),
-              (chunk) => set?.add(chunk),
+              repair
+                ? wholeOf(decode('spans'))
+                : streamBatches(table === 'logs' ? 'logs' : 'spans', bytes, f.path, watch.guard),
+              (chunk) => {
+                set?.add(chunk);
+                counts?.addBatch(chunk);
+              },
             );
         }
         const done = await completeStatistics(
@@ -1374,6 +1395,7 @@ class PartitionSession implements WriterSession {
           ...(f.timeEndMax === undefined ? {} : { timeEndMax: f.timeEndMax }),
           ...(f.rollup === undefined ? {} : { rollup: f.rollup }),
           ...(f.serviceShare === undefined ? {} : { serviceShare: f.serviceShare }),
+          ...copiedKeys(f, counts),
         };
       }
       const spansFile = files.spans;

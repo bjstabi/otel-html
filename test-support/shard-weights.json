@@ -317,6 +317,8 @@
     "test/viewer/waterfall.test.tsx": 1.7,
     "test/writer/append.test.ts": 0.9,
     "test/writer/assets-cleanup.test.ts": 0.6,
+    "test/writer/attribute-keys-paths.test.ts": 0.5,
+    "test/writer/attribute-keys.test.ts": 0.1,
     "test/writer/background-checkpoint.test.ts": 0.8,
     "test/writer/bun-embedded-assets.test.ts": 0.1,
     "test/writer/compaction-widget-keys.test.ts": 1.2,

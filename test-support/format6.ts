@@ -120,7 +120,11 @@ export async function withServiceShare(
       files: { ...entry.files, traces: { ...traces, bytes: bytes.length, serviceShare: true as const } },
     });
   }
-  const written = manifestForWrite({ ...manifest, formatVersion: 6, partitions });
+  const written = manifestForWrite({
+    ...manifest,
+    formatVersion: 6,
+    partitions: withoutAttributeKeys(partitions),
+  });
   await writeFile(`${dir}/data/manifest.js`, wrapDataFile(MANIFEST_KEY, written));
   // What a reader gets: the format-6 parse fills the anchor (`range.start`, else `createdAt`), whatever epoch `manifest` had.
   const out = parseAnyManifest(JSON.parse(JSON.stringify(written)));
@@ -164,11 +168,26 @@ export function withoutServiceShare(bytes: Uint8Array): Uint8Array {
   return withoutColumn(bytes, SERVICE_SHARE_COLUMN.name);
 }
 
-/** `manifest` as the format 5 a writer wrote before format 6: `epochUnixNano` as given, no `serviceShare`, traces `sizes` from `bytesOf`. */
+/** `partitions` as a writer before format 7 listed them: no `attributeKeys` on a spans or logs file. */
+export function withoutAttributeKeys(partitions: ManifestV4['partitions']): ManifestV4['partitions'] {
+  return partitions.map((entry) => {
+    const files = { ...entry.files };
+    for (const t of ['spans', 'logs'] as const) {
+      const f = files[t];
+      if (f === undefined) continue;
+      const { attributeKeys: _dropped, ...kept } = f;
+      files[t] = kept;
+    }
+    return { ...entry, files };
+  });
+}
+
+/** `manifest` as the format 5 a writer wrote before format 6: `epochUnixNano` as given, no `serviceShare`, no `attributeKeys` (unless `keepAttributeKeys`, for a test of the viewer's reading them), traces `sizes` from `bytesOf`. */
 export function asFormat5Manifest(
   manifest: ManifestV4,
   epochUnixNano: string,
   bytesOf: (path: string) => number,
+  opts: { keepAttributeKeys?: boolean } = {},
 ): ManifestV4 {
   const partitions = manifest.partitions.map((entry) => {
     const { traces } = entry.files;
@@ -176,7 +195,12 @@ export function asFormat5Manifest(
     const { serviceShare: _dropped, ...kept } = traces;
     return { ...entry, files: { ...entry.files, traces: { ...kept, bytes: bytesOf(traces.path) } } };
   });
-  return { ...manifest, formatVersion: 5, epochUnixNano, partitions };
+  return {
+    ...manifest,
+    formatVersion: 5,
+    epochUnixNano,
+    partitions: opts.keepAttributeKeys === true ? partitions : withoutAttributeKeys(partitions),
+  };
 }
 
 /**

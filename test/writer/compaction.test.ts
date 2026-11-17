@@ -186,7 +186,7 @@ describe('compactPartitions: merged tables', () => {
     const out = await compactPartitions(fs, OUT, entries, opts(3, rowGroupRows));
     const expected = encodeTable('logs', rowsPer.flat(), { rowGroupRows });
     expect(Buffer.from(await bytesOf(fs, out, 'logs')).equals(Buffer.from(expected))).toBe(true);
-    const { path, bytes, ...stats } = out.files.logs ?? { path: '', bytes: 0 };
+    const { path, bytes, attributeKeys: _keys, ...stats } = out.files.logs ?? { path: '', bytes: 0 };
     expect(stats).toEqual(fileStatistics('logs', batchFromRows('logs', rowsPer.flat()), KEYS.logs, 100));
   });
 
@@ -211,7 +211,7 @@ describe('compactPartitions: merged tables', () => {
         'log_rollups.parquet',
         'logs.parquet',
       ]);
-      const { path, bytes, ...stats } = out.files.logs ?? { path: '', bytes: 0 };
+      const { path, bytes, attributeKeys: _keys, ...stats } = out.files.logs ?? { path: '', bytes: 0 };
       expect(stats).toEqual(fileStatistics('logs', batchFromRows('logs', rowsPer.flat()), KEYS.logs, 100));
     },
   );
@@ -288,7 +288,7 @@ describe('compactPartitions: merged tables', () => {
       rowsPer.map((logs) => ({ logs })),
     );
     const out = await compactPartitions(fs, OUT, entries, opts(2));
-    const { path, bytes, ...stats } = out.files.logs ?? { path: '', bytes: 0 };
+    const { path, bytes, attributeKeys: _keys, ...stats } = out.files.logs ?? { path: '', bytes: 0 };
     expect(path).toBe('data/partitions/000002/logs.parquet');
     expect(bytes).toBeGreaterThan(0);
     expect(stats).toEqual(fileStatistics('logs', batchFromRows('logs', rowsPer.flat()), KEYS.logs, 100));
