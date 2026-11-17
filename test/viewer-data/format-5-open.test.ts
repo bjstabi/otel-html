@@ -51,6 +51,7 @@ const IDS: ScalingIds = {
   service: 'none',
   resource: 'none',
   runId: 'none',
+  widgetQuery: 'name == "none"',
   route: '/none',
   text: 'none',
   metric: 'none',

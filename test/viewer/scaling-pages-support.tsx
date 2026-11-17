@@ -94,7 +94,7 @@ export async function pageOn(
   live: ScalingReport,
   hash: string,
   threshold: number,
-): Promise<Cost & { batches: number }> {
+): Promise<Cost & { batches: number; spansReads: number }> {
   const counting = await openCountingEngine(live.dir, live.manifest, { threshold });
   try {
     const manifest = manifestWithCi(live.manifest, live.ids.metric);
@@ -116,9 +116,12 @@ export async function pageOn(
       </ThemeProvider>,
     );
     await recording.settled(PAGE_CALLS[hash] ?? []);
-    const cost = costWith(await counting.take(), counting.prepared());
+    const events = await counting.take();
+    const cost = costWith(events, counting.prepared());
+    // reads of a spans file by range (a prepared file is read whole, outside the count): 0 when preparing is on
+    const spansReads = events.filter((e) => e.kind === 'read' && e.path.endsWith('/spans.parquet')).length;
     cleanup();
-    return { ...cost, batches };
+    return { ...cost, batches, spansReads };
   } finally {
     cleanup();
     await counting.close();

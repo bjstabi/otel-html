@@ -33,6 +33,7 @@ const IDS = {
   service: 'svc-a',
   resource: 'none',
   runId: 'r1',
+  widgetQuery: 'name == "none"',
   route: '/a',
   text: 'edge',
   metric: 'none',

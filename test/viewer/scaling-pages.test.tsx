@@ -115,6 +115,7 @@ describe('the pages ask only catalogued requests', () => {
  * requests of both kinds with the production limit.
  */
 const PAGE_SERIAL_MAX: Readonly<Record<string, number>> = {
+  // 90 measured (86 before the index files): within the old pin, which is kept rather than loosened to measured + 10 %.
   '#/dashboards/ci': 95,
   '#/traces?mode=traces': 54,
   // 29 measured: the first page asks 201 rows, which DuckDB plans as a TOP_N with a dynamic filter pushed into the scan
@@ -139,6 +140,8 @@ const PAGE_BATCH_MAX: Readonly<Record<string, number>> = {
   [TRACE_PAGE]: 7,
 };
 const PAGE_REQUESTS_MAX: Readonly<Record<string, number>> = {
+  // 20 measured since the traces list reads the widget index (16 before): its four small files are four more requests.
+  // NOT re-pinned: a pin that got worse waits for the maintainer's decision, so this page fails here by design.
   '#/dashboards/ci': 18,
   '#/traces?mode=traces': 9,
   '#/traces': 5,
@@ -171,6 +174,41 @@ describe('a page asks no more requests than pinned on the mixed shape (+10 % of 
     },
     120_000,
   );
+});
+
+describe('the Runs statement of the CI dashboard on the mixed shape', () => {
+  /**
+   * Other widgets of the page read `spans.parquet` on this shape (the timeline, the two step lists and the variables'
+   * values: its 50 minutes are a short range, so none of them has a rollup to read), so the page's own `spansReads`
+   * is not 0. The Runs statement alone, with no file prepared, reads the index and the traces files and no spans file.
+   */
+  test('reads the widget index and no spans file', async () => {
+    const live = await buildScalingReport({ ...BASE, mixed: true });
+    const counting = await openCountingEngine(live.dir, live.manifest, { threshold: 0 });
+    try {
+      await counting.cold();
+      const ds = createDuckDbDataSource({ engine: counting.engine, manifest: live.manifest });
+      await ds.querySpans({
+        condition: live.ids.widgetQuery,
+        text: '',
+        window: null,
+        mode: 'traces',
+        sort: { column: 'start', dir: 'desc' },
+        limit: 201,
+        groupBy: null,
+        measureBy: null,
+        needs: ['rows'],
+        facetKeys: null,
+        widgetIndex: { query: live.ids.widgetQuery, variables: null, bindings: [] },
+      });
+      const paths = new Set((await counting.take()).map((e) => e.path.split('/').pop()));
+      expect(paths.has('widget_traces.parquet'), 'the index is read').toBe(true);
+      expect(paths.has('spans.parquet'), 'no spans file is read').toBe(false);
+    } finally {
+      await counting.close();
+      await live.close();
+    }
+  }, 120_000);
 });
 
 const SPACINGS = ['dense', 'sparse'] as const;

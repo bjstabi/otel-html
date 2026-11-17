@@ -379,16 +379,28 @@ function partitionJson(shape: Shape, n: number): Record<string, unknown>[] {
   ];
 }
 
+/** The dashboards of the shipped CI config. */
+function ciDashboards(): unknown[] {
+  return (
+    parse(readFileSync(join(import.meta.dirname, '../../.github/otel-html-ci.yaml'), 'utf8')) as {
+      dashboards: unknown[];
+    }
+  ).dashboards;
+}
+
+/** The `query` of the first traces widget of the CI config the reports are written with (the one its index holds). */
+function ciWidgetQuery(): string {
+  for (const d of ciDashboards() as { widgets?: { type?: string; query?: string }[] }[])
+    for (const w of d.widgets ?? []) if (w.type === 'traces' && typeof w.query === 'string') return w.query;
+  throw new Error('the CI config has no traces widget with a query');
+}
+
 /** Builds the report of `shape` in this process into a new temp folder (`close()` removes it): never the shared cache. */
 export async function buildFreshReport(shape: Shape): Promise<ScalingReport> {
   const w = createTestWriter();
   w.deps.rowGroupRows = rowsPerGroup(shape);
   // the shipped CI dashboard: the writer keeps the attribute keys its widgets test in the rollups, as in the live report
-  const dashboards = (
-    parse(readFileSync(join(import.meta.dirname, '../../.github/otel-html-ci.yaml'), 'utf8')) as {
-      dashboards: unknown[];
-    }
-  ).dashboards;
+  const dashboards = ciDashboards();
   const config = testConfig({
     dashboards: dashboards as ConfigInput['dashboards'],
     writer: {
@@ -493,6 +505,7 @@ export async function buildFreshReport(shape: Shape): Promise<ScalingReport> {
       // the writer's `resource_name`: "<http.request.method> <http.route>" (see partitionJson, method GET)
       resource: `GET ${routeOf(k)}`,
       runId: `run-${first}`,
+      widgetQuery: ciWidgetQuery(),
       route: routeOf(k),
       text: 'needle',
       metric: METRICS[0] ?? 'scaling.load',
@@ -518,6 +531,7 @@ const MetaSchema = z.object({
     service: z.string(),
     resource: z.string(),
     runId: z.string(),
+    widgetQuery: z.string(),
     route: z.string(),
     text: z.string(),
     metric: z.string(),
