@@ -74,7 +74,7 @@ const ALL_KEYS = {
   window: null,
   facetKeys: null,
 } as const;
-const spanKeys = async (d: DataSource): Promise<string[]> =>
+const scanSpanKeys = async (d: DataSource): Promise<string[]> =>
   knownKeys(
     (
       await d.querySpans({
@@ -87,8 +87,29 @@ const spanKeys = async (d: DataSource): Promise<string[]> =>
       })
     ).facets,
   );
-const logKeys = async (d: DataSource): Promise<string[]> =>
+const scanLogKeys = async (d: DataSource): Promise<string[]> =>
   knownKeys((await d.queryLogs({ ...ALL_KEYS, mode: 'logs', sort: SORT.logs, needs: ['facets'] })).facets);
+
+/**
+ * The scan reads the attributes of every spans (or logs) file, and no smaller source holds the same keys (the
+ * manifest's statistics keys and the rollup dimensions list only configured keys), so it runs once per data source and
+ * every empty widget shares it. A failed scan is forgotten so the next widget retries.
+ */
+const scans = new WeakMap<DataSource, { Spans?: Promise<string[]>; Logs?: Promise<string[]> }>();
+function sharedKeys(noun: 'Spans' | 'Logs', d: DataSource): Promise<string[]> {
+  const entry = scans.get(d) ?? {};
+  scans.set(d, entry);
+  const known = entry[noun];
+  if (known !== undefined) return known;
+  const run = (noun === 'Spans' ? scanSpanKeys : scanLogKeys)(d);
+  entry[noun] = run;
+  run.catch(() => {
+    if (entry[noun] === run) delete entry[noun];
+  });
+  return run;
+}
+const spanKeys = (d: DataSource): Promise<string[]> => sharedKeys('Spans', d);
+const logKeys = (d: DataSource): Promise<string[]> => sharedKeys('Logs', d);
 // Module-level so they are stable: `useKeyedAsync` reloads on a new `load`.
 // A pinned key is known before its first observation, so a report without it still says "no values".
 const knownKeys = (f: FacetCounts): string[] => [...new Set([...f.keys(), ...f.pinned])];

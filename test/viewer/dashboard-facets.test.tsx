@@ -320,6 +320,24 @@ describe('the Top list and Table widgets', () => {
     expect(screen.queryByText(/is not a facet/)).toBeNull();
   });
 
+  test('two empty widgets of one data source read the report keys once', async () => {
+    const base = fusionSource();
+    let scans = 0;
+    const ds: DataSource = {
+      ...base,
+      querySpans: (q, signal) => {
+        if (q.facetKeys === null) scans++;
+        return base.querySpans(q, signal);
+      },
+    };
+    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'name' });
+    expect(await screen.findByText(/is not a facet of this report/)).toBeTruthy();
+    cleanup();
+    mount(ds, { type: 'table', signal: 'spans', groupBy: 'nope' });
+    expect(await screen.findByText(/is not a facet of this report/)).toBeTruthy();
+    expect(scans).toBe(1);
+  });
+
   test('the report keys are read only when a widget has no values, and no message shows until they load', async () => {
     const base = fusionSource();
     const queries: SpanQuery[] = [];
