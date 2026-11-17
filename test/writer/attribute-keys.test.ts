@@ -77,4 +77,18 @@ describe('AttributeKeyCounts', () => {
     expect(Object.keys(at(1000).record() ?? {})).toHaveLength(1000);
     expect(at(1001).record()).toBeUndefined();
   });
+
+  test('a __proto__ key records nothing: a manifest script literal would drop it, so the report scans', () => {
+    const c = new AttributeKeyCounts();
+    c.addAttributes(
+      new Map<string, AnyValue>([
+        ['__proto__', { kind: 'string', value: 'x' }],
+        ['a', { kind: 'string', value: 'x' }],
+      ]),
+    );
+    expect(c.record()).toBeUndefined();
+    const json = new AttributeKeyCounts();
+    json.addJson('{"__proto__":"x","a":"y"}');
+    expect(json.record()).toBeUndefined();
+  });
 });

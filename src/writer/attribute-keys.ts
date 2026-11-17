@@ -61,9 +61,13 @@ export class AttributeKeyCounts {
     for (const [key, n] of Object.entries(record)) this.#bump(key, n);
   }
 
-  /** The manifest record; undefined when there are more than `MAX_ATTRIBUTE_KEYS` keys. */
+  /**
+   * The manifest record; undefined when there are more than `MAX_ATTRIBUTE_KEYS` keys, or when one is `__proto__`: the
+   * manifest is loaded as a script object literal, where that key sets the prototype and is not an own key, so the
+   * record would differ from the scan. Such a report is scanned.
+   */
   record(): Record<string, number> | undefined {
-    if (this.#counts.size > MAX_ATTRIBUTE_KEYS) return undefined;
+    if (this.#counts.size > MAX_ATTRIBUTE_KEYS || this.#counts.has('__proto__')) return undefined;
     return Object.fromEntries([...this.#counts].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
   }
 }
