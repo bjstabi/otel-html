@@ -33,6 +33,13 @@ const cell =
     r[k];
 const sqlOf = (q: { toString(): string }): string => q.toString();
 const sort = { column: 'start', dir: 'asc' } as const;
+/** The statements `main` (7ad330f3) builds, verbatim, so the unrouted builders are pinned against the old code and not against themselves. */
+const MAIN_TRACE_ROWS_FILTERED =
+  'SELECT *, count(*) OVER () AS "total" FROM (SELECT "trace_id", "span_count", "error_count", "log_count", "start_ns", "end_ns", end_ns - start_ns AS "duration_ns", root.service AS "root_service", root.name AS "root_name", root.resource AS "root_resource", "share" FROM (SELECT "trace_id", CAST(sum(span_count) AS BIGINT) AS "span_count", CAST(sum(error_count) AS BIGINT) AS "error_count", CAST(sum(log_count) AS BIGINT) AS "log_count", min(("start_time_unix_nano" - 0::BIGINT)) FILTER (WHERE span_count > 0 AND start_time_unix_nano IS NOT NULL AND end_time_unix_nano IS NOT NULL) AS "start_ns", max(("end_time_unix_nano" - 0::BIGINT)) FILTER (WHERE span_count > 0 AND start_time_unix_nano IS NOT NULL AND end_time_unix_nano IS NOT NULL) AS "end_ns", CASE WHEN count(*) FILTER (WHERE span_count > 0) = 1 THEN max(service_share) FILTER (WHERE span_count > 0) END AS "share", arg_min({\'service\': root_service, \'name\': root_name, \'resource\': root_resource}, (start_time_unix_nano, filename)) FILTER (WHERE root_name IS NOT NULL AND start_time_unix_nano IS NOT NULL) AS "root" FROM "traces" WHERE trace_id IN (SELECT DISTINCT "trace_id" FROM "spans" WHERE ("filename" IN (\'a/spans.parquet\'))) GROUP BY "trace_id") AS "agg") AS "t" ORDER BY "start_ns" ASC, "trace_id" ASC LIMIT 10';
+const MAIN_TRACE_ROWS_ALL =
+  'SELECT *, count(*) OVER () AS "total" FROM (SELECT "trace_id", "span_count", "error_count", "log_count", "start_ns", "end_ns", end_ns - start_ns AS "duration_ns", root.service AS "root_service", root.name AS "root_name", root.resource AS "root_resource", "share" FROM (SELECT "trace_id", CAST(sum(span_count) AS BIGINT) AS "span_count", CAST(sum(error_count) AS BIGINT) AS "error_count", CAST(sum(log_count) AS BIGINT) AS "log_count", min(("start_time_unix_nano" - 0::BIGINT)) FILTER (WHERE span_count > 0 AND start_time_unix_nano IS NOT NULL AND end_time_unix_nano IS NOT NULL) AS "start_ns", max(("end_time_unix_nano" - 0::BIGINT)) FILTER (WHERE span_count > 0 AND start_time_unix_nano IS NOT NULL AND end_time_unix_nano IS NOT NULL) AS "end_ns", CASE WHEN count(*) FILTER (WHERE span_count > 0) = 1 THEN max(service_share) FILTER (WHERE span_count > 0) END AS "share", arg_min({\'service\': root_service, \'name\': root_name, \'resource\': root_resource}, (start_time_unix_nano, filename)) FILTER (WHERE root_name IS NOT NULL AND start_time_unix_nano IS NOT NULL) AS "root" FROM "traces" WHERE trace_id IN (SELECT DISTINCT "trace_id" FROM "spans") GROUP BY "trace_id") AS "agg") AS "t" ORDER BY "start_ns" ASC, "trace_id" ASC LIMIT 10';
+const MAIN_WINDOW_TRACE_ROWS =
+  'SELECT *, count(*) OVER () AS "total" FROM (SELECT "trace_id", "span_count", "error_count", "log_count", "start_ns", "end_ns", end_ns - start_ns AS "duration_ns", root.service AS "root_service", root.name AS "root_name", root.resource AS "root_resource", "share" FROM (SELECT "trace_id", CAST(sum(span_count) AS BIGINT) AS "span_count", CAST(sum(error_count) AS BIGINT) AS "error_count", CAST(sum(log_count) AS BIGINT) AS "log_count", min(("start_time_unix_nano" - 0::BIGINT)) FILTER (WHERE span_count > 0 AND start_time_unix_nano IS NOT NULL AND end_time_unix_nano IS NOT NULL) AS "start_ns", max(("end_time_unix_nano" - 0::BIGINT)) FILTER (WHERE span_count > 0 AND start_time_unix_nano IS NOT NULL AND end_time_unix_nano IS NOT NULL) AS "end_ns", CASE WHEN count(*) FILTER (WHERE span_count > 0) = 1 THEN max(service_share) FILTER (WHERE span_count > 0) END AS "share", arg_min({\'service\': root_service, \'name\': root_name, \'resource\': root_resource}, (start_time_unix_nano, filename)) FILTER (WHERE root_name IS NOT NULL AND start_time_unix_nano IS NOT NULL) AS "root" FROM "traces" WHERE trace_id IN (SELECT DISTINCT "trace_id" FROM "spans" WHERE ("filename" IN (\'a/spans.parquet\'))) AND FALSE GROUP BY "trace_id" HAVING min(start_time_unix_nano) FILTER (WHERE span_count > 0 AND start_time_unix_nano IS NOT NULL AND end_time_unix_nano IS NOT NULL) >= 1::BIGINT AND min(start_time_unix_nano) FILTER (WHERE span_count > 0 AND start_time_unix_nano IS NOT NULL AND end_time_unix_nano IS NOT NULL) < 2::BIGINT) AS "agg") AS "t" ORDER BY "start_ns" ASC, "trace_id" ASC LIMIT 5';
 
 describe('SQL text', () => {
   test('the relation reads the index files inline, filtered by condition and bound keys', () => {
@@ -44,19 +51,20 @@ describe('SQL text', () => {
     expect(s).toContain(`"var:job" = 'it''s'`);
   });
   test('without a route the statements are the ones main builds', () => {
-    for (const f of [filter(), filter({ files: { files: ['a/spans.parquet'], all: true, total: 1 } })]) {
-      const m = sqlOf(traceRowsQuery(f, sort, 10));
-      expect(sqlOf(traceRowsQuery(f, sort, 10, undefined, null))).toBe(m);
-      expect(m).toContain('trace_id IN (SELECT DISTINCT "trace_id" FROM "spans"');
+    for (const [f, main] of [
+      [filter(), MAIN_TRACE_ROWS_FILTERED],
+      [filter({ files: { files: ['a/spans.parquet'], all: true, total: 1 } }), MAIN_TRACE_ROWS_ALL],
+    ] as const) {
+      expect(sqlOf(traceRowsQuery(f, sort, 10))).toBe(main);
+      expect(sqlOf(traceRowsQuery(f, sort, 10, undefined, null))).toBe(main);
       expect(sqlOf(spanCountQuery(f, 'traces'))).toBe(sqlOf(spanCountQuery(f, 'traces', null)));
       expect(sqlOf(spanCountQuery(f, 'traces'))).toBe(
         `SELECT count(DISTINCT trace_id) AS "total" FROM "spans"${f.files.all ? '' : ` WHERE ("filename" IN ('a/spans.parquet'))`}`,
       );
     }
     const w = filter({ window: { start: 1n, end: 2n }, long: true });
-    expect(sqlOf(windowTraceRowsQuery(w, noFiles, sort, 5))).toBe(
-      sqlOf(windowTraceRowsQuery(w, noFiles, sort, 5, null)),
-    );
+    expect(sqlOf(windowTraceRowsQuery(w, noFiles, sort, 5))).toBe(MAIN_WINDOW_TRACE_ROWS);
+    expect(sqlOf(windowTraceRowsQuery(w, noFiles, sort, 5, null))).toBe(MAIN_WINDOW_TRACE_ROWS);
   });
   test('with a route the matching relation unions the scan and the index', () => {
     const s = sqlOf(traceRowsQuery(filter(), sort, 10, undefined, route()));
@@ -80,10 +88,10 @@ describe('SQL text', () => {
     const f = filter({ files: { files: [], all: false, total: 3 } });
     const s = sqlOf(traceRowsQuery(f, sort, 10, undefined, route()));
     expect(s).not.toContain('UNION');
-    expect(s).not.toContain('FROM spans');
+    expect(s).not.toContain('FROM "spans"');
     expect(s).toContain('widget_traces.parquet');
     const c = sqlOf(spanCountQuery(f, 'traces', route()));
-    expect(c).not.toContain('FROM spans');
+    expect(c).not.toContain('FROM "spans"');
     expect(c).toContain('count(DISTINCT trace_id)');
   });
 });
