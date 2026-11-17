@@ -227,7 +227,7 @@ Log records counted per time grain and dimension combination (format 5; optional
 
 ## Table `widget_traces`
 
-The traces each indexed dashboard traces widget matches, one row per condition and trace (format 7; optional per partition).
+The traces each indexed dashboard traces widget matches, one row per distinct condition, trace and variable values (format 7; optional per partition).
 
 - Sorted by: `condition`, `trace_id`
 - Time column: none (`timeMin` and `timeMax` are null)

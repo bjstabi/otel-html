@@ -346,7 +346,7 @@ dashboards:
             show: false
 ```
 
-A `traces` widget's condition is indexed per partition (format 7), so a dashboard lists its traces without scanning spans. A partition whose index would weigh more than 5 % of its spans file, or whose span times are more than 2^53 ns apart, is not indexed and is scanned.
+The writer builds a per-partition index (format 7) of the traces each `traces` widget's condition matches. A partition whose index would weigh more than 5 % of its spans file, or whose span times are more than 2^53 ns apart, is not indexed and is scanned.
 
 The grid has 12 columns. A widget is `timeline`, `traces`, `logs`, `metric`, `toplist` or `table`; `toplist` and `table` take `signal` (`spans` or `logs`), `groupBy` and an optional `measure`: `count` (the default), or `duration.sum`, `duration.avg`, `duration.max`, `duration.p95` or `duration.p99` for spans. A duration measure keeps the first 1,000 values of `groupBy`; the widget says how many spans had other values. A `groupBy` that is not a facet of the report says so in the widget and suggests the closest known keys. A `metric` widget without `queries` is a grid of the metrics of the selected trace's resources.
 

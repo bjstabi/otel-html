@@ -26,7 +26,7 @@ const TABLE_NOTES: Readonly<Record<Table, string>> = {
   log_rollups:
     'Log records counted per time grain and dimension combination (format 5; optional per partition).',
   widget_traces:
-    'The traces each indexed dashboard traces widget matches, one row per condition and trace (format 7; optional per partition).',
+    'The traces each indexed dashboard traces widget matches, one row per distinct condition, trace and variable values (format 7; optional per partition).',
 };
 
 const MANIFEST_FIELDS = {
