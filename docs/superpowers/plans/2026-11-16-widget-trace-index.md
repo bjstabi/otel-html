@@ -160,6 +160,19 @@ plan measures the CI dashboard on the live-data rebuild against spec §6.
    - A routed `spanCountQuery` therefore only ever sees no window.
    - Task 9 asserts that the long-window total equals the scan's.
 
+4. **PR 2 decisions after the live measurement (maintainer, 2026-11-17).**
+   - The live rebuild has the CI dashboard at 185 requests and 2.92 s. It misses ≤ 170 requests and 0 `spans.parquet` reads. The 5 reads that remain are not the Runs widget's: 3 bind the base `spans` view at open, and 2 are share cells for traces written before #319. PR 2 ships with the misses recorded.
+   - The `#/dashboards/ci` requests pin on `mixed` is re-pinned at 22 (measured 20 + 10 %). The shape spans about 3.8 h, a short window, so its other widgets scan anyway, and the index adds one small file per partition there.
+   - **Task 13 (added): the empty state reads no spans.**
+     - On the live rebuild with `job` bound to a job that has no runs in the window, `EmptyFacet`'s `spanKeys` scans every spans file for attribute keys, twice: 313 requests and 20 s.
+     - The empty state must take its keys from data the report already holds, without scanning `spans.parquet`, and must show the same keys.
+   - **Task 14 (added): the index records its evaluator.**
+     - `WidgetIndexDescription.evaluator` is the version of the OTTL evaluation that wrote the rows (`WIDGET_INDEX_EVALUATOR`, starting at 1).
+     - `merge` copies a source index only when its version equals the writer's, and otherwise computes the index.
+     - The viewer routes a partition only when its version equals the viewer's, and otherwise scans it.
+     - An index without the field (written between #343 and this change) counts as a mismatch.
+     - The frozen format-7 report is frozen again.
+
 ## PR 1: format 7 and the writer
 
 ### Task 1: format 7, read and written (no new content yet)
