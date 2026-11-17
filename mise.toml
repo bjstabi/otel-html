@@ -792,7 +792,7 @@ downloaded report instead), merges it with this build's CLI into `<out>/rebuilt`
 minute), prints the `widget_traces` bytes against the spans bytes, serves it with a 14 ms delay and loads six pages cold
 three times each in Chromium (about 3 minutes): root, the CI dashboard with and without `-- --job <name>` bound, the
 traces list, logs and a trace open. Prints the median and range of requests, `spans.parquet` requests and settled time.
-`-- --out <dir>` is required; `-- --build <dist>` measures another build; `-- --no-rebuild` serves `<out>/live` as is."""
+`-- --out <dir>` is required (`-- --from` must not be `<dir>`, inside it or above it); `-- --job <name>` defaults to `check`; `-- --build <dist>` measures another build; `-- --no-rebuild` serves `<out>/live` as is."""
 shell = "bash -c"
 usage = 'arg "[args]" var=#true'
 run = """

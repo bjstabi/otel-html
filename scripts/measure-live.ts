@@ -6,7 +6,7 @@
 // serves <out>/rebuilt with a 14 ms delay and measures each page. `mise run measure:live`.
 import { spawnSync } from 'node:child_process';
 import { cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { chromium } from '@playwright/test';
 import { serve } from '../e2e/static-server.js';
 import { unwrapDataFile } from '../src/format/data-file.js';
@@ -164,6 +164,17 @@ const span = (xs: number[]): string => `${Math.min(...xs)}-${Math.max(...xs)}`;
 
 async function main(): Promise<void> {
   const from = flag('--from');
+  if (from !== undefined) {
+    // `rm(live)` runs before the copy: a source in `<out>`, or one that holds `<out>`, would be deleted or copied into itself
+    const inside = (a: string, b: string): boolean => {
+      const r = relative(a, b);
+      return r === '' || (!r.startsWith('..') && !isAbsolute(r));
+    };
+    if (inside(root, resolve(from)) || inside(resolve(from), root))
+      throw new Error(
+        `--from ${from} is the output directory ${root}, inside it or above it: pass a separate copy`,
+      );
+  }
   if (!args.includes('--no-rebuild') || (await sizeOf(join(live, 'data/manifest.js'))) === null) {
     if (from !== undefined) {
       await rm(live, { recursive: true, force: true });
