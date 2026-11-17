@@ -173,6 +173,14 @@ plan measures the CI dashboard on the live-data rebuild against spec §6.
      - An index without the field (written between #343 and this change) counts as a mismatch.
      - The frozen format-7 report is frozen again.
 
+5. **Task 15 (added, maintainer 2026-11-17): the writer records each table's attribute keys.**
+   - Task 13 found that no data the report holds gives the empty state's key set without a scan. The keys come from `attributeFacetsQuery`: scalar-valued attribute keys, core keys excluded, the `facetKeyCap` keys with the most values, ranked by count and then by key.
+   - **What the writer records.** Each `spans` and `logs` partition file records `attributeKeys: Record<string, number>`: every attribute key, with how many of that file's rows hold a scalar value for it. A value counts by the same rules `attributeFacetsQuery` applies: its JSON kind is a scalar, and its text is not null.
+   - **Where it is written.** Flush, compaction and the merge-computed path all write it. A merge-copy keeps the source's record, and computes it from the streamed spans or logs when the source has none.
+   - **What the viewer does.** It sums the counts across the files, removes the core keys, ranks by total descending then key, and keeps `facetKeyCap`. If any file lacks the record, it scans as today.
+   - **Size guard (my call).** A file with more than 1,000 distinct keys records nothing, and that report scans. Report the manifest growth on the live rebuild.
+   - **Tests.** An equivalence test compares the recorded path with `attributeFacetsQuery` on fixtures that mix kinds (string, int, double, bool, null, object and array values) for spans and logs, and over the key cap. It asserts no `spans.parquet` or `logs.parquet` is read. The frozen format-7 report is frozen again.
+
 ## PR 1: format 7 and the writer
 
 ### Task 1: format 7, read and written (no new content yet)
