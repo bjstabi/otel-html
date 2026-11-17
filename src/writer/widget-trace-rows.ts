@@ -128,7 +128,7 @@ export class WidgetTraceSet {
     // Rows of one resource and scope are many: their JSON is decoded once per distinct value in this chunk.
     const memo = new Map<string, DecodedShared>();
     const sharedOf = (r: ResultRow): DecodedShared => {
-      const key = SHARED_COLUMNS.map((c) => (r[c] === null ? '\u0001' : `s${String(r[c])}`)).join('\u0000');
+      const key = JSON.stringify(SHARED_COLUMNS.map((c) => (r[c] === null ? null : String(r[c]))));
       let v = memo.get(key);
       if (v === undefined) {
         v = sharedFromRow(r);

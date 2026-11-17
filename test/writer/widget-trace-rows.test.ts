@@ -192,6 +192,23 @@ describe('WidgetTraceSet', () => {
     expect(set.rows().map((r) => Reflect.get(r, 'trace_id'))).toEqual(['a'.repeat(32)]);
   });
 
+  test('shared values that differ only across a NUL boundary do not share a memo entry', () => {
+    const index = compileWidgetIndex({
+      conditions: [{ id: '0123456789abcdef', source: 'instrumentation_scope.version == "c"' }],
+      variables: [],
+      notRowLocal: [],
+    });
+    if (index === null) throw new Error('no index');
+    const set = new WidgetTraceSet(index);
+    set.add(
+      batchOf(
+        { trace: '1'.repeat(32), id: '1'.repeat(16), scope: 'a', scopeVersion: 'b\u0000sc' },
+        { trace: '2'.repeat(32), id: '2'.repeat(16), scope: 'a\u0000sb', scopeVersion: 'c' },
+      ),
+    );
+    expect(set.rows().map((r) => Reflect.get(r, 'trace_id'))).toEqual(['2'.repeat(32)]);
+  });
+
   test('the lighter decode (no events or links, shared values memoized) matches what a full decode matches', () => {
     const sources = [
       'IsRootSpan() and name == "n"',
