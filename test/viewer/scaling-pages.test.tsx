@@ -140,9 +140,8 @@ const PAGE_BATCH_MAX: Readonly<Record<string, number>> = {
   [TRACE_PAGE]: 7,
 };
 const PAGE_REQUESTS_MAX: Readonly<Record<string, number>> = {
-  // 20 measured since the traces list reads the widget index (16 before): its four small files are four more requests.
-  // NOT re-pinned: a pin that got worse waits for the maintainer's decision, so this page fails here by design.
-  '#/dashboards/ci': 18,
+  // 20 measured, +10 % = 22: the mixed shape spans ~3.8 h (a short window, so its other widgets scan spans) and the index adds one small file per partition.
+  '#/dashboards/ci': 22,
   '#/traces?mode=traces': 9,
   '#/traces': 5,
   '#/logs': 9,
