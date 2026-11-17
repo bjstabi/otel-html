@@ -90,6 +90,25 @@ async function dropIndex(w: ReturnType<typeof createTestWriter>, out: string): P
   expect(manifestOf(w, out).partitions[0]?.files.widget_traces).toBeUndefined();
 }
 
+/** The report at `out` with the index evaluator of every partition set to `evaluator` (removed when undefined). */
+async function setEvaluator(
+  w: ReturnType<typeof createTestWriter>,
+  out: string,
+  evaluator: number | undefined,
+): Promise<void> {
+  const key = `${out}/data/manifest.js`;
+  const raw = reviveDataJson(unwrapDataFile(w.fs.snapshot().get(key) ?? '', MANIFEST_KEY)) as {
+    partitions: { files: { widget_traces?: { widgetIndex: { evaluator?: number } } } }[];
+  };
+  for (const p of raw.partitions) {
+    const index = p.files.widget_traces?.widgetIndex;
+    if (index === undefined) continue;
+    if (evaluator === undefined) delete index.evaluator;
+    else index.evaluator = evaluator;
+  }
+  await w.fs.writeTextAtomic(key, wrapDataFile(MANIFEST_KEY, raw));
+}
+
 beforeEach(() => {
   reads.tables.length = 0;
 });
@@ -134,6 +153,7 @@ describe('a merge and the widget trace index of the partitions it copies', () =>
       for (const p of withSpans) {
         const f = p.files.widget_traces;
         expect(f?.widgetIndex).toEqual({
+          evaluator: 1,
           conditions: spec.conditions.map((c) => c.id),
           variables: spec.variables,
         });
@@ -160,6 +180,23 @@ describe('a merge and the widget trace index of the partitions it copies', () =>
     const b = await w.fs.readBytes(`m/${to?.path}`);
     expect(Array.from(b)).toEqual(Array.from(a));
     expect(reads.tables).toEqual([]);
+  });
+
+  test('an input whose index has no evaluator version, or another one, is recomputed with this one', async () => {
+    const config = await ciConfig();
+    for (const evaluator of [undefined, 2]) {
+      const w = createTestWriter();
+      await write(w, 'in', config);
+      await write(w, 'ref', config);
+      await setEvaluator(w, 'in', evaluator);
+      reads.tables.length = 0;
+      await merge(w, 'in', config);
+      const to = manifestOf(w, 'm').partitions[0]?.files.widget_traces;
+      expect(to?.widgetIndex?.evaluator).toBe(1);
+      expect(to?.widgetIndex).toEqual(manifestOf(w, 'ref').partitions[0]?.files.widget_traces?.widgetIndex);
+      expect(tableRowsOf(w, 'm', 'widget_traces')).toEqual(tableRowsOf(w, 'ref', 'widget_traces'));
+      expect(reads.tables).toContain('spans');
+    }
   });
 
   test('an input whose index lacks a variable column is recomputed with it', async () => {

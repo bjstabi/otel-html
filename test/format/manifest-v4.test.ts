@@ -350,6 +350,25 @@ describe('manifest format 7', () => {
     expect(manifestAnchor(m)).toBe(-5n);
   });
 
+  test('widgetIndex.evaluator is optional, and a positive integer when present', () => {
+    const withEvaluator = (evaluator: unknown): Raw => {
+      const raw = v7Raw();
+      const first = raw.partitions[0];
+      const file = first?.files.widget_traces as { widgetIndex: Record<string, unknown> };
+      const files = {
+        ...first?.files,
+        widget_traces: { ...file, widgetIndex: { ...file.widgetIndex, evaluator } },
+      };
+      return { ...raw, partitions: [{ ...first, files }] };
+    };
+    const parsed = (m: Raw) =>
+      (parseAnyManifest(m) as ManifestV4).partitions[0]?.files.widget_traces?.widgetIndex;
+    expect(parsed(v7Raw())?.evaluator).toBeUndefined();
+    expect(parsed(withEvaluator(1))?.evaluator).toBe(1);
+    expect(parsed(withEvaluator(7))?.evaluator).toBe(7);
+    for (const bad of [0, -1, 1.5]) expect(() => parseAnyManifest(withEvaluator(bad))).toThrow(OtelHtmlError);
+  });
+
   test('formats 5 and 6 reject a widget_traces entry and, separately, a refused field', () => {
     const raw = v7Raw();
     const first = raw.partitions[0];

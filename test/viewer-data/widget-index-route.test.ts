@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { conditionId } from '../../src/config/widget-traces.js';
+import { conditionId, WIDGET_INDEX_EVALUATOR } from '../../src/config/widget-traces.js';
 import type { ManifestV4 } from '../../src/format/manifest.js';
 import { routeWidgetIndex } from '../../src/viewer/data/widget-index-route.js';
 
@@ -7,7 +7,9 @@ const QUERY = 'name == "x"';
 const ID = conditionId(QUERY);
 const stats = { rows: 1, bytes: 1, values: {}, min: {}, max: {}, nulls: {} };
 
-function manifestOf(entries: readonly (null | { conditions: string[]; variables: string[] })[]): ManifestV4 {
+type Entry = { conditions: string[]; variables: string[]; evaluator?: number };
+
+function manifestOf(entries: readonly (null | Entry)[]): ManifestV4 {
   return {
     partitions: entries.map((index, i) => ({
       n: i,
@@ -37,10 +39,10 @@ const hint = (keys: string[]) => ({
 
 describe('routeWidgetIndex', () => {
   const m = manifestOf([
-    { conditions: [ID], variables: ['a', 'b'] },
+    { conditions: [ID], variables: ['a', 'b'], evaluator: WIDGET_INDEX_EVALUATOR },
     null,
-    { conditions: [ID], variables: ['a'] },
-    { conditions: ['0000000000000000'], variables: ['a', 'b'] },
+    { conditions: [ID], variables: ['a'], evaluator: WIDGET_INDEX_EVALUATOR },
+    { conditions: ['0000000000000000'], variables: ['a', 'b'], evaluator: WIDGET_INDEX_EVALUATOR },
   ]);
 
   test('partitions with a covering index move; the others stay in the scan', () => {
@@ -68,6 +70,20 @@ describe('routeWidgetIndex', () => {
   test('nothing moved: the scan is returned as it was and the route is null', () => {
     const s = scan(1, 3);
     expect(routeWidgetIndex(m, s, hint([]))).toEqual({ scan: s, route: null });
+  });
+
+  test('a partition routes only when its index was written by this evaluator version', () => {
+    const covering = { conditions: [ID], variables: ['a'] };
+    const v = manifestOf([{ ...covering, evaluator: 1 }, covering, { ...covering, evaluator: 2 }]);
+    const r = routeWidgetIndex(v, scan(0, 1, 2), hint(['a']));
+    expect(r.route?.files).toEqual(['data/partitions/000000/widget_traces.parquet']);
+    expect(r.scan.files).toEqual([spans(1), spans(2)]);
+    const none = routeWidgetIndex(
+      manifestOf([covering, { ...covering, evaluator: 2 }]),
+      scan(0, 1),
+      hint([]),
+    );
+    expect(none.route).toBeNull();
   });
 
   test('only files of the scan move', () => {

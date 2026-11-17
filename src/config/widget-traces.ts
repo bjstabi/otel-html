@@ -33,6 +33,14 @@ export function normalizeCondition(source: string): string {
   return out;
 }
 
+/**
+ * The version of the OTTL evaluation that decides which traces a condition matches: the writer's evaluator
+ * (`compileCondition`) when it writes the `widget_traces` index, and `translateCondition` when the viewer scans.
+ * Bump it whenever either changes what a condition matches, so that both sides agree: a merge computes again an
+ * index written by another version, and the viewer scans a partition whose index was.
+ */
+export const WIDGET_INDEX_EVALUATOR = 1;
+
 /** The id a `widget_traces` row carries: the first 16 hex digits of the SHA-256 of the normalized condition. */
 export function conditionId(source: string): string {
   return sha256Hex(normalizeCondition(source)).slice(0, 16);

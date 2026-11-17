@@ -39,6 +39,7 @@ describe('a flush writes widget_traces', () => {
     const id = conditionId(spec.conditions[0]?.source ?? '');
     const file = manifestOf(w, 'r').partitions[0]?.files.widget_traces;
     expect(file?.widgetIndex).toEqual({
+      evaluator: 1,
       conditions: [id],
       variables: ['cicd.pipeline.name', 'cicd.pipeline.run.id', 'cicd.pipeline.task.name'],
     });

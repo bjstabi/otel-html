@@ -1,4 +1,4 @@
-import type { WidgetTraceIndexSpec } from '../config/widget-traces.js';
+import { WIDGET_INDEX_EVALUATOR, type WidgetTraceIndexSpec } from '../config/widget-traces.js';
 import type { WidgetIndexDescription } from '../format/manifest.js';
 import type { ColumnBatch } from '../format/parquet/batch.js';
 import { batchFromRows } from '../format/parquet/batch.js';
@@ -62,6 +62,7 @@ export function compileWidgetIndex(spec: WidgetTraceIndexSpec): CompiledWidgetIn
     variables: spec.variables,
     columns: widgetTracesColumns(spec.variables),
     description: {
+      evaluator: WIDGET_INDEX_EVALUATOR,
       conditions: spec.conditions.map((c) => c.id).sort(),
       variables: [...spec.variables].sort(),
     },

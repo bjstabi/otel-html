@@ -1,5 +1,5 @@
 import type { ResolvedConfig } from '../config/schema.js';
-import { widgetTraceConditions } from '../config/widget-traces.js';
+import { WIDGET_INDEX_EVALUATOR, widgetTraceConditions } from '../config/widget-traces.js';
 import {
   type PartitionEntry,
   type PartitionFile,
@@ -311,10 +311,10 @@ async function* tapped(
 
 /** Whether a copied file's index (undefined for a format 5 or 6 file) holds every condition and variable `index` writes. */
 function coversIndex(
-  have: { conditions: string[]; variables: string[] } | undefined,
+  have: { conditions: string[]; variables: string[]; evaluator?: number } | undefined,
   index: CompiledWidgetIndex,
 ): boolean {
-  if (have === undefined) return false;
+  if (have === undefined || have.evaluator !== WIDGET_INDEX_EVALUATOR) return false;
   const c = new Set(have.conditions);
   const v = new Set(have.variables);
   return (

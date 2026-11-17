@@ -1,4 +1,4 @@
-import { conditionId } from '../../config/widget-traces.js';
+import { conditionId, WIDGET_INDEX_EVALUATOR } from '../../config/widget-traces.js';
 import type { ManifestV4 } from '../../format/manifest.js';
 import type { Pruned } from '../../query/sql/prune.js';
 import type { WidgetIndexRoute } from '../../query/sql/widget-index.js';
@@ -31,6 +31,7 @@ export function routeWidgetIndex(
     const entry = p.files.widget_traces;
     const covers = entry?.widgetIndex;
     if (spans === undefined || entry === undefined || covers === undefined) continue;
+    if (covers.evaluator !== WIDGET_INDEX_EVALUATOR) continue;
     if (!covers.conditions.includes(id)) continue;
     if (!hint.bindings.every((b) => covers.variables.includes(b.key))) continue;
     index.set(spans, entry.path);

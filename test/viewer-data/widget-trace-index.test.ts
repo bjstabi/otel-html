@@ -15,7 +15,7 @@ import {
   openFixtureDb,
 } from '../../test-support/format4-fixture.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
-import { withoutWidgetIndex } from '../../test-support/rollup-fixture.js';
+import { withoutIndexEvaluator, withoutWidgetIndex } from '../../test-support/rollup-fixture.js';
 import { ciConfig, ciRequest, filler, T0 } from '../writer/widget-index-helpers.js';
 
 // Most tests open fresh DuckDB engines: up to 4 times slower on a CI runner.
@@ -62,7 +62,8 @@ let query: string;
 let indexed: Format4Fixture;
 let partly: Format4Fixture;
 let stripped: Format4Fixture;
-const opened: Record<'indexed' | 'partly' | 'stripped', Opened> = {} as never;
+let unversioned: Format4Fixture;
+const opened: Record<'indexed' | 'partly' | 'stripped' | 'unversioned', Opened> = {} as never;
 
 beforeAll(async () => {
   const config = await ciConfig();
@@ -102,9 +103,11 @@ beforeAll(async () => {
   );
   partly = withoutWidgetIndex(indexed, indexed.manifest.partitions[1]?.n);
   stripped = withoutWidgetIndex(indexed);
+  unversioned = withoutIndexEvaluator(indexed);
   opened.indexed = await open(indexed);
   opened.partly = await open(partly);
   opened.stripped = await open(stripped);
+  opened.unversioned = await open(unversioned);
 });
 
 afterAll(() => {
@@ -188,7 +191,7 @@ describe('a traces widget answers the same from the index as from the scan', () 
             const make = (cursor: SpanQuery['cursor']) =>
               requestOf(opened.indexed, b, window, dir, limit, ['rows', 'total'], cursor);
             const truth = await pages(opened.stripped, make);
-            for (const o of [opened.indexed, opened.partly]) {
+            for (const o of [opened.indexed, opened.partly, opened.unversioned]) {
               expect(plain(await pages(o, make, hintOf(b)))).toEqual(plain(truth));
             }
             const first = (truth as { rows: unknown[]; total: number }[])[0];
@@ -237,6 +240,22 @@ describe('a traces widget answers the same from the index as from the scan', () 
         widgetIndex: hintOf([]),
       });
       expect(spansRead(fresh)).toBe(false);
+    } finally {
+      fresh.close();
+    }
+  });
+
+  test('an index without the evaluator version is scanned: the stripped answer, spans read', async () => {
+    const fresh = await open(unversioned);
+    try {
+      for (const [, b] of BINDINGS) {
+        fresh.prepared.length = 0;
+        const q = requestOf(fresh, b, null, 'desc', 200, ['rows', 'total']);
+        const r = await fresh.source().querySpans({ ...q, widgetIndex: hintOf(b) });
+        expect(plain(r)).toEqual(plain(await opened.stripped.source().querySpans(q)));
+        expect(spansRead(fresh)).toBe(true);
+        expect(fresh.prepared.flat().some((f) => f.endsWith('/widget_traces.parquet'))).toBe(false);
+      }
     } finally {
       fresh.close();
     }

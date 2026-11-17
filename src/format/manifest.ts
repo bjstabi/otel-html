@@ -181,6 +181,8 @@ export interface RollupDescription {
 
 /** Format 7, the `widget_traces` file only: the conditions (hashes) and variable keys its rows cover, sorted. */
 export interface WidgetIndexDescription {
+  /** The `WIDGET_INDEX_EVALUATOR` of the writer; absent in an index written before the field (it counts as a mismatch). */
+  evaluator?: number;
   conditions: string[];
   variables: string[];
 }
@@ -305,7 +307,11 @@ export const RollupPartitionFileSchemaV7: z.ZodType<PartitionFile> = z.strictObj
 /** A format-7 `widget_traces` file: `widgetIndex` states the conditions and variable keys it covers. */
 export const WidgetTracesPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
   ...PartitionFileShape,
-  widgetIndex: z.strictObject({ conditions: z.array(z.string()), variables: z.array(z.string()) }),
+  widgetIndex: z.strictObject({
+    evaluator: z.exactOptional(z.number().int().positive()),
+    conditions: z.array(z.string()),
+    variables: z.array(z.string()),
+  }),
 });
 
 const refineManifest = (

@@ -379,6 +379,20 @@ export function withoutWidgetIndex(f: Format4Fixture, n?: number): Format4Fixtur
   return { ...f, manifest, files };
 }
 
+/** The report whose `widget_traces` entries lack `widgetIndex.evaluator`, as written before the field existed. */
+export function withoutIndexEvaluator(f: Format4Fixture): Format4Fixture {
+  const manifest: ManifestV4 = {
+    ...f.manifest,
+    partitions: f.manifest.partitions.map((p) => {
+      const entry = p.files.widget_traces;
+      if (entry?.widgetIndex === undefined) return p;
+      const { evaluator: _dropped, ...widgetIndex } = entry.widgetIndex;
+      return { ...p, files: { ...p.files, widget_traces: { ...entry, widgetIndex } } };
+    }),
+  };
+  return { ...f, manifest };
+}
+
 /**
  * `rich` with the rollup of partition `n` (its `table`) replaced by `plain`'s: the same rows with the core dimensions
  * only. When `noValue`, its statistics record "no value" for the keys of `rich` it does not hold, as a rollup written

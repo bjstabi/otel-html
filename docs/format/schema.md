@@ -328,7 +328,7 @@ Each `partitions` entry is `{ n, source, files }`. `files` has an entry per tabl
 | `timeEndMax` | format 5, `spans` and `traces` files only, optional: the largest end time, as int64 text, or null when there are no rows |
 | `rollup` | format 5, rollup tables only, required: `{ grainNs, dimensions, durationBuckets? }`, what the file groups by |
 | `serviceShare` | format 6, `traces` files only, optional: `true` when the file has the `service_share` column, so its rows may carry a share (a row that does not, such as a trace compacted from a format-5 input, is null and a reader falls back to the spans; see [`service_share`](#service_share)) |
-| `widgetIndex` | format 7, `widget_traces` files only, required: `{ conditions, variables }`, the sorted condition hashes and `var:` keys the file covers |
+| `widgetIndex` | format 7, `widget_traces` files only, required: `{ evaluator?, conditions, variables }`, the sorted condition hashes and `var:` keys the file covers, and the `evaluator` version of the OTTL evaluation that wrote them (a number; a merge copies the file, and the viewer reads it, only when it equals the reader's own, otherwise the traces are computed from the spans; absent in a report written before the field, which counts as a mismatch) |
 
 ### `source`
 
