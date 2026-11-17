@@ -178,8 +178,8 @@ describe('a page asks no more requests than pinned on the mixed shape (+10 % of 
 describe('the Runs statement of the CI dashboard on the mixed shape', () => {
   /**
    * Other widgets of the page read `spans.parquet` on this shape (the timeline, the two step lists and the variables'
-   * values: its 50 minutes are a short range, so none of them has a rollup to read), so the page's own `spansReads`
-   * is not 0. The Runs statement alone, with no file prepared, reads the index and the traces files and no spans file.
+   * values: its 50 minutes are a short range, so none of them has a rollup to read), so the page itself still reads
+   * spans files. The Runs statement alone, with no file prepared, reads the index and the traces files and no spans file.
    */
   test('reads the widget index and no spans file', async () => {
     const live = await buildScalingReport({ ...BASE, mixed: true });
