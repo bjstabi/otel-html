@@ -126,6 +126,7 @@
     "test/query/sql/residual.test.ts": 0.1,
     "test/query/sql/rollup.test.ts": 1.9,
     "test/query/sql/spans.test.ts": 5.8,
+    "test/query/sql/widget-index.test.ts": 1.5,
     "test/query/sql/views.test.ts": 12.8,
     "test/receiver/forward.test.ts": 0.1,
     "test/receiver/grpc.test.ts": 0.9,

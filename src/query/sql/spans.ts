@@ -23,6 +23,7 @@ import { CORE_SPAN_FACETS, truncated } from './facets.js';
 import { filenameTerm, type SqlFilter, whereOf } from './filter.js';
 import type { AbsWindow, Pruned } from './prune.js';
 import { type BucketSpec, bucketExpr } from './time.js';
+import { type WidgetIndexRoute, widgetIndexRelation } from './widget-index.js';
 
 export interface SpanSort {
   column: 'start' | 'duration' | 'name' | 'service' | 'resource' | 'status';
@@ -155,12 +156,29 @@ export function spanTotalQuery(f: SqlFilter): Query {
  * `traces` row of the scope (else, or when that row has none, NULL; it reads the `traces` column only, never a span), the root from the row with the smallest start whose `root_name` is set,
  * the lower partition on a tie (R35). Also `duration_ns` and `total`.
  */
-export function traceRowsQuery(f: SqlFilter, sort: TraceSort, limit: number, page?: TracePage): Query {
-  const matching = Query.from('spans')
+export function traceRowsQuery(
+  f: SqlFilter,
+  sort: TraceSort,
+  limit: number,
+  page?: TracePage,
+  route?: WidgetIndexRoute | null,
+): Query {
+  const matching = matchingTraces(f, whereOf(f, 'spans'), route);
+  return traceRowsOf(traceAggregate(f.epoch).where(sql`trace_id IN (${matching})`), sort, limit, page);
+}
+
+/**
+ * The trace ids of the matching spans: `terms` over the spans files `f.files` names. With a `route` the index relation
+ * of the routed partitions joins the scan by `UNION`; the scan arm is left out when no spans file is read.
+ */
+function matchingTraces(f: SqlFilter, terms: ExprNode[], route?: WidgetIndexRoute | null): SelectQuery {
+  const scan = Query.from('spans')
     .select('trace_id')
     .distinct()
-    .where(...whereOf(f, 'spans'));
-  return traceRowsOf(traceAggregate(f.epoch).where(sql`trace_id IN (${matching})`), sort, limit, page);
+    .where(...terms);
+  if (route == null) return scan;
+  const index = widgetIndexRelation(route) as unknown as SelectQuery;
+  return f.files.files.length === 0 ? index : (Query.union(scan, index) as unknown as SelectQuery);
 }
 
 /**
@@ -222,14 +240,17 @@ export function windowTracePartitionsQuery(files: Pruned, window: AbsWindow): Qu
  * `windowTracePartitionsQuery` named and `traces` the `traces` files read. The condition and text pick the traces
  * from those spans whatever their own start (the window is the trace's, not the span's).
  */
-export function windowTraceRowsQuery(f: SqlFilter, traces: Pruned, sort: TraceSort, limit: number): Query {
+export function windowTraceRowsQuery(
+  f: SqlFilter,
+  traces: Pruned,
+  sort: TraceSort,
+  limit: number,
+  route?: WidgetIndexRoute | null,
+): Query {
   if (f.window === null) {
     throw new OtelHtmlError('usage', { message: 'windowTraceRowsQuery: a window is required' });
   }
-  const matching = Query.from('spans')
-    .select('trace_id')
-    .distinct()
-    .where(...whereOf({ ...f, window: null }, 'spans'));
+  const matching = matchingTraces(f, whereOf({ ...f, window: null }, 'spans'), route);
   const agg = traceAggregate(f.epoch).where(sql`trace_id IN (${matching})`).having(traceStartIn(f.window));
   const own = filenameTerm(traces);
   if (own !== null) agg.where(own);
@@ -311,7 +332,17 @@ function traceRowsOf(agg: Query, sort: TraceSort, limit: number, page?: TracePag
  * One row, one column `total`: the number of filtered spans, or in `traces` mode of distinct traces among them. It is
  * what `spanRowsQuery` / `traceRowsQuery` report as `total`, from a statement that reads no span row.
  */
-export function spanCountQuery(f: SqlFilter, mode: 'spans' | 'traces'): Query {
+export function spanCountQuery(
+  f: SqlFilter,
+  mode: 'spans' | 'traces',
+  route?: WidgetIndexRoute | null,
+): Query {
+  if (mode === 'traces' && route != null) {
+    // the index relation repeats a trace (per variable tuple and partition), so the count stays DISTINCT
+    return Query.from({ m: matchingTraces(f, whereOf(f, 'spans'), route) }).select({
+      total: sql`count(DISTINCT trace_id)`,
+    });
+  }
   return Query.from('spans')
     .select({ total: mode === 'traces' ? sql`count(DISTINCT trace_id)` : sql`count(*)` })
     .where(...whereOf(f, 'spans'));
