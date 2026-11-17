@@ -111,6 +111,22 @@ describe('a flush records the attribute keys of its spans and logs', () => {
     expect(recordsOf(w, 'over', 'spans')).toEqual([undefined]);
     expect(Object.keys(recordsOf(w, 'exact', 'spans')[0] ?? {})).toHaveLength(1000);
   });
+
+  test('a failed cut gives its counts back: the retried cut records what a clean cut records', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: 'r', config: config(), mode: 'replace' });
+    await s.add(keySpans(0), 'in:0');
+    await s.add(keyLogs(0), 'in:1');
+    w.fs.failNextWrite('spans.parquet');
+    await expect(s.flush()).rejects.toThrow('injected write failure');
+    await s.flush();
+    const clean = await write(w, 'clean', [keySpans(0), keyLogs(0)], false);
+    await clean.flush();
+    for (const table of ['spans', 'logs'] as const) {
+      expect(recordsOf(w, 'r', table)).toEqual(recordsOf(w, 'clean', table));
+      expect(Object.keys(recordsOf(w, 'r', table)[0] ?? {}).length).toBeGreaterThan(6);
+    }
+  });
 });
 
 describe('compaction', () => {
