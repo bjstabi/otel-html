@@ -392,7 +392,7 @@ function ciDashboards(): unknown[] {
 function ciWidgetQuery(): string {
   for (const d of ciDashboards() as { widgets?: { type?: string; query?: string }[] }[])
     for (const w of d.widgets ?? []) if (w.type === 'traces' && typeof w.query === 'string') return w.query;
-  throw new Error('the CI config has no traces widget with a query');
+  throw new OtelHtmlError('usage', { message: 'the CI config has no traces widget with a query' });
 }
 
 /** Builds the report of `shape` in this process into a new temp folder (`close()` removes it): never the shared cache. */

@@ -381,6 +381,33 @@ describe('the Top list and Table widgets', () => {
     expect(scans).toBe(1);
   });
 
+  test('two empty widgets mounted while the report keys load share the one read', async () => {
+    const base = fusionSource();
+    let scans = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const ds: DataSource = {
+      ...base,
+      querySpans: async (q, signal) => {
+        if (q.facetKeys === null) {
+          scans++;
+          await gate;
+        }
+        return base.querySpans(q, signal);
+      },
+    };
+    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'name' });
+    await waitFor(() => expect(scans).toBe(1));
+    mount(ds, { type: 'table', signal: 'spans', groupBy: 'nope' });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(scans).toBe(1);
+    release();
+    await waitFor(() => expect(screen.getAllByText(/is not a facet of this report/)).toHaveLength(2));
+    expect(scans).toBe(1);
+  });
+
   test('the report keys are read only when a widget has no values, and no message shows until they load', async () => {
     const base = fusionSource();
     const queries: SpanQuery[] = [];
