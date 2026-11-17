@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'vitest';
 import { decodeTable } from '../../src/format/parquet/codec.js';
-import type { Table } from '../../src/format/parquet/columns.js';
+import type { StatisticsTable } from '../../src/format/parquet/columns.js';
 import type { Row } from '../../src/format/parquet/rows.js';
 import { PartitionWriter, type PartitionWriterOptions } from '../../src/writer/partition-writer.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 
-const keys = (): Record<Table, string[]> => ({
+const keys = (): Record<StatisticsTable, string[]> => ({
   spans: ['scope_name'],
   logs: ['scope_name'],
   points: [],

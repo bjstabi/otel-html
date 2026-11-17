@@ -3,10 +3,11 @@ import { z } from 'zod';
 import type { PartitionFile } from '../../format/manifest.js';
 import {
   PartitionFileSchema,
-  RollupPartitionFileSchema,
+  RollupPartitionFileSchemaV7,
   ShareTracesPartitionFileSchema,
   SOURCE_RE,
   TimeEndPartitionFileSchema,
+  WidgetTracesPartitionFileSchema,
 } from '../../format/manifest.js';
 import type { Table } from '../../format/parquet/columns.js';
 import { TABLES } from '../../format/parquet/columns.js';
@@ -56,8 +57,10 @@ const partitionShape = {
     // format 6: a traces file may state `serviceShare: true` (an update of a format-5 job never does)
     traces: z.exactOptional(ShareTracesPartitionFileSchema),
     patterns: z.exactOptional(PartitionFileSchema),
-    span_rollups: z.exactOptional(RollupPartitionFileSchema),
-    log_rollups: z.exactOptional(RollupPartitionFileSchema),
+    // format 7 shapes (a superset of formats 5 and 6, which stay valid): `refused` on a rollup, a widget trace index
+    span_rollups: z.exactOptional(RollupPartitionFileSchemaV7),
+    log_rollups: z.exactOptional(RollupPartitionFileSchemaV7),
+    widget_traces: z.exactOptional(WidgetTracesPartitionFileSchema),
   }),
 };
 const UpdatePartitionSchema: z.ZodType<UpdatePartition> = z.strictObject({

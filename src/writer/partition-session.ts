@@ -1,4 +1,5 @@
 import type { ResolvedConfig } from '../config/schema.js';
+import { widgetTraceConditions } from '../config/widget-traces.js';
 import {
   type PartitionEntry,
   type PartitionFile,
@@ -7,12 +8,21 @@ import {
 } from '../format/manifest.js';
 import { batchFromRows, type ColumnBatch } from '../format/parquet/batch.js';
 import { checkRow, encodeColumns } from '../format/parquet/codec.js';
-import { ROLLUP_OF, type RollupTable, TABLE_COLUMNS, TABLES, type Table } from '../format/parquet/columns.js';
+import {
+  ROLLUP_OF,
+  type RollupTable,
+  STATISTICS_TABLES,
+  type StatisticsTable,
+  TABLE_COLUMNS,
+  TABLES,
+  type Table,
+} from '../format/parquet/columns.js';
 import { applyNormalization, logRow, pointRow, type Row, spanRow } from '../format/parquet/rows.js';
 import {
   completeStatistics,
   fileStatistics,
   statisticsKeysFor,
+  statisticsKeysOf,
   widgetOnlyKeysFor,
 } from '../format/parquet/stats.js';
 import { type PanicGuard, readColumns } from '../format/parquet/stream.js';
@@ -64,7 +74,7 @@ import {
   pointNormalization,
   UNNORMALIZED,
 } from './partition-checkpoint.js';
-import { PartitionWriter } from './partition-writer.js';
+import { type Derived, PartitionWriter } from './partition-writer.js';
 import { patternRows } from './pattern-rows.js';
 import { prunePartitions } from './prune.js';
 import { rebaseBatch } from './rebase.js';
@@ -91,6 +101,15 @@ import type {
 import { traceRows } from './trace-summaries.js';
 import { writeViewerAssets } from './viewer-assets.js';
 import { watchWasmPanics } from './wasm-panic.js';
+import {
+  type CompiledWidgetIndex,
+  compileWidgetIndex,
+  encodeWidgetTraces,
+  WidgetTraceSet,
+  widgetIndexAllowed,
+  widgetIndexInexact,
+  widgetIndexTooLarge,
+} from './widget-trace-rows.js';
 import { writeWrapper } from './wrapper-file.js';
 
 interface Restored {
@@ -228,6 +247,81 @@ export async function openPartitionSession(
   }
 }
 
+/** Every column of a base table file, decoded into one batch. */
+async function decodeBatch(
+  base: 'spans' | 'logs',
+  bytes: Uint8Array,
+  path: string,
+  guard: PanicGuard,
+): Promise<ColumnBatch> {
+  const names = TABLE_COLUMNS[base].map((c) => c.name);
+  const cells = new Map<string, unknown[]>(names.map((name) => [name, []]));
+  let length = 0;
+  for await (const cols of readColumns(
+    base,
+    new Blob([bytes as Uint8Array<ArrayBuffer>]),
+    path,
+    undefined,
+    guard,
+  )) {
+    length += cols[0]?.length ?? 0;
+    for (const [i, name] of names.entries()) {
+      const into = cells.get(name);
+      if (into !== undefined) for (const v of cols[i] ?? []) into.push(v);
+    }
+  }
+  return { length, cells: Object.fromEntries(cells) };
+}
+
+/** The spans or logs file as chunks of its row groups, each a batch of every column. */
+async function* streamBatches(
+  base: 'spans' | 'logs',
+  bytes: Uint8Array,
+  path: string,
+  guard: PanicGuard,
+): AsyncGenerator<ColumnBatch> {
+  const names = TABLE_COLUMNS[base].map((c) => c.name);
+  for await (const cols of readColumns(
+    base,
+    new Blob([bytes as Uint8Array<ArrayBuffer>]),
+    path,
+    undefined,
+    guard,
+  )) {
+    const cells: Record<string, unknown[]> = {};
+    for (const [i, name] of names.entries()) cells[name] = cols[i] ?? [];
+    yield { length: cols[0]?.length ?? 0, cells };
+  }
+}
+
+async function* wholeOf(batch: Promise<ColumnBatch>): AsyncGenerator<ColumnBatch> {
+  yield await batch;
+}
+
+/** `chunks`, each passed to `tap` before it is yielded. */
+async function* tapped(
+  chunks: AsyncIterable<ColumnBatch>,
+  tap: (chunk: ColumnBatch) => void,
+): AsyncGenerator<ColumnBatch> {
+  for await (const chunk of chunks) {
+    tap(chunk);
+    yield chunk;
+  }
+}
+
+/** Whether a copied file's index (undefined for a format 5 or 6 file) holds every condition and variable `index` writes. */
+function coversIndex(
+  have: { conditions: string[]; variables: string[] } | undefined,
+  index: CompiledWidgetIndex,
+): boolean {
+  if (have === undefined) return false;
+  const c = new Set(have.conditions);
+  const v = new Set(have.variables);
+  return (
+    index.description.conditions.every((x) => c.has(x)) && index.description.variables.every((x) => v.has(x))
+  );
+}
+
 class PartitionSession implements WriterSession {
   readonly #deps: WriterDeps;
   readonly #out: string;
@@ -242,11 +336,15 @@ class PartitionSession implements WriterSession {
   /** The state `release` serialised before it dropped the live structures; the final checkpoint writes these. */
   #frozen: { dedupe: string; metricStreams: string; drain: string } | null = null;
   readonly #writer: PartitionWriter;
-  readonly #statisticsKeys: Record<Table, string[]>;
+  readonly #statisticsKeys: Record<StatisticsTable, string[]>;
   /** The statistics keys only a widget condition asked for, per table: a rollup keeps one while it is cheap (`rollupKeyAllowed`). */
-  readonly #widgetKeys: Record<Table, string[]>;
+  readonly #widgetKeys: Record<StatisticsTable, string[]>;
   /** The (table, key) pairs a widget key was left out of a rollup for, already warned about this session. */
   readonly #toldKeys = new Set<string>();
+  /** The widget trace index of this report's config, null when it has no indexed traces widget. */
+  readonly #widgetIndex: CompiledWidgetIndex | null;
+  /** The widget index messages already told this session (a partition that refuses its index says so once). */
+  readonly #toldIndex = new Set<string>();
   readonly #createdAt: string;
   readonly #title: string;
   /** The anchor this session's own records are relative to: its own first record's time, fixed once data is accepted. Times in files are absolute. */
@@ -297,14 +395,20 @@ class PartitionSession implements WriterSession {
     this.#dedupe = r.dedupe;
     this.#normalizer = r.normalizer;
     this.#drain = r.drain;
-    this.#statisticsKeys = Object.fromEntries(TABLES.map((t) => [t, statisticsKeysFor(t, config)])) as Record<
-      Table,
-      string[]
-    >;
-    this.#widgetKeys = Object.fromEntries(TABLES.map((t) => [t, widgetOnlyKeysFor(t, config)])) as Record<
-      Table,
-      string[]
-    >;
+    this.#statisticsKeys = Object.fromEntries(
+      STATISTICS_TABLES.map((t) => [t, statisticsKeysFor(t, config)]),
+    ) as Record<StatisticsTable, string[]>;
+    this.#widgetKeys = Object.fromEntries(
+      STATISTICS_TABLES.map((t) => [t, widgetOnlyKeysFor(t, config)]),
+    ) as Record<StatisticsTable, string[]>;
+    const spec = widgetTraceConditions(config.dashboards);
+    this.#widgetIndex = compileWidgetIndex(spec);
+    for (const source of spec.notRowLocal) {
+      deps.logger.warn(
+        'a traces widget condition is not indexed: it calls a converter that is not row local, so its partitions are scanned',
+        { condition: source },
+      );
+    }
     this.#writer = new PartitionWriter(deps.fs, {
       out,
       rowGroupRows: deps.rowGroupRows ?? config.writer.rowGroupRows,
@@ -318,6 +422,7 @@ class PartitionSession implements WriterSession {
         return {
           rows: { traces: traceRows(taken.spans, taken.logs), patterns: p.rows, ...r.rows },
           rollups: r.descriptions,
+          ...this.#widgetRows(taken.spans),
           commit: () => {
             this.#drain = p.drain;
           },
@@ -382,6 +487,7 @@ class PartitionSession implements WriterSession {
     const rollupTable = base === 'spans' ? 'span_rollups' : 'log_rollups';
     let size = baseBytes;
     let current: number | undefined;
+    const refused: string[] = [];
     const encodedSize = (rows: readonly Row[]): number =>
       encodeColumns(rollupTable, batchFromRows(rollupTable, rows), this.#encodeOptions()).length;
     for (const key of this.#statisticsKeys[base].filter((k) => widget.has(k))) {
@@ -402,6 +508,7 @@ class PartitionSession implements WriterSession {
         const told = `${base}\0${key}`;
         const log = this.#toldKeys.has(told) ? 'debug' : 'warn';
         this.#toldKeys.add(told);
+        refused.push(key);
         this.#deps.logger[log](
           `the ${base} rollup does not group by ${key}, which a widget condition tests: the rollup would be ${why}`,
           {
@@ -426,12 +533,50 @@ class PartitionSession implements WriterSession {
         grainNs: ROLLUP_GRAIN_NS,
         dimensions,
         ...(base === 'spans' ? { durationBuckets: 'log2x8' as const } : {}),
+        ...(refused.length === 0 ? {} : { refused: refused.sort() }),
       },
     };
   }
 
   #encodeOptions(): { rowGroupRows: number } {
     return { rowGroupRows: this.#deps.rowGroupRows ?? this.#config.writer.rowGroupRows };
+  }
+
+  /** Tells `message` once per session when it is a widget index refusal, every time otherwise. */
+  #warnOnce(message: string, attrs: Record<string, unknown>): void {
+    if (message.startsWith('the widget trace index')) {
+      if (this.#toldIndex.has(message)) return;
+      this.#toldIndex.add(message);
+    }
+    this.#deps.logger.warn(message, attrs);
+  }
+
+  /** The `widget_traces` rows of a cut's spans; nothing for a cut without spans or a set that is not exact. */
+  #widgetRows(spans: ColumnBatch): Pick<Derived, 'widgetIndex'> {
+    const index = this.#widgetIndex;
+    if (index === null || spans.length === 0) return {};
+    const set = new WidgetTraceSet(index);
+    set.add(spans);
+    return this.#widgetRowsOf(set, index);
+  }
+
+  /** The `widget_traces` rows of a filled set, with the guard and the inexact warning. */
+  #widgetRowsOf(set: WidgetTraceSet, index: CompiledWidgetIndex): Pick<Derived, 'widgetIndex'> {
+    if (!set.exact) {
+      this.#warnOnce(...widgetIndexInexact(index));
+      return {};
+    }
+    return {
+      widgetIndex: {
+        rows: set.rows(),
+        index,
+        allowed: (indexBytes, emptyBytes, spansBytes) => {
+          if (widgetIndexAllowed(indexBytes, emptyBytes, spansBytes)) return true;
+          this.#warnOnce(...widgetIndexTooLarge(index, indexBytes - emptyBytes, spansBytes));
+          return false;
+        },
+      },
+    };
   }
 
   /** The rollup rows of a cut and their descriptions; a table whose rollup the guard refuses gets neither, and a warning. */
@@ -1026,6 +1171,63 @@ class PartitionSession implements WriterSession {
     this.#ctx = null;
   }
 
+  /** A copied partition's file written under number `n`, with its wrapper in a `local` report. */
+  async #putFile(n: number, table: Table, bytes: Uint8Array): Promise<void> {
+    const { fs } = this.#deps;
+    await fs.writeBytes(at(this.#out, partitionFilePath(n, table)), bytes);
+    if (this.#config.writer.format === 'local') {
+      await writeWrapper(fs, at(this.#out, partitionWrapperPath(n, table)), partitionKey(n, table), bytes);
+    }
+  }
+
+  /** The `widget_traces` of a copied partition's decoded spans, with the flush's guard and warnings; null when none is written. */
+  #computedIndex(
+    index: CompiledWidgetIndex,
+    set: WidgetTraceSet,
+    spansBytes: number,
+  ): { bytes: Uint8Array; file: PartitionFile } | null {
+    const wi = this.#widgetRowsOf(set, index).widgetIndex;
+    if (wi === undefined) return null;
+    const rowGroupRows = this.#encodeOptions().rowGroupRows;
+    const bytes = encodeWidgetTraces(wi.rows, index, rowGroupRows);
+    const empty = encodeWidgetTraces([], index, rowGroupRows).length;
+    if (!wi.allowed(bytes.length, empty, spansBytes)) return null;
+    return {
+      bytes,
+      file: {
+        path: '',
+        bytes: bytes.length,
+        ...fileStatistics(
+          'widget_traces',
+          batchFromRows('widget_traces', wi.rows, index.columns),
+          [],
+          this.#config.writer.facetValueCap,
+        ),
+        widgetIndex: index.description,
+      },
+    };
+  }
+
+  /**
+   * The base table whose rows a copied rollup `f` of `table` must be computed again from (its description lacks a
+   * dimension this report lists), or null when it is copied as it is. `src` is the partition, whose base file must exist.
+   */
+  #staleRollupBase(table: Table, f: PartitionFile, src: PartitionEntry): 'spans' | 'logs' | null {
+    if ((table !== 'span_rollups' && table !== 'log_rollups') || f.rollup === undefined) return null;
+    const base = ROLLUP_OF[table];
+    if (src.files[base] === undefined) return null;
+    const wanted = rollupDimensions(base, this.#statisticsKeys[base]);
+    const have = f.rollup.dimensions;
+    // A widget-only key the rollup lacks is skipped only when the writer recorded that it weighed and refused it
+    // (`refused`): weighing it again would decode the partition on every merge only to drop it again. A rollup
+    // that merely lacks the key (an older writer, or a compaction that never weighed it) is computed again.
+    const refused = new Set(f.rollup.refused);
+    const widget = new Set(this.#widgetKeys[base]);
+    const have0 = new Set(have);
+    const need = wanted.filter((d) => have0.has(d) || !(widget.has(d) && refused.has(d)));
+    return have.length === need.length && have.every((d, i) => d === need[i]) ? null : base;
+  }
+
   /**
    * The rollup file of a copied partition computed again from its base rows, when the copy's rollup description lacks
    * the dimensions this report's statistics keys give; null when it is to be copied as it is; 'refused' when the guard
@@ -1034,41 +1236,17 @@ class PartitionSession implements WriterSession {
   async #recomputedRollup(
     table: Table,
     f: PartitionFile,
+    src: PartitionEntry,
     baseBytes: ReadonlyMap<Table, Uint8Array>,
     path: string,
-    guard: PanicGuard,
+    decode: (base: 'spans' | 'logs') => Promise<ColumnBatch>,
   ): Promise<{ bytes: Uint8Array; file: PartitionFile } | 'refused' | null> {
-    if ((table !== 'span_rollups' && table !== 'log_rollups') || f.rollup === undefined) return null;
-    const base = ROLLUP_OF[table];
-    const bytes = baseBytes.get(base);
-    const wanted = rollupDimensions(base, this.#statisticsKeys[base]);
-    const have = f.rollup.dimensions;
-    // A widget-only key the rollup lacks but whose statistics the file records was weighed and dropped by the writer
-    // that wrote it (`#rollupOf`; the statistics of a key a writer never listed are absent): weighing it again would
-    // decode the partition on every merge only to drop it again.
-    const widget = new Set(this.#widgetKeys[base]);
-    const have0 = new Set(have);
-    const need = wanted.filter((d) => have0.has(d) || !(widget.has(d) && f.values[d] !== undefined));
-    if (bytes === undefined || (have.length === need.length && have.every((d, i) => d === need[i]))) {
-      return null;
-    }
-    const names = TABLE_COLUMNS[base].map((c) => c.name);
-    const cells = new Map<string, unknown[]>(names.map((name) => [name, []]));
-    let length = 0;
-    for await (const cols of readColumns(
-      base,
-      new Blob([bytes as Uint8Array<ArrayBuffer>]),
-      f.path,
-      undefined,
-      guard,
-    )) {
-      length += cols[0]?.length ?? 0;
-      for (const [i, name] of names.entries()) {
-        const into = cells.get(name);
-        if (into !== undefined) for (const v of cols[i] ?? []) into.push(v);
-      }
-    }
-    const made = this.#rollupOf(base, { length, cells: Object.fromEntries(cells) }, bytes.length);
+    if (table !== 'span_rollups' && table !== 'log_rollups') return null;
+    const base = this.#staleRollupBase(table, f, src);
+    const bytes = base === null ? undefined : baseBytes.get(base);
+    if (base === null || bytes === undefined) return null;
+    const batch0 = await decode(base);
+    const made = this.#rollupOf(base, batch0, bytes.length);
     if (made === null) return 'refused';
     for (const [i, row] of made.rows.entries()) checkRow(table, row, i);
     const batch = batchFromRows(table, made.rows);
@@ -1096,10 +1274,39 @@ class PartitionSession implements WriterSession {
     let made = false;
     const baseBytes = new Map<Table, Uint8Array>();
     const watch = watchWasmPanics();
+    // A base table is decoded whole only for a rollup repair (and then once, shared with the statistics and the index
+    // below); the memo is dropped as soon as the repair is done. Otherwise `spans` is streamed in one pass.
+    const decoded = new Map<'spans' | 'logs', Promise<ColumnBatch>>();
+    const decode = (base: 'spans' | 'logs'): Promise<ColumnBatch> => {
+      let d = decoded.get(base);
+      if (d === undefined) {
+        const bytes = baseBytes.get(base);
+        const path = src.files[base]?.path ?? '';
+        d =
+          bytes === undefined
+            ? Promise.reject(new Error(`no ${base} bytes`))
+            : decodeBatch(base, bytes, path, watch.guard);
+        decoded.set(base, d);
+      }
+      return d;
+    };
+    const index = this.#widgetIndex;
+    // The index is computed from the spans unless a copied `widget_traces` already covers this report's.
+    const indexSet =
+      index !== null &&
+      src.files.spans !== undefined &&
+      !coversIndex(src.files.widget_traces?.widgetIndex, index)
+        ? new WidgetTraceSet(index)
+        : null;
+    const spansRepair =
+      src.files.span_rollups !== undefined &&
+      this.#staleRollupBase('span_rollups', src.files.span_rollups, src) === 'spans';
     try {
       for (const table of TABLES) {
         const f = src.files[table];
         if (f === undefined) continue;
+        // A `widget_traces` is copied only when this report's ids and variables are within its own; else it is computed below.
+        if (table === 'widget_traces' && (index === null || !coversIndex(f.widgetIndex, index))) continue;
         const from = at(copy.dir, f.path);
         let bytes: Uint8Array;
         try {
@@ -1117,36 +1324,46 @@ class PartitionSession implements WriterSession {
         if (table === 'spans' || table === 'logs') baseBytes.set(table, bytes);
         // A rollup that lacks a dimension this report lists is computed again from the partition's rows (a rollup with this
         // report's description is copied as it is, like a partition without one).
-        const own = await this.#recomputedRollup(table, f, baseBytes, path, watch.guard);
+        const own = await this.#recomputedRollup(table, f, src, baseBytes, path, decode);
+        if (table === 'span_rollups') decoded.delete('spans');
+        if (table === 'log_rollups') decoded.delete('logs');
         if (own === 'refused') continue;
         const out = own === null ? { bytes, file: f } : own;
-        await fs.writeBytes(at(this.#out, path), out.bytes);
-        if (this.#config.writer.format === 'local') {
-          await writeWrapper(
-            fs,
-            at(this.#out, partitionWrapperPath(n, table)),
-            partitionKey(n, table),
-            out.bytes,
-          );
-        }
+        await this.#putFile(n, table, out.bytes);
         if (own !== null) {
           files[table] = { ...own.file, path };
           continue;
         }
+        if (table === 'widget_traces') {
+          files[table] = { ...f, path };
+          continue;
+        }
         // The input may not have recorded a key this report lists (another config wrote it): compute it from the bytes.
+        // For `spans` one pass over the file also feeds the widget index (no more than a chunk is held at a time),
+        // or the whole decode a rollup repair needs.
+        let chunks: (() => AsyncIterable<ColumnBatch>) | undefined;
+        if (table === 'spans' && (indexSet !== null || spansRepair)) {
+          const set = indexSet;
+          chunks = () =>
+            tapped(
+              spansRepair ? wholeOf(decode('spans')) : streamBatches('spans', bytes, f.path, watch.guard),
+              (chunk) => set?.add(chunk),
+            );
+        }
         const done = await completeStatistics(
           table,
           f,
-          this.#statisticsKeys[table],
+          statisticsKeysOf(this.#statisticsKeys, table),
           this.#config.writer.facetValueCap,
           () => Promise.resolve(bytes),
           watch.guard,
+          chunks,
         );
         const values: Record<string, string[] | null> = Object.create(null) as Record<
           string,
           string[] | null
         >;
-        for (const k of this.#statisticsKeys[table]) values[k] = done.values[k] ?? null;
+        for (const k of statisticsKeysOf(this.#statisticsKeys, table)) values[k] = done.values[k] ?? null;
         files[table] = {
           path,
           bytes: f.bytes,
@@ -1158,6 +1375,20 @@ class PartitionSession implements WriterSession {
           ...(f.rollup === undefined ? {} : { rollup: f.rollup }),
           ...(f.serviceShare === undefined ? {} : { serviceShare: f.serviceShare }),
         };
+      }
+      const spansFile = files.spans;
+      if (
+        index !== null &&
+        indexSet !== null &&
+        spansFile !== undefined &&
+        files.widget_traces === undefined
+      ) {
+        const own = this.#computedIndex(index, indexSet, spansFile.bytes);
+        if (own !== null) {
+          const path = partitionFilePath(n, 'widget_traces');
+          await this.#putFile(n, 'widget_traces', own.bytes);
+          files.widget_traces = { ...own.file, path };
+        }
       }
     } catch (e) {
       if (made) await fs.removeDir(at(this.#out, partitionDir(n))).catch(() => undefined);
@@ -1254,7 +1485,8 @@ class PartitionSession implements WriterSession {
         source: `compact:${first.n}..${last.n}`,
         patternKey,
         ...(templates === undefined ? {} : { templates }),
-        warn: (message, attrs) => this.#deps.logger.warn(message, attrs),
+        ...(this.#widgetIndex === null ? {} : { widgetIndex: this.#widgetIndex }),
+        warn: (message, attrs) => this.#warnOnce(message, attrs),
       });
       this.#writer.skipTo(n + 1);
       const replaced = new Set(picks.map((e) => e.n));

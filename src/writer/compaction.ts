@@ -14,9 +14,22 @@ import {
   BloomCollector,
 } from '../format/parquet/bloom.js';
 import { checkRow, compareKeys, encodeColumns, sortKeyOf } from '../format/parquet/codec.js';
-import { ROLLUP_OF, type RollupTable, TABLE_COLUMNS, TABLES, type Table } from '../format/parquet/columns.js';
+import {
+  ROLLUP_OF,
+  type RollupTable,
+  type StatisticsTable,
+  TABLE_COLUMNS,
+  TABLES,
+  type Table,
+} from '../format/parquet/columns.js';
 import type { Row } from '../format/parquet/rows.js';
-import { type FileStatistics, fileStatistics, hasTimeEndMax, timeEndMaxOf } from '../format/parquet/stats.js';
+import {
+  type FileStatistics,
+  fileStatistics,
+  hasTimeEndMax,
+  statisticsKeysOf,
+  timeEndMaxOf,
+} from '../format/parquet/stats.js';
 import { encodeBatches, type PanicGuard, readColumns } from '../format/parquet/stream.js';
 import { partitionDir, partitionFilePath, partitionKey, partitionWrapperPath } from '../format/paths.js';
 import { encodeServiceShare, type ShareSpan, serviceShareOf } from '../format/service-share.js';
@@ -36,18 +49,26 @@ import {
 } from './rollup-rows.js';
 import { shareSpanAt } from './trace-summaries.js';
 import { watchWasmPanics } from './wasm-panic.js';
+import {
+  type CompiledWidgetIndex,
+  encodeWidgetTraces,
+  WidgetTraceSet,
+  widgetIndexAllowed,
+  widgetIndexInexact,
+  widgetIndexTooLarge,
+} from './widget-trace-rows.js';
 import { writeWrapperOfFile } from './wrapper-file.js';
 
 export interface CompactOptions {
   /** The partition number the compacted files are written to. */
   nextPartition: number;
   rowGroupRows: number;
-  statisticsKeys: Record<Table, string[]>;
+  statisticsKeys: Record<StatisticsTable, string[]>;
   /**
    * The statistics keys only a widget condition asked for, per table. A recomputed rollup keeps one that some input's
    * rollup lacks only when the union passes the flush guards (`planRollup`), not because the inputs did.
    */
-  widgetKeys?: Record<Table, string[]>;
+  widgetKeys?: Record<StatisticsTable, string[]>;
   facetValueCap: number;
   /** `local` also writes each final file's base64 script after it (never for the merge temporaries). */
   format?: ReportFormat;
@@ -64,6 +85,8 @@ export interface CompactOptions {
    * compaction holds only one time group of it (`latestTemplates`). A cluster not listed keeps its own latest.
    */
   templates?: ReadonlyMap<string, string>;
+  /** The report's widget trace index; each output with spans gets its `widget_traces`, derived from the merged spans. */
+  widgetIndex?: CompiledWidgetIndex;
   /** Where the guard's refusal of a rollup is told. */
   warn?: (message: string, attrs: Record<string, unknown>) => void;
 }
@@ -675,7 +698,10 @@ function planRollup(
   const descriptions = withBase.map((e) => e.files[table]?.rollup);
   const first = descriptions[0];
   if (first !== undefined && descriptions.every((d) => d !== undefined && sameDescription(d, first))) {
-    return { how: 'sum', description: first };
+    // the keys every input refused: a key some input never weighed is left to a later merge to recompute
+    const refused = (first.refused ?? []).filter((k) => descriptions.every((d) => d?.refused?.includes(k)));
+    const { refused: _own, ...rest } = first;
+    return { how: 'sum', description: refused.length === 0 ? rest : { ...rest, refused } };
   }
   const widget = new Set(opts.widgetKeys?.[base]);
   const everyInput = (k: string): boolean => descriptions.every((d) => d?.dimensions.includes(k) === true);
@@ -819,7 +845,7 @@ async function mergeTable(
   guard: PanicGuard,
   onRows?: (chunk: ColumnBatch) => void,
 ): Promise<{ size: number; stats: FileStatistics; timeEndMax: string | null }> {
-  const keys = opts.statisticsKeys[table];
+  const keys = statisticsKeysOf(opts.statisticsKeys, table);
   let level: string[] = [...inputs];
   const temporary: string[] = [];
   for (let round = 0; level.length > fanoutOf(round); round++) {
@@ -905,7 +931,16 @@ export async function compactPartitions(
   // Rollups recomputed from the rows the merge reads anyway, one chunk at a time.
   const recomputed: Partial<Record<RollupTable, RollupSum>> = {};
   const recomputedWide: Partial<Record<RollupTable, RollupSum>> = {};
+  const widgetSet = opts.widgetIndex === undefined ? undefined : new WidgetTraceSet(opts.widgetIndex);
   const onRows = (table: Table): ((chunk: ColumnBatch) => void) | undefined => {
+    const rolled = rollupFeed(table);
+    if (table !== 'spans' || widgetSet === undefined) return rolled;
+    return (chunk) => {
+      rolled?.(chunk);
+      widgetSet.add(chunk);
+    };
+  };
+  const rollupFeed = (table: Table): ((chunk: ColumnBatch) => void) | undefined => {
     const rt = table === 'spans' ? 'span_rollups' : table === 'logs' ? 'log_rollups' : null;
     const plan = rt === null ? undefined : plans[rt];
     if (rt === null || plan === undefined || plan.how !== 'recompute') return undefined;
@@ -923,6 +958,8 @@ export async function compactPartitions(
   };
   try {
     for (const table of TABLES) {
+      // `widget_traces` is derived from a partition's spans, never merged from its inputs.
+      if (table === 'widget_traces') continue;
       const rollupTable = table === 'span_rollups' || table === 'log_rollups' ? table : null;
       const plan = rollupTable === null ? undefined : plans[rollupTable];
       if (rollupTable !== null && plan === undefined) continue;
@@ -959,7 +996,9 @@ export async function compactPartitions(
             rows = wideRows;
             description = plan.wide;
           } else {
-            for (const key of plan.wide.dimensions.filter((d) => !plan.description.dimensions.includes(d))) {
+            const disputed = plan.wide.dimensions.filter((d) => !plan.description.dimensions.includes(d));
+            description = { ...description, refused: [...disputed].sort() };
+            for (const key of disputed) {
               opts.warn?.(
                 `the ${ROLLUP_OF[rollupTable]} rollup of the compacted partition does not group by ${key}, which a widget condition tests: the rollup would be ${why}`,
                 { key, rollupRows: wideRows?.length, baseRows, rollupBytes, rollupBytesWithout, baseBytes },
@@ -1074,6 +1113,42 @@ export async function compactPartitions(
         ...(timeEndMax === undefined ? {} : { timeEndMax }),
         ...(rollup === undefined ? {} : { rollup }),
       };
+    }
+    const spansFile = files.spans;
+    const index = opts.widgetIndex;
+    if (index !== undefined && widgetSet !== undefined && spansFile !== undefined) {
+      if (!widgetSet.exact) {
+        opts.warn?.(...widgetIndexInexact(index));
+      } else {
+        const rows = widgetSet.rows();
+        const bytes = encodeWidgetTraces(rows, index, opts.rowGroupRows);
+        const empty = encodeWidgetTraces([], index, opts.rowGroupRows).length;
+        if (widgetIndexAllowed(bytes.length, empty, spansFile.bytes)) {
+          const path = partitionFilePath(n, 'widget_traces');
+          await fs.writeBytes(at(out, path), bytes);
+          if (opts.format === 'local') {
+            await writeWrapperOfFile(
+              fs,
+              at(out, partitionWrapperPath(n, 'widget_traces')),
+              partitionKey(n, 'widget_traces'),
+              at(out, path),
+            );
+          }
+          files.widget_traces = {
+            path,
+            bytes: bytes.length,
+            ...fileStatistics(
+              'widget_traces',
+              batchFromRows('widget_traces', rows, index.columns),
+              [],
+              opts.facetValueCap,
+            ),
+            widgetIndex: index.description,
+          };
+        } else {
+          opts.warn?.(...widgetIndexTooLarge(index, bytes.length - empty, spansFile.bytes));
+        }
+      }
     }
   } catch (e) {
     if (created) await fs.removeDir(dir).catch(() => undefined);

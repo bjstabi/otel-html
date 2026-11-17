@@ -55,12 +55,38 @@ describe('format-4 views', () => {
     const stmts = viewStatements(emptyManifest(), (p) => p);
     expect(stmts).toHaveLength(7);
     for (const s of stmts) expect(s).toMatch(/WHERE false$/);
+    expect(stmts.some((s) => s.includes('widget_traces'))).toBe(false);
     const db = await openTestDb();
     for (const s of stmts) db.exec(s);
-    for (const table of TABLES) {
+    for (const table of TABLES.filter((t) => t !== 'widget_traces')) {
       expect(first(db.rows(`SELECT count(*) AS n FROM ${table}`), 'n')).toBe(0n);
     }
     db.close();
+  });
+  test('a manifest that lists widget_traces files still creates no widget_traces view', () => {
+    const m = emptyManifest();
+    m.formatVersion = 7;
+    m.partitions = [
+      {
+        n: 0,
+        source: 'flush:0',
+        files: {
+          widget_traces: {
+            path: 'data/partitions/000000/widget_traces.parquet',
+            bytes: 1,
+            rows: 0,
+            timeMin: null,
+            timeMax: null,
+            values: {},
+            widgetIndex: { conditions: [], variables: [] },
+          },
+        },
+      },
+    ];
+    for (const set of ['all', 'base', 'rollups'] as const) {
+      const stmts = viewStatements(m, (p) => p, set);
+      expect(stmts.join('\n')).not.toContain('widget_traces');
+    }
   });
   test('the base views and the rollup views are separate sets; the rollup views are created only when missing', async () => {
     const f = await buildFormat4Report([spansOnlyRequest(3)]);

@@ -1,0 +1,394 @@
+import '../../src/writer/parquet-wasm-source.js';
+import { readFile } from 'node:fs/promises';
+import { describe, expect, test } from 'vitest';
+import { loadConfigFile } from '../../src/config/load.js';
+import { resolveConfig } from '../../src/config/resolve.js';
+import { widgetTraceConditions } from '../../src/config/widget-traces.js';
+import { batchFromRows, type ColumnBatch } from '../../src/format/parquet/batch.js';
+import { decodeTable } from '../../src/format/parquet/codec.js';
+import { spanFromRow } from '../../src/format/parquet/decode.js';
+import { type Context, spanRow } from '../../src/format/parquet/rows.js';
+import type { AnyValue } from '../../src/model/anyvalue.js';
+import type { RelNanos, SpanId, TraceId, UnixNanos } from '../../src/model/ids.js';
+import type {
+  ResourceRecord,
+  ResourceRef,
+  ScopeRecord,
+  ScopeRef,
+  SpanRecord,
+} from '../../src/model/records.js';
+import { CONTEXTS, type SpanTarget } from '../../src/ottl/contexts.js';
+import {
+  compileWidgetIndex,
+  encodeWidgetTraces,
+  WIDGET_INDEX_SHARE,
+  WidgetTraceSet,
+  widgetIndexAllowed,
+} from '../../src/writer/widget-trace-rows.js';
+import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
+
+const EPOCH = 1_700_000_000_000_000_000n as UnixNanos;
+const str = (value: string): AnyValue => ({ kind: 'string', value });
+
+function scopeOf(name: string): ScopeRecord {
+  return { name, version: '', attributes: new Map(), droppedAttributesCount: 0, schemaUrl: '' };
+}
+
+function resourceOf(attrs: Record<string, AnyValue>): ResourceRecord {
+  return { attributes: new Map(Object.entries(attrs)), droppedAttributesCount: 0, schemaUrl: '' };
+}
+
+interface Made {
+  trace?: string;
+  id?: string;
+  parent?: string | null;
+  scope?: string;
+  resource?: Record<string, AnyValue>;
+  attributes?: Record<string, AnyValue>;
+  start?: bigint;
+  end?: bigint;
+  /** Gives the span an event and a link, each with attributes. */
+  eventsAndLinks?: boolean;
+  scopeVersion?: string;
+}
+
+/** A spans row (absolute times) for a made span. */
+function row(m: Made = {}) {
+  const resource = resourceOf(m.resource ?? {});
+  const scope = { ...scopeOf(m.scope ?? 'otel-html-ci'), version: m.scopeVersion ?? '' };
+  const start = m.start ?? EPOCH + 10n;
+  const end = m.end ?? start + 5n;
+  const ctx: Context = { epoch: EPOCH, resources: () => resource, scopes: () => scope };
+  const span: SpanRecord = {
+    traceId: (m.trace ?? 'a'.repeat(32)) as TraceId,
+    spanId: (m.id ?? 'b'.repeat(16)) as SpanId,
+    parentSpanId: (m.parent === undefined ? null : m.parent) as SpanId | null,
+    traceState: '',
+    flags: 0,
+    name: 'n',
+    kind: 1,
+    start: Number(start - EPOCH) as RelNanos,
+    end: Number(end - EPOCH) as RelNanos,
+    attributes: new Map(Object.entries(m.attributes ?? {})),
+    droppedAttributesCount: 0,
+    events:
+      m.eventsAndLinks === true
+        ? [
+            {
+              time: Number(start - EPOCH + 1n) as RelNanos,
+              name: 'e',
+              attributes: new Map([['ek', str('ev')]]),
+              droppedAttributesCount: 0,
+            },
+          ]
+        : [],
+    droppedEventsCount: 0,
+    links:
+      m.eventsAndLinks === true
+        ? [
+            {
+              traceId: 'c'.repeat(32) as TraceId,
+              spanId: 'd'.repeat(16) as SpanId,
+              traceState: '',
+              attributes: new Map([['lk', str('lv')]]),
+              droppedAttributesCount: 0,
+              flags: 0,
+            },
+          ]
+        : [],
+    droppedLinksCount: 0,
+    status: { code: 0, message: '' },
+    resource: 0 as ResourceRef,
+    scope: 0 as ScopeRef,
+  };
+  return spanRow(span, ctx);
+}
+
+const batchOf = (...ms: Made[]): ColumnBatch => batchFromRows('spans', ms.map(row));
+
+const RUN = {
+  'cicd.pipeline.name': str('ci'),
+  'cicd.pipeline.run.id': str('7'),
+  'cicd.pipeline.task.name': str('build'),
+};
+const job = (result: string, over: Made = {}): Made => ({
+  parent: 'p'.repeat(16),
+  resource: RUN,
+  attributes: { 'cicd.pipeline.task.run.id': str('1'), 'cicd.pipeline.task.run.result': str(result) },
+  ...over,
+});
+
+async function ciIndex() {
+  const fs = createMemoryFileSystem();
+  await fs.mkdirp('/c');
+  await fs.writeTextAtomic('/c/ci.yaml', await readFile('.github/otel-html-ci.yaml', 'utf8'));
+  const { config } = resolveConfig({
+    file: await loadConfigFile(fs, '/c/ci.yaml'),
+    env: {},
+    fileLabel: 'config.yaml',
+  });
+  const index = compileWidgetIndex(widgetTraceConditions(config.dashboards));
+  if (index === null) throw new Error('no index');
+  return index;
+}
+
+describe('WidgetTraceSet', () => {
+  test('a root span of the CI scope gives one row with the run resource values', async () => {
+    const set = new WidgetTraceSet(await ciIndex());
+    set.add(batchOf({ resource: RUN }));
+    expect(set.size).toBe(1);
+    expect(set.rows()[0]).toMatchObject({
+      trace_id: 'a'.repeat(32),
+      'var:cicd.pipeline.name': 'ci',
+      'var:cicd.pipeline.run.id': '7',
+      'var:cicd.pipeline.task.name': 'build',
+    });
+  });
+
+  test('a job span gives a row, a skipped job none, and a span of another scope none', async () => {
+    const index = await ciIndex();
+    const sizeOf = (m: Made): number => {
+      const set = new WidgetTraceSet(index);
+      set.add(batchOf(m));
+      return set.size;
+    };
+    expect(sizeOf(job('success'))).toBe(1);
+    expect(sizeOf(job('skip'))).toBe(0);
+    expect(sizeOf(job('success', { scope: 'other' }))).toBe(0);
+    expect(sizeOf({ scope: 'other' })).toBe(0);
+  });
+
+  test('matching spans of one trace and one resource give one row, a different job name gives two', async () => {
+    const index = await ciIndex();
+    const same = new WidgetTraceSet(index);
+    same.add(batchOf({ resource: RUN }, job('success', { id: 'c'.repeat(16) })));
+    expect(same.size).toBe(1);
+    const other = new WidgetTraceSet(index);
+    other.add(
+      batchOf(
+        { resource: RUN },
+        job('success', { id: 'c'.repeat(16), resource: { ...RUN, 'cicd.pipeline.task.name': str('test') } }),
+      ),
+    );
+    expect(other.size).toBe(2);
+  });
+
+  test('an int-valued resource attribute gives null in its column', async () => {
+    const set = new WidgetTraceSet(await ciIndex());
+    set.add(batchOf({ resource: { ...RUN, 'cicd.pipeline.run.id': { kind: 'int', value: 7n } } }));
+    expect(set.rows()[0]?.['var:cicd.pipeline.run.id']).toBeNull();
+  });
+
+  test('a condition on the exact absolute start matches only that span', () => {
+    const exact = EPOCH + 123_456_789n;
+    const index = compileWidgetIndex({
+      conditions: [{ id: '0123456789abcdef', source: `start_time_unix_nano == ${exact}` }],
+      variables: [],
+      notRowLocal: [],
+    });
+    if (index === null) throw new Error('no index');
+    const set = new WidgetTraceSet(index);
+    set.add(batchOf({ start: exact }, { trace: 'f'.repeat(32), id: 'd'.repeat(16), start: exact + 1n }));
+    expect(set.rows().map((r) => Reflect.get(r, 'trace_id'))).toEqual(['a'.repeat(32)]);
+  });
+
+  test('shared values that differ only across a NUL boundary do not share a memo entry', () => {
+    const index = compileWidgetIndex({
+      conditions: [{ id: '0123456789abcdef', source: 'instrumentation_scope.version == "c"' }],
+      variables: [],
+      notRowLocal: [],
+    });
+    if (index === null) throw new Error('no index');
+    const set = new WidgetTraceSet(index);
+    set.add(
+      batchOf(
+        { trace: '1'.repeat(32), id: '1'.repeat(16), scope: 'a', scopeVersion: 'b\u0000sc' },
+        { trace: '2'.repeat(32), id: '2'.repeat(16), scope: 'a\u0000sb', scopeVersion: 'c' },
+      ),
+    );
+    expect(set.rows().map((r) => Reflect.get(r, 'trace_id'))).toEqual(['2'.repeat(32)]);
+  });
+
+  test('the lighter decode (no events or links, shared values memoized) matches what a full decode matches', () => {
+    const sources = [
+      'IsRootSpan() and name == "n"',
+      'attributes["nest"]["k"] == "v"',
+      'resource.attributes["num"] == 5',
+      'resource.attributes["svc"] == "a" and instrumentation_scope.version == "2"',
+      'dropped_events_count == 0 and status.code == 0 and parent_span_id.string != ""',
+      'attributes["nest"]["missing"] == nil',
+    ];
+    const index = compileWidgetIndex({
+      conditions: sources.map((source, i) => ({ id: `${i}`.repeat(16), source })),
+      variables: ['svc', 'num'],
+      notRowLocal: [],
+    });
+    if (index === null) throw new Error('no index');
+    const made: Made[] = [];
+    for (let k = 0; k < 24; k++) {
+      made.push({
+        trace: String(k % 6).repeat(32),
+        id: k.toString(16).padStart(16, '0'),
+        parent: k % 3 === 0 ? null : 'p'.repeat(16),
+        eventsAndLinks: k % 2 === 0,
+        scopeVersion: k % 4 < 2 ? '1' : '2',
+        resource: {
+          svc: str(k % 5 < 2 ? 'a' : 'b'),
+          num: k % 7 < 3 ? { kind: 'int', value: 5n } : str('5'),
+        },
+        attributes: {
+          nest: {
+            kind: 'kvlist',
+            values: new Map<string, AnyValue>(k % 2 === 0 ? [['k', str('v')]] : [['other', str('x')]]),
+          },
+        },
+        start: EPOCH + 10n + BigInt(k),
+      });
+    }
+    const batch = batchOf(...made);
+    const set = new WidgetTraceSet(index);
+    set.add(batch);
+    // the reference: every row decoded in full, no memo
+    const names = Object.keys(batch.cells);
+    const origin = EPOCH + 10n; // the smallest start made above
+    const expected = new Set<string>();
+    for (let i = 0; i < batch.length; i++) {
+      const r: Record<string, unknown> = {};
+      for (const n of names) r[n] = batch.cells[n]?.[i] ?? null;
+      for (const c of ['start_time_unix_nano', 'end_time_unix_nano'])
+        if (typeof r[c] === 'bigint') r[c] = r[c] - origin;
+      const { span, shared } = spanFromRow(r, origin);
+      const target = { span, resource: shared.resource, scope: shared.scope, epoch: origin as UnixNanos };
+      for (const c of index.conditions) {
+        if (!c.test(target)) continue;
+        const vars = ['svc', 'num'].map((key) => {
+          const v = shared.resource.attributes.get(key);
+          return v?.kind === 'string' ? v.value : null;
+        });
+        expected.add(JSON.stringify([c.id, Reflect.get(r, 'trace_id'), vars]));
+      }
+    }
+    const actual = new Set(
+      set
+        .rows()
+        .map((r) =>
+          JSON.stringify([
+            Reflect.get(r, 'condition'),
+            Reflect.get(r, 'trace_id'),
+            [r['var:svc'], r['var:num']],
+          ]),
+        ),
+    );
+    expect(expected.size).toBeGreaterThan(sources.length);
+    expect(actual).toEqual(expected);
+  });
+
+  test('add over two chunks equals add over their concatenation', async () => {
+    const index = await ciIndex();
+    const a = [
+      { resource: RUN },
+      job('success', { trace: '1'.repeat(32), id: '1'.repeat(16), start: EPOCH + 1_000_000n }),
+    ];
+    const b = [
+      { resource: RUN, trace: '2'.repeat(32), id: '2'.repeat(16), start: EPOCH + 9_000_000_000_000n },
+      job('success', { id: '3'.repeat(16), start: EPOCH + 9_000_000_000_001n }),
+    ];
+    const split = new WidgetTraceSet(index);
+    split.add(batchOf(...a));
+    split.add(batchOf(...b));
+    const whole = new WidgetTraceSet(index);
+    whole.add(batchOf(...a, ...b));
+    expect(split.rows()).toEqual(whole.rows());
+    expect(split.size).toBeGreaterThan(1);
+  });
+
+  test('a chunk spanning more than 2^53 ns is not exact', async () => {
+    const index = await ciIndex();
+    const near = new WidgetTraceSet(index);
+    near.add(
+      batchOf({ resource: RUN }, { resource: RUN, id: 'c'.repeat(16), start: EPOCH + 10n + 2n ** 52n }),
+    );
+    expect(near.exact).toBe(true);
+    const far = new WidgetTraceSet(index);
+    expect(far.exact).toBe(true);
+    far.add(
+      batchOf({ resource: RUN }, { resource: RUN, id: 'c'.repeat(16), start: EPOCH + 10n + 2n ** 53n + 10n }),
+    );
+    expect(far.exact).toBe(false);
+  });
+
+  test('a chunk whose end lies more than 2^53 ns before its smallest start is not exact', async () => {
+    const set = new WidgetTraceSet(await ciIndex());
+    set.add(batchOf({ resource: RUN, end: EPOCH + 10n - 2n ** 53n - 10n }));
+    expect(set.exact).toBe(false);
+  });
+
+  test('a chunk with no bigint start is not exact', async () => {
+    const set = new WidgetTraceSet(await ciIndex());
+    const whole = batchOf({ resource: RUN });
+    const cell = (name: string): readonly unknown[] =>
+      Object.entries(whole.cells).find(([k]) => k === name)?.[1] ?? [];
+    const numbers = (c: readonly unknown[]): unknown[] =>
+      c.map((v) => (typeof v === 'bigint' ? Number(v) : v));
+    set.add({
+      length: whole.length,
+      cells: {
+        ...whole.cells,
+        start_time_unix_nano: numbers(cell('start_time_unix_nano')),
+        end_time_unix_nano: numbers(cell('end_time_unix_nano')),
+      },
+    });
+    expect(set.exact).toBe(false);
+  });
+
+  test('compileWidgetIndex is null without a condition and describes the rest', async () => {
+    expect(compileWidgetIndex({ conditions: [], variables: ['k'], notRowLocal: [] })).toBeNull();
+    const index = await ciIndex();
+    expect(index.description.variables).toEqual([
+      'cicd.pipeline.name',
+      'cicd.pipeline.run.id',
+      'cicd.pipeline.task.name',
+    ]);
+    expect(index.description.conditions).toHaveLength(1);
+  });
+
+  test('encodeWidgetTraces round-trips the rows', async () => {
+    const index = await ciIndex();
+    const set = new WidgetTraceSet(index);
+    set.add(batchOf({ resource: RUN }));
+    const back = decodeTable('widget_traces', encodeWidgetTraces(set.rows(), index, 1000));
+    expect(back).toEqual(set.rows());
+  });
+});
+
+describe('widgetIndexAllowed', () => {
+  test('weighs the table over its empty twin against 5 % of the spans', () => {
+    expect(WIDGET_INDEX_SHARE).toBe(0.05);
+    expect(widgetIndexAllowed(1_000 + 600, 1_000, 10_000)).toBe(false);
+    expect(widgetIndexAllowed(1_000 + 500, 1_000, 10_000)).toBe(true);
+  });
+});
+
+describe('the light span decode', () => {
+  test('no span path reads events or links, which it leaves out', () => {
+    const base = spanFromRow(row(), EPOCH, () => ({ resource: resourceOf({}), scope: scopeOf('s') }));
+    const span = { ...base.span };
+    for (const key of ['events', 'links'] as const) {
+      Object.defineProperty(span, key, {
+        get() {
+          throw new Error(`a span path read ${key}`);
+        },
+      });
+    }
+    const target: SpanTarget = {
+      span,
+      resource: base.shared.resource,
+      scope: base.shared.scope,
+      epoch: EPOCH,
+    };
+    for (const [path, accessor] of CONTEXTS.span.paths) {
+      expect(() => accessor.get(target, []), path).not.toThrow();
+      expect(() => accessor.get(target, ['k']), path).not.toThrow();
+    }
+  });
+});

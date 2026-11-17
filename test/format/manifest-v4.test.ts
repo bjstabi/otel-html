@@ -123,7 +123,7 @@ describe('manifest format 5 (partitions)', () => {
   });
 
   test('an unknown formatVersion is invalid-report at formatVersion', () => {
-    const e = failure(() => parseAnyManifest({ ...v5(), formatVersion: 7 }));
+    const e = failure(() => parseAnyManifest({ ...v5(), formatVersion: 8 }));
     expect(e.code).toBe('invalid-report');
     expect(e.path).toBe('manifest.formatVersion');
   });
@@ -285,22 +285,102 @@ describe('manifest format 5 additions', () => {
     expect(() => parseAnyManifest(withFile(base, logsEnd))).toThrow(OtelHtmlError);
   });
 
-  test('parseAnyManifest: 5 parses, 4 fails with the old-format message, 6 with the newer-format error naming 7', () => {
+  test('parseAnyManifest: 5 parses, 4 fails with the old-format message, 8 with the newer-format error naming 8', () => {
     expect(parseAnyManifest(v5()).formatVersion).toBe(5);
     const old = failure(() => parseAnyManifest({ ...v5(), formatVersion: 4 }));
     expect(old.code).toBe('invalid-report');
     expect(old.message).toBe(oldFormatMessage(4));
     expect(old.message).toContain('format 4');
-    const e = failure(() => parseAnyManifest({ ...v5(), formatVersion: 7 }));
+    const e = failure(() => parseAnyManifest({ ...v5(), formatVersion: 8 }));
     expect(e.code).toBe('invalid-report');
     expect(e.path).toBe('manifest.formatVersion');
-    expect(e.message).toContain('7');
+    expect(e.message).toContain('8');
   });
 
   test('rollup paths are partition files', () => {
     expect(PARTITION_FILE_RE.test('data/partitions/000012/span_rollups.parquet')).toBe(true);
     expect(PARTITION_FILE_RE.test('data/partitions/000012/log_rollups.parquet')).toBe(true);
     expect(PARTITION_FILE_RE.test('data/partitions/000012/other_rollups.parquet')).toBe(false);
+  });
+});
+
+describe('manifest format 7', () => {
+  type Raw = Record<string, unknown> & {
+    partitions: { files: { widget_traces?: unknown; span_rollups?: unknown } & Record<string, unknown> }[];
+  };
+  const v7Raw = (extra: Record<string, unknown> = {}): Raw => {
+    const { epochUnixNano: _e, ...rest } = v5();
+    const m = { ...rest, formatVersion: 7 } as unknown as Raw;
+    const entry = (path: string, more: Record<string, unknown>) => ({
+      path,
+      bytes: 10,
+      rows: 1,
+      timeMin: null,
+      timeMax: null,
+      values: {},
+      ...more,
+    });
+    const files = {
+      ...m.partitions[0]?.files,
+      widget_traces: entry(partitionFilePath(0, 'widget_traces'), {
+        widgetIndex: { conditions: ['0123456789abcdef'], variables: ['job'] },
+      }),
+      span_rollups: entry(partitionFilePath(0, 'span_rollups'), {
+        rollup: { grainNs: 65_536_000_000, dimensions: ['name'], refused: ['attr:k'] },
+        ...extra,
+      }),
+    };
+    return { ...m, partitions: [{ ...m.partitions[0], files }, ...m.partitions.slice(1)] };
+  };
+  const without = (m: Raw, table: string, drop: string): Raw => {
+    const first = m.partitions[0];
+    const file = { ...(first?.files[table] as Record<string, unknown>) };
+    delete file[drop];
+    return { ...m, partitions: [{ ...first, files: { ...first?.files, [table]: file } }] };
+  };
+
+  test('parses a widget_traces file with widgetIndex and a rollup that lists refused keys', () => {
+    const m = parseAnyManifest(v7Raw()) as ManifestV4;
+    expect(m.formatVersion).toBe(7);
+    expect(m.partitions[0]?.files.widget_traces?.widgetIndex).toEqual({
+      conditions: ['0123456789abcdef'],
+      variables: ['job'],
+    });
+    expect(m.partitions[0]?.files.span_rollups?.rollup?.refused).toEqual(['attr:k']);
+    expect(manifestAnchor(m)).toBe(-5n);
+  });
+
+  test('formats 5 and 6 reject a widget_traces entry and, separately, a refused field', () => {
+    const raw = v7Raw();
+    const first = raw.partitions[0];
+    const { widget_traces: _w, ...noIndex } = first?.files ?? {};
+    const rollup = noIndex.span_rollups as Record<string, unknown>;
+    const noRefused = {
+      ...noIndex,
+      span_rollups: { ...rollup, rollup: { grainNs: 65_536_000_000, dimensions: ['name'] } },
+    };
+    for (const formatVersion of [5, 6]) {
+      const older = { ...raw, formatVersion, ...(formatVersion === 5 ? { epochUnixNano: '1' } : {}) };
+      const at = (files: Record<string, unknown>) => ({ ...older, partitions: [{ ...first, files }] });
+      expect(() => parseAnyManifest(at({ ...noRefused, widget_traces: first?.files.widget_traces }))).toThrow(
+        OtelHtmlError,
+      );
+      expect(() => parseAnyManifest(at(noIndex))).toThrow(OtelHtmlError);
+      expect(parseAnyManifest(at(noRefused)).formatVersion).toBe(formatVersion);
+    }
+  });
+
+  test('a format-7 widget_traces entry without widgetIndex is invalid-report', () => {
+    const e = failure(() => parseAnyManifest(without(v7Raw(), 'widget_traces', 'widgetIndex')));
+    expect(e.code).toBe('invalid-report');
+    expect(e.path).toContain('widgetIndex');
+  });
+
+  test('serializes without epochUnixNano and parses back equal', () => {
+    const m = parseAnyManifest(v7Raw());
+    const stored = manifestForWrite(m) as Record<string, unknown>;
+    expect('epochUnixNano' in stored).toBe(false);
+    expect(parseAnyManifest(JSON.parse(JSON.stringify(stored)))).toEqual(m);
   });
 });
 

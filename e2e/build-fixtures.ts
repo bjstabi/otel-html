@@ -632,12 +632,12 @@ async function buildWideFormat6Report(): Promise<void> {
 
 /**
  * The frozen data folders (`fixtures/reports/format-<n>/`, never edited) converted into format-5 reports by
- * `otel-html merge`, which writes the current viewer beside the data (D12: the viewer reads formats 5 and 6 only).
+ * `otel-html merge`, which writes the current viewer beside the data (D12: the viewer reads formats 5 to 7 only).
  */
 async function buildFrozenReports(): Promise<void> {
   // Format 5 takes the path a user's report takes: the frozen folder is upgraded in place, so its manifest and
   // `.parquet.js` wrappers are what the viewer reads.
-  for (const n of [5, 6] as const) {
+  for (const n of [5, 6, 7] as const) {
     const out = fileURLToPath(reportDir(`frozen-format-${n}`));
     await rm(out, { recursive: true, force: true });
     await cp(fileURLToPath(new URL(`../fixtures/reports/format-${n}`, import.meta.url)), out, {
@@ -675,6 +675,7 @@ const SITE_REPORTS: readonly ReportName[] = [
   'frozen-format-3',
   'frozen-format-5',
   'frozen-format-6',
+  'frozen-format-7',
   ...FIXTURE_REPORTS,
 ];
 

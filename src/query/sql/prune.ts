@@ -44,7 +44,7 @@ export function prunePartitions(
   resolve: (path: string) => string = identity,
   opts: { long?: boolean } = {},
 ): Pruned {
-  const listed = new Set(manifest.statisticsKeys[table]);
+  const listed = new Set((manifest.statisticsKeys as Partial<Record<Table, string[]>>)[table]);
   const usable = [...hints].filter(([key]) => !key.includes(':') || listed.has(key));
   const endBound = table === 'spans' || table === 'traces';
   // a span rollup's time is the start of the grain of a span's start: a long window (aligned) selects it as it selects spans

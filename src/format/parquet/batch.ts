@@ -1,4 +1,4 @@
-import { TABLE_COLUMNS, type Table } from './columns.js';
+import { type ColumnDef, TABLE_COLUMNS, type Table } from './columns.js';
 import type { Row } from './rows.js';
 
 /**
@@ -18,20 +18,32 @@ export interface MutableBatch {
   cells: MutableColumns;
 }
 
-export function emptyColumns(table: Table): MutableColumns {
+export function emptyColumns(
+  table: Table,
+  columns: readonly ColumnDef[] = TABLE_COLUMNS[table],
+): MutableColumns {
   const cells: MutableColumns = {};
-  for (const c of TABLE_COLUMNS[table]) cells[c.name] = [];
+  for (const c of columns) cells[c.name] = [];
   return cells;
 }
 
 /** Copies one row's cells onto the column arrays (a column the row lacks gets `null`; unknown keys are ignored). */
-export function pushRow(table: Table, cells: MutableColumns, row: Row): void {
-  for (const c of TABLE_COLUMNS[table]) cells[c.name]?.push(row[c.name] ?? null);
+export function pushRow(
+  table: Table,
+  cells: MutableColumns,
+  row: Row,
+  columns: readonly ColumnDef[] = TABLE_COLUMNS[table],
+): void {
+  for (const c of columns) cells[c.name]?.push(row[c.name] ?? null);
 }
 
-export function batchFromRows(table: Table, rows: readonly Row[]): ColumnBatch {
-  const cells = emptyColumns(table);
-  for (const row of rows) pushRow(table, cells, row);
+export function batchFromRows(
+  table: Table,
+  rows: readonly Row[],
+  columns: readonly ColumnDef[] = TABLE_COLUMNS[table],
+): ColumnBatch {
+  const cells = emptyColumns(table, columns);
+  for (const row of rows) pushRow(table, cells, row, columns);
   return { length: rows.length, cells };
 }
 

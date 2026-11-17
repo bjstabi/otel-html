@@ -6,8 +6,14 @@ export const TABLES = [
   'patterns',
   'span_rollups',
   'log_rollups',
+  'widget_traces',
 ] as const;
 export type Table = (typeof TABLES)[number];
+/** The tables that carry statistics keys: every table but `widget_traces`, whose columns are the report's own. */
+export type StatisticsTable = Exclude<Table, 'widget_traces'>;
+export const STATISTICS_TABLES: readonly StatisticsTable[] = TABLES.filter(
+  (t): t is StatisticsTable => t !== 'widget_traces',
+);
 
 /** The base table each rollup table summarises. */
 export const ROLLUP_OF: { readonly span_rollups: 'spans'; readonly log_rollups: 'logs' } = {
@@ -50,6 +56,7 @@ const DICTIONARY_COLUMNS: ReadonlySet<string> = new Set([
   'event_name',
   'scope_version',
   'template',
+  'condition',
 ]);
 
 /** A column: nullable by default, dictionary-encoded when named above or json. */
@@ -211,6 +218,26 @@ const LOG_ROLLUPS: readonly ColumnDef[] = [
   required('n', 'int64'),
 ];
 
+const WIDGET_TRACES: readonly ColumnDef[] = [required('condition', 'utf8'), required('trace_id', 'utf8')];
+
+/** The column of a `widget_traces` file holding the value of the variable `key` (a resource attribute of the span). */
+export const VAR_COLUMN_PREFIX = 'var:';
+
+/** `widget_traces`' columns for a report: the two fixed ones, then one nullable dictionary utf8 column per variable key. */
+export function widgetTracesColumns(variables: readonly string[]): ColumnDef[] {
+  return [
+    ...WIDGET_TRACES,
+    ...variables.map(
+      (key): ColumnDef => ({
+        name: `${VAR_COLUMN_PREFIX}${key}`,
+        type: 'utf8',
+        nullable: true,
+        dictionary: true,
+      }),
+    ),
+  ];
+}
+
 export const TABLE_COLUMNS: Readonly<Record<Table, readonly ColumnDef[]>> = {
   spans: SPANS,
   logs: LOGS,
@@ -219,6 +246,7 @@ export const TABLE_COLUMNS: Readonly<Record<Table, readonly ColumnDef[]>> = {
   patterns: PATTERNS,
   span_rollups: SPAN_ROLLUPS,
   log_rollups: LOG_ROLLUPS,
+  widget_traces: WIDGET_TRACES,
 };
 
 /** The columns a table's rows are sorted by, in order: scope_name, service_name, then its time column. */
@@ -230,6 +258,7 @@ export const SORT_COLUMNS: Readonly<Record<Table, readonly string[]>> = {
   patterns: ['cluster_id'],
   span_rollups: ['scope_name', 'service_name', 'start_time_unix_nano'],
   log_rollups: ['scope_name', 'service_name', 'time_unix_nano'],
+  widget_traces: ['condition', 'trace_id'],
 };
 
 /** One column of a sort and its direction (nulls last either way). `bucketNs` sorts by the value's bucket (`value / bucketNs`, floored) instead of the value: a coarse time key. */
@@ -239,7 +268,8 @@ export interface SortKey {
   readonly bucketNs?: bigint;
 }
 
-export const TIME_COLUMN: Readonly<Record<Table, string>> = {
+/** A table's time column; null for a table without time (`widget_traces`). */
+export const TIME_COLUMN: Readonly<Record<Table, string | null>> = {
   spans: 'start_time_unix_nano',
   logs: 'time_unix_nano',
   points: 'time_unix_nano',
@@ -247,6 +277,7 @@ export const TIME_COLUMN: Readonly<Record<Table, string>> = {
   patterns: 'first_time_unix_nano',
   span_rollups: 'start_time_unix_nano',
   log_rollups: 'time_unix_nano',
+  widget_traces: null,
 };
 
 export const FIXED_STATISTICS_COLUMNS: Readonly<Record<Table, readonly string[]>> = {
@@ -257,4 +288,5 @@ export const FIXED_STATISTICS_COLUMNS: Readonly<Record<Table, readonly string[]>
   patterns: [],
   span_rollups: ['scope_name', 'service_name', 'name'],
   log_rollups: ['scope_name', 'service_name', 'severity_number'],
+  widget_traces: [],
 };
