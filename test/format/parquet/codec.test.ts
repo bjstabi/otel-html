@@ -129,7 +129,8 @@ describe('parquet codec', () => {
     // sorted by scope_name: scope0 fills rows 0-39999, scope1 the next 40000, scope2 the rest
     expect(scope.map((m) => m.stats_min_value)).toEqual(['scope0', 'scope1', 'scope2']);
     expect(scope.map((m) => m.stats_max_value)).toEqual(['scope1', 'scope2', 'scope2']);
-  });
+    // 120_000 rows are what make three 50_000-row groups; ZSTD-encoding them takes ~1 s locally, ~5 s on a loaded CI runner under coverage.
+  }, 20_000);
 
   test('a missing non-nullable column is an invalid-report error naming the column', () => {
     const bad = span(1, 'a', 'b', 1n);

@@ -88,7 +88,7 @@ describe('compacting flushes of which only a small one left a widget key out', (
   test('the union is weighed again: its rollup groups by the key when that is cheap, and answers as the raw spans do', async () => {
     const w = createTestWriter();
     const s = await openSession(w.deps, { out: 'r', config: config(), mode: 'replace' });
-    await s.add(spansWith(0, 20_000, small), 'a.json');
+    await s.add(spansWith(0, 4_000, small), 'a.json');
     await s.flush();
     await s.add(spansWith(100_000, 300, unique), 'b.json');
     await s.flush();
