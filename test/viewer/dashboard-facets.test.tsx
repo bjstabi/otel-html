@@ -46,6 +46,7 @@ const SCOPE: WidgetScope = {
   narrowed: false,
   band: null,
   traceFilter: null,
+  vars: [],
   highlightTrace: null,
   condition: null,
   outside: false,

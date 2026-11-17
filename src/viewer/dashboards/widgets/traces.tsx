@@ -1,4 +1,5 @@
 import { type JSX, useCallback, useMemo, useState } from 'react';
+import { andConditions } from '../../../dashboards/conditions.js';
 import { OtelHtmlError } from '../../../model/errors.js';
 import type { SpanId, TraceId } from '../../../model/ids.js';
 import { ErrorCard, LoadingNote, NoMatch } from '../../components/explorer-states.js';
@@ -7,12 +8,14 @@ import { FlameGraph } from '../../components/flame-graph.js';
 import { ResultsTable, type SortState } from '../../components/results-table.js';
 import type { DataSource } from '../../data/data-source.js';
 import type { SpanQuery, SpanRow, TraceRow } from '../../data/results.js';
+import type { WidgetIndexHint } from '../../data/widget-index-route.js';
 import { useSelectionStore } from '../../state/selection-context.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
 import { useColorAssigner } from '../../theme/colors-context.js';
 import { SPAN_COLUMNS_UI, TRACE_COLUMNS_UI } from '../../traces/columns.js';
 import { useSpanQuery } from '../../traces/use-span-query.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
+import { variableCondition } from '../scope.js';
 import { FRAME_CHROME_PX, useEpoch } from './layout.js';
 import { scopedCount, useSubtitle } from './subtitle.js';
 
@@ -74,6 +77,22 @@ export const TracesWidget: WidgetRenderer = ({ widget, scope, height, dataSource
   const colors = useColorAssigner();
   const epoch = useEpoch(dataSource);
   const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
+  // The hint names exactly what the writer indexes (`widget.query`); it is sent only when the scope's condition is
+  // that query and the variables joined, so the data source's equality check holds. Its JSON is the memo key: the
+  // bindings array is new on every page render, and a new query object would refetch.
+  const variables = variableCondition(scope.vars, 'span');
+  const hintJson =
+    widget.query !== null &&
+    text === '' &&
+    scope.traceFilter === null &&
+    scope.vars.every((b) => b.kind === 'string') &&
+    scope.condition === andConditions(widget.query, variables)
+      ? JSON.stringify({
+          query: widget.query,
+          variables,
+          bindings: scope.vars.map(({ key, value }) => ({ key, value })),
+        })
+      : null;
   const query = useMemo<SpanQuery>(
     () => ({
       condition: scope.condition,
@@ -86,8 +105,9 @@ export const TracesWidget: WidgetRenderer = ({ widget, scope, height, dataSource
       measureBy: null,
       needs: ['rows'],
       facetKeys: null,
+      ...(hintJson === null ? {} : { widgetIndex: JSON.parse(hintJson) as WidgetIndexHint }),
     }),
-    [scope.condition, scope.window, text, mode, sort],
+    [scope.condition, scope.window, text, mode, sort, hintJson],
   );
   const { state } = useSpanQuery(dataSource, query);
   // Only a finished result: rows of the previous inputs are never shown as if they were current.

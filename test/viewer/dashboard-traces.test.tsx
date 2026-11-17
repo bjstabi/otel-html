@@ -6,10 +6,15 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
   Chart: (p: { ariaLabel: string }): React.JSX.Element => <div role="img" aria-label={p.ariaLabel} />,
 }));
 
+import { readFileSync } from 'node:fs';
+import { parse } from 'yaml';
+import { resolveConfig } from '../../src/config/resolve.js';
+import { conditionId, widgetTraceConditions } from '../../src/config/widget-traces.js';
+import { andConditions } from '../../src/dashboards/conditions.js';
 import { DashboardSchema } from '../../src/dashboards/schema.js';
 import type { TraceId } from '../../src/model/ids.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
-import type { WidgetScope } from '../../src/viewer/dashboards/scope.js';
+import { scopeFor, type VariableBinding, type WidgetScope } from '../../src/viewer/dashboards/scope.js';
 import { TracesWidget } from '../../src/viewer/dashboards/widgets/traces.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
 import type { SpanQuery, SpanQueryResult } from '../../src/viewer/data/results.js';
@@ -146,6 +151,7 @@ const SCOPE: WidgetScope = {
   narrowed: false,
   band: null,
   traceFilter: null,
+  vars: [],
   highlightTrace: null,
   condition: null,
   outside: false,
@@ -267,5 +273,121 @@ describe('the Traces widget in spans mode', () => {
     });
     await waitFor(() => expect(actions.setSubtitle).toHaveBeenCalledWith('1 span'));
     expect(screen.getAllByRole('row')).toHaveLength(2); // header + the one span
+  });
+});
+
+describe('the Traces widget names its indexed condition', () => {
+  const QUERY = 'IsRootSpan() and attributes["x"] != nil';
+  const JOB: VariableBinding = { key: 'job', value: 'build', kind: 'string' };
+
+  async function sent(over: object, vars: readonly VariableBinding[], sel = false): Promise<SpanQuery> {
+    const { w } = widgetOf(over);
+    const scope = scopeFor(w, {
+      page: null,
+      sel: { t: sel ? { start: 10, end: 20 } : null, trace: null },
+      following: sel,
+      vars,
+    });
+    const calls: SpanQuery[] = [];
+    mount(
+      {
+        ...dataSourceOf(baseManifest),
+        querySpans: (q) => {
+          calls.push(q);
+          return Promise.resolve(emptySpanResult());
+        },
+      },
+      { over, scope },
+    );
+    await screen.findByRole('heading', { name: 'No traces match' });
+    const q = calls[0];
+    if (q === undefined) throw new Error('no query');
+    return q;
+  }
+
+  test('no variables: the hint is the widget query and no variable condition', async () => {
+    const q = await sent({ query: QUERY }, []);
+    expect(q.widgetIndex).toEqual({ query: QUERY, variables: null, bindings: [] });
+    expect(q.condition).toBe(andConditions(QUERY, null));
+  });
+
+  test('a bound job: the hint carries the variable condition and the binding', async () => {
+    const q = await sent({ query: QUERY }, [JOB]);
+    expect(q.widgetIndex).toEqual({
+      query: QUERY,
+      variables: 'resource.attributes["job"] == "build"',
+      bindings: [{ key: 'job', value: 'build' }],
+    });
+  });
+
+  test('a widget text, no query or an int binding sends no hint', async () => {
+    expect((await sent({ query: QUERY, text: 'boom' }, [])).widgetIndex).toBeUndefined();
+    cleanup();
+    expect((await sent({}, [])).widgetIndex).toBeUndefined();
+    cleanup();
+    expect(
+      (await sent({ query: QUERY }, [{ key: 'n', value: '3', kind: 'int' }])).widgetIndex,
+    ).toBeUndefined();
+  });
+
+  test('a following widget with a selection still sends the hint', async () => {
+    const q = await sent({ query: QUERY }, [JOB], true);
+    expect(q.widgetIndex?.query).toBe(QUERY);
+    expect(q.window).not.toBeNull();
+  });
+});
+
+describe('the CI Runs widget and the writer agree on the condition', () => {
+  const file = '.github/otel-html-ci.yaml';
+  const { config } = resolveConfig({
+    file: parse(readFileSync(file, 'utf8')),
+    env: {},
+    fileLabel: file,
+  });
+  const dash = config.dashboards.find((d) => d.dashboard.id === 'ci');
+  const runs = dash?.dashboard.widgets.find((x) => x.type === 'traces' && x.title === 'Runs');
+  const JOB: VariableBinding = { key: 'job', value: 'unit', kind: 'string' };
+  const WORKFLOW: VariableBinding = { key: 'workflow', value: 'ci', kind: 'string' };
+
+  test.each([
+    ['no variables', []],
+    ['job bound', [JOB]],
+    ['job and workflow bound', [JOB, WORKFLOW]],
+  ])("%s: q.condition is the hint joined, and the id is the writer's", async (_name, vars) => {
+    if (runs?.type !== 'traces' || dash === undefined) throw new Error('no Runs widget');
+    const scope = scopeFor(runs, { page: null, sel: { t: null, trace: null }, following: false, vars });
+    const calls: SpanQuery[] = [];
+    render(
+      <ThemeProvider>
+        <SelectionProvider store={createSelectionStore({})}>
+          <TracesWidget
+            widget={runs}
+            scope={scope}
+            dashboard={{ dashboard: dash.dashboard, source: 'x', isDefault: false }}
+            height={400}
+            dataSource={{
+              ...dataSourceOf(baseManifest),
+              querySpans: (q) => {
+                calls.push(q);
+                return Promise.resolve(emptySpanResult());
+              },
+            }}
+            actions={actionsOf()}
+            variables={[]}
+            controls={null}
+            state={EMPTY_DASHBOARD_STATE}
+          />
+        </SelectionProvider>
+      </ThemeProvider>,
+    );
+    await screen.findByRole('heading', { name: 'No traces match' });
+    const q = calls[0];
+    const hint = q?.widgetIndex;
+    if (q === undefined || hint === undefined) throw new Error('no hint');
+    expect(q.condition).toBe(andConditions(hint.query, hint.variables));
+    expect(q.text).toBe('');
+    expect(hint.bindings.map((b) => b.key)).toEqual(vars.map((b) => b.key));
+    const written = widgetTraceConditions(config.dashboards).conditions.map((c) => c.id);
+    expect(written).toContain(conditionId(hint.query));
   });
 });
