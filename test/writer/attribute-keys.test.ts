@@ -78,6 +78,21 @@ describe('AttributeKeyCounts', () => {
     expect(at(1001).record()).toBeUndefined();
   });
 
+  test('past the limit the counts are dropped and later keys are not retained, through addCounts as well', () => {
+    const over = new AttributeKeyCounts();
+    for (let i = 0; i <= MAX_ATTRIBUTE_KEYS; i++) over.addJson(`{"k${i}":1}`);
+    expect(over.size).toBe(0);
+    over.addJson('{"later":1}');
+    over.addRecord({ more: 1 });
+    expect(over.size).toBe(0);
+    expect(over.record()).toBeUndefined();
+    const back = new AttributeKeyCounts();
+    back.addJson('{"a":1}');
+    back.addCounts(over);
+    expect(back.size).toBe(0);
+    expect(back.record()).toBeUndefined();
+  });
+
   test('a __proto__ key records nothing: a manifest script literal would drop it, so the report scans', () => {
     const c = new AttributeKeyCounts();
     c.addAttributes(

@@ -12,14 +12,24 @@ export const MAX_ATTRIBUTE_KEYS = 1000;
  * unscalar is not listed.
  */
 export class AttributeKeyCounts {
-  readonly #counts = new Map<string, number>();
+  #counts = new Map<string, number>();
+  /** Set once the counts can only record nothing (too many keys, or a `__proto__` key): they are dropped, and later keys are ignored. */
+  #exceeded = false;
 
+  /** The keys held: none once the counts can record nothing. */
   get size(): number {
     return this.#counts.size;
   }
 
   #bump(key: string, by = 1): void {
+    if (this.#exceeded) return;
     this.#counts.set(key, (this.#counts.get(key) ?? 0) + by);
+    if (this.#counts.size > MAX_ATTRIBUTE_KEYS || key === '__proto__') this.#drop();
+  }
+
+  #drop(): void {
+    this.#exceeded = true;
+    this.#counts = new Map();
   }
 
   /** The attributes of one record, before they are stored as JSON. */
@@ -53,7 +63,8 @@ export class AttributeKeyCounts {
 
   /** The counts of another set. */
   addCounts(other: AttributeKeyCounts): void {
-    for (const [key, n] of other.#counts) this.#bump(key, n);
+    if (other.#exceeded) this.#drop();
+    else for (const [key, n] of other.#counts) this.#bump(key, n);
   }
 
   /** The counts another file recorded. */
@@ -67,7 +78,7 @@ export class AttributeKeyCounts {
    * record would differ from the scan. Such a report is scanned.
    */
   record(): Record<string, number> | undefined {
-    if (this.#counts.size > MAX_ATTRIBUTE_KEYS || this.#counts.has('__proto__')) return undefined;
+    if (this.#exceeded) return undefined;
     return Object.fromEntries([...this.#counts].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
   }
 }

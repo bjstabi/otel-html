@@ -97,11 +97,13 @@ export class PartitionWriter {
 
   /**
    * Holds a copy of the row's cells. The row must have passed `checkRow`: held rows are not checked again when they
-   * are encoded (derived rows are). A `spans` or `logs` row's `attributes` are counted for the file's `attributeKeys`.
+   * are encoded (derived rows are). A `spans` or `logs` row's `attributes` are counted for the file's `attributeKeys`, from `attributes` when given (the row's, before it is stored) and else from the row's stored JSON.
    */
   add(table: Table, row: Row, attributes?: Attributes): void {
-    if (attributes !== undefined && (table === 'spans' || table === 'logs')) {
-      this.#keys[table].addAttributes(attributes);
+    if (table === 'spans' || table === 'logs') {
+      const { attributes: stored } = row;
+      if (attributes !== undefined) this.#keys[table].addAttributes(attributes);
+      else this.#keys[table].addJson(stored);
     }
     const h = this.#held[table];
     pushRow(table, h.cells, row);
