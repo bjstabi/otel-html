@@ -5,9 +5,9 @@
 // <out>/rebuilt with the build's CLI (the copy computes the indexes), prints the widget_traces share of the spans bytes,
 // serves <out>/rebuilt with a 14 ms delay and measures each page. `mise run measure:live`.
 import { spawnSync } from 'node:child_process';
-import { cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { chromium } from '@playwright/test';
+import { chromium, type Request } from '@playwright/test';
 import { serve } from '../e2e/static-server.js';
 import { unwrapDataFile } from '../src/format/data-file.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
@@ -95,8 +95,8 @@ function rebuild(): void {
   if (r.status !== 0) throw new Error(`merge exited ${r.status}`);
 }
 
-async function reportSize(): Promise<string> {
-  const m = await readManifest(rebuilt);
+async function reportSize(dir: string): Promise<string> {
+  const m = await readManifest(dir);
   const sum = (kind: string): number => m.partitions.reduce((a, p) => a + (p.files[kind]?.bytes ?? 0), 0);
   const w = sum('widget_traces');
   const s = sum('spans');
@@ -117,24 +117,33 @@ async function measure(base: string, route: string): Promise<{ sample: Sample; h
     const page = await ctx.newPage();
     let requests = 0;
     let spans = 0;
-    let lastResponse = 0;
+    let lastDone = 0;
     let t0 = 0;
+    // A `response` event comes when the headers do, so a request is open until `requestfinished` (the body is in) or `requestfailed`.
+    const open = new Set<Request>();
+    const done = (r: Request): void => {
+      if (open.delete(r)) lastDone = performance.now() - t0;
+    };
     ctx.on('request', (r) => {
       if (!r.url().startsWith(prefix)) return;
       requests += 1;
+      open.add(r);
       if (r.url().includes('spans.parquet')) spans += 1;
     });
-    ctx.on('response', (r) => {
-      if (r.url().startsWith(prefix)) lastResponse = performance.now() - t0;
-    });
+    ctx.on('requestfinished', done);
+    ctx.on('requestfailed', done);
     t0 = performance.now();
     await page.goto(base + route);
-    // Settled: the last response before QUIET_MS with none.
-    while (performance.now() - t0 - lastResponse < QUIET_MS && performance.now() - t0 < TIMEOUT_MS) {
+    // Settled: no request open, and none opened or finished for QUIET_MS. The deadline is a failed sample, not a result.
+    for (;;) {
+      const now = performance.now() - t0;
+      if (open.size === 0 && now - lastDone >= QUIET_MS) break;
+      if (now >= TIMEOUT_MS)
+        throw new Error(`${route}: not settled after ${TIMEOUT_MS} ms (${open.size} requests open)`);
       await new Promise((ok) => setTimeout(ok, 100));
     }
     return {
-      sample: { requests, spans, settledMs: Math.round(lastResponse) },
+      sample: { requests, spans, settledMs: Math.round(lastDone) },
       hash: await page.evaluate(() => location.hash),
     };
   } finally {
@@ -162,6 +171,22 @@ async function firstTraceRoute(base: string): Promise<string> {
 const median = (xs: number[]): number => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] ?? 0;
 const span = (xs: number[]): string => `${Math.min(...xs)}-${Math.max(...xs)}`;
 
+/** The path with every symbolic link of its existing part resolved (`<out>` may not exist yet: its first existing parent is). */
+async function canonical(path: string): Promise<string> {
+  let existing = resolve(path);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return join(await realpath(existing), ...rest);
+    } catch {
+      const parent = dirname(existing);
+      if (parent === existing) return resolve(path);
+      rest.unshift(relative(parent, existing));
+      existing = parent;
+    }
+  }
+}
+
 async function main(): Promise<void> {
   const from = flag('--from');
   if (from !== undefined) {
@@ -170,7 +195,8 @@ async function main(): Promise<void> {
       const r = relative(a, b);
       return r === '' || (!r.startsWith('..') && !isAbsolute(r));
     };
-    if (inside(root, resolve(from)) || inside(resolve(from), root))
+    const [src, dst] = [await canonical(from), await canonical(root)];
+    if (inside(dst, src) || inside(src, dst))
       throw new Error(
         `--from ${from} is the output directory ${root}, inside it or above it: pass a separate copy`,
       );
@@ -186,7 +212,12 @@ async function main(): Promise<void> {
     rebuild();
   }
   const dir = args.includes('--no-rebuild') ? live : rebuilt;
-  print(await reportSize().catch(() => 'report size: unavailable'));
+  // The download holds the manifest and the partitions only; a site to serve needs its shell (`--from` a full site, or a rebuild).
+  if ((await sizeOf(join(dir, 'index.html'))) === null)
+    throw new Error(
+      `${dir} has no index.html: --no-rebuild needs a complete site (a --from copy of one); run without it to rebuild`,
+    );
+  print(await reportSize(dir).catch(() => 'report size: unavailable'));
   const server = await serve([{ prefix: '/r', root: dir }], { delayMs: DELAY_MS });
   try {
     const base = `http://127.0.0.1:${server.port}/r/index.html`;
