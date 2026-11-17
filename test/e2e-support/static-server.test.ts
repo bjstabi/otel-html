@@ -98,3 +98,16 @@ it('lists the requests with their Range headers at /__requests, leaving its own 
   ]);
   expect(server.requests()).not.toContain('/__requests');
 });
+
+it('delays every response by delayMs', async () => {
+  const slow = await serve([{ prefix: '/m', root: dir }], { delayMs: 60 });
+  try {
+    const t0 = performance.now();
+    const res = await fetch(`http://127.0.0.1:${slow.port}/m/a.parquet`);
+    await res.arrayBuffer();
+    expect(performance.now() - t0).toBeGreaterThanOrEqual(55);
+    expect(res.status).toBe(200);
+  } finally {
+    await slow.close();
+  }
+});

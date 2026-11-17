@@ -1014,6 +1014,24 @@ b:50000,c:16384` measures some candidates (sorts a time DESC, b scope + time DES
 ### Arguments
 - **`[args]…`**
 
+## `measure:live`
+
+Measure the CI dashboard and other pages on a local rebuild of the live site's data, at 14 ms per request
+Downloads the live report (https://bjstabi.github.io/otel-html/branch/main/, about 140 MB; `-- --from <dir>` copies a
+downloaded report instead), merges it with this build's CLI into `<out>/rebuilt` (format 7 computes the indexes; about a
+minute), prints the `widget_traces` bytes against the spans bytes, serves it with a 14 ms delay and loads six pages cold
+three times each in Chromium (about 3 minutes): root, the CI dashboard with and without `-- --job <name>` bound, the
+traces list, logs and a trace open. Prints the median and range of requests, `spans.parquet` requests and settled time.
+`-- --out <dir>` is required; `-- --build <dist>` measures another build; `-- --no-rebuild` serves `<out>/live` as is.
+
+
+- Depends: build
+
+- **Usage:** `measure:live [args]…`
+
+### Arguments
+- **`[args]…`**
+
 ## `predict:queries`
 
 Print the requests, megabytes and modelled milliseconds the viewer's pages cost on named report shapes

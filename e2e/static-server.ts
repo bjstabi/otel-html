@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { extname, join, normalize, sep } from 'node:path';
 
 const MIME: Record<string, string> = {
@@ -33,7 +33,7 @@ function parseRange(
 /**
  * Serves folders over HTTP on a free loopback port: each mount's files appear under its URL prefix. Answers `Range`
  * (a single range, 206 or 416) and `HEAD`; HEAD never carries `Content-Range`, as on GitHub Pages (spec §12).
- * `requests()` lists every request path in arrival order. The server also answers `GET /__requests` with every request
+ * `opts.delayMs` holds every response back that long (a model of network latency). `requests()` lists every request path in arrival order. The server also answers `GET /__requests` with every request
  * seen so far as JSON (`RequestRecord[]`: path, `Range` header and method, the endpoint's own requests left out), so a test
  * worker, which runs in another process than global setup's server, can read what its page asked for.
  */
@@ -48,13 +48,21 @@ export interface RequestRecord {
 /** The reserved path under which the server lists the requests it has seen. */
 export const REQUESTS_PATH = '/__requests';
 
-export async function serve(mounts: readonly { prefix: string; root: string }[]): Promise<{
+export async function serve(
+  mounts: readonly { prefix: string; root: string }[],
+  opts: { delayMs?: number } = {},
+): Promise<{
   port: number;
   requests(): readonly string[];
   close(): Promise<void>;
 }> {
   const seen: RequestRecord[] = [];
+  const delayMs = opts.delayMs ?? 0;
   const server = createServer((req, res) => {
+    if (delayMs > 0) setTimeout(() => handle(req, res), delayMs);
+    else handle(req, res);
+  });
+  const handle = (req: IncomingMessage, res: ServerResponse): void => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const rel = decodeURIComponent(url.pathname);
     if (rel === REQUESTS_PATH) {
@@ -97,7 +105,7 @@ export async function serve(mounts: readonly { prefix: string; root: string }[])
       },
       () => res.writeHead(404).end(),
     );
-  });
+  };
   await new Promise<void>((ok, fail) => {
     server.once('error', fail);
     server.listen(0, '127.0.0.1', () => ok());
