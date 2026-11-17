@@ -10,6 +10,7 @@ import { type FacetSource, toplist } from '../../components/facet-views.js';
 import { GroupTable } from '../../components/group-table.js';
 import { mergeEchartsOption } from '../../components/metric-chart-option.js';
 import type { DataSource } from '../../data/data-source.js';
+import { recordedFacetKeys } from '../../data/recorded-keys.js';
 import type { LogQuery, SpanQuery, SpanQueryResult } from '../../data/results.js';
 import { useLogQuery } from '../../logs/use-log-query.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
@@ -108,8 +109,15 @@ function sharedKeys(noun: 'Spans' | 'Logs', d: DataSource): Promise<string[]> {
   });
   return run;
 }
-const spanKeys = (d: DataSource): Promise<string[]> => sharedKeys('Spans', d);
-const logKeys = (d: DataSource): Promise<string[]> => sharedKeys('Logs', d);
+/** The keys the writer recorded in the manifest, else the shared scan (a report written before the record). */
+const spanKeys = (d: DataSource): Promise<string[]> => {
+  const recorded = recordedFacetKeys(d.manifest, 'spans');
+  return recorded === null ? sharedKeys('Spans', d) : Promise.resolve(recorded);
+};
+const logKeys = (d: DataSource): Promise<string[]> => {
+  const recorded = recordedFacetKeys(d.manifest, 'logs');
+  return recorded === null ? sharedKeys('Logs', d) : Promise.resolve(recorded);
+};
 // Module-level so they are stable: `useKeyedAsync` reloads on a new `load`.
 // A pinned key is known before its first observation, so a report without it still says "no values".
 const knownKeys = (f: FacetCounts): string[] => [...new Set([...f.keys(), ...f.pinned])];

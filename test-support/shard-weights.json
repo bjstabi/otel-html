@@ -212,6 +212,7 @@
     "test/viewer-data/metric-results.test.ts": 0.1,
     "test/viewer-data/metric-tables.test.ts": 0.1,
     "test/viewer-data/mosaic.test.ts": 1.5,
+    "test/viewer-data/recorded-keys.test.ts": 1.2,
     "test/viewer-data/refresh-report.test.ts": 0.5,
     "test/viewer-data/residual.test.ts": 0.1,
     "test/viewer-data/rollup-equivalence.test.ts": 27.6,
