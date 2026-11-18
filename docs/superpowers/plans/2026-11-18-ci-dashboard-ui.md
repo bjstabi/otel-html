@@ -389,8 +389,9 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
 - [ ] **Step 3: implement.**
   - The catalogue classes follow the `widget_traces` route entry:
     - `cicd.rows`: `files` on retention and density, and on window.
-    - `cicd.rows.scan`: `scan` on density, with the `allowed` reason "partitions without the cicd flag (older or
-      upgraded)".
+    - `cicd.rows.scan`: `scan` on retention, density and window (measured), with the `allowed` reason "partitions
+      without the cicd flag (older or upgraded)".
+  - The SQL builders live in `src/query/sql/cicd.ts` and `encodeCicd` in `src/writer/cicd-encode.ts`.
   - Add a scaling-shape test that both stay in class.
 - [ ] **Step 4:** → PASS. Then `mise run check` → PASS (the catalogue gates included).
 - [ ] **Step 5:** commit `feat(viewer): cicdRows reads the cicd table and combines runs`.
