@@ -46,7 +46,7 @@ export const StatusGridView: WidgetRenderer = ({ widget, scope, actions: page })
           const height = DOTS_H + grid.rows.length * ROW;
           const colX = (i: number): number => LABEL_W + i * PITCH;
           return (
-            <div className="overflow-auto p-3">
+            <div>
               <svg
                 role="img"
                 aria-label="Job results over the last runs"
@@ -115,8 +115,12 @@ export const StatusGridView: WidgetRenderer = ({ widget, scope, actions: page })
                             width={CELL}
                             height={CELL}
                             rx={1.5}
+                            tabIndex={0}
                             className={`cursor-pointer ${FILL[cell]}`}
                             onClick={() => openRun(run)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') openRun(run);
+                            }}
                             {...menuTriggers((at) => runMenu(run, at))}
                           >
                             <title>{`${row.job} · ${cell} · ${run.title ?? `Run ${run.runId}`}`}</title>

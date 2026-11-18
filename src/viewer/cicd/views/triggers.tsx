@@ -70,7 +70,7 @@ export const TriggersView: WidgetRenderer = ({ widget, scope, actions: page }): 
                     {t.chips.map((c) => (
                       <span
                         key={c.count}
-                        title={`${c.names.join(', ')}: in ${c.count} of ${t.runs} runs`}
+                        title={`${c.names.join(', ')}: in ${c.count} of ${t.runs} runs${c.conditions.length === 0 ? '' : `\nif ${c.conditions.join('\nif ')}`}`}
                         className="rounded-full border border-hairline px-2 py-0.5 text-xs text-muted"
                       >
                         {chipText(c.names, c.share)}

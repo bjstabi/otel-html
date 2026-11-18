@@ -4,12 +4,12 @@ import type { WidgetRenderer } from '../../dashboards/dashboard-page.js';
 import { useEpoch } from '../../dashboards/widgets/layout.js';
 import { useSubtitle } from '../../dashboards/widgets/subtitle.js';
 import { absoluteTime } from '../../shell/time-range.js';
-import { failures } from '../derive.js';
+import { failedRunCount, failures } from '../derive.js';
 import { useRunActions } from '../run-actions.js';
 import { useCicd } from '../use-cicd.js';
 import { CicdBody } from './body.js';
 
-const LIMIT = 20;
+const LIMIT = 10;
 
 /** The latest failed runs: when, title with trigger and branch, failed-job chips, a link to GitHub. */
 export const FailuresView: WidgetRenderer = ({ widget, scope, dataSource, actions: page }): JSX.Element => {
@@ -18,12 +18,16 @@ export const FailuresView: WidgetRenderer = ({ widget, scope, dataSource, action
   const epoch = useEpoch(dataSource);
   const entries = useMemo(() => failures(data.runs, LIMIT), [data.runs]);
   const { openRun, runMenu, jobMenu, openOnGithub, selectedTraceId, isSource } = actions;
+  const total = useMemo(() => failedRunCount(data.runs), [data.runs]);
   useSubtitle(
     page,
-    data.status === 'ready' && entries.length > 0
-      ? `${entries.length} failed ${entries.length === 1 ? 'run' : 'runs'}`
-      : null,
+    data.status !== 'ready' || total === 0
+      ? null
+      : total > entries.length
+        ? `latest ${entries.length} of ${total} failed runs`
+        : `${total} failed ${total === 1 ? 'run' : 'runs'}`,
   );
+
   return (
     <>
       <CicdBody data={data}>

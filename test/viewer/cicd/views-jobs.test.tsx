@@ -264,6 +264,14 @@ describe('status-grid', () => {
     expect(state.run?.from).toBe('w1');
   });
 
+  it('opens the run of a failed cell on Enter', async () => {
+    await show(widget('status-grid'), runs(12, ['build', 'test']));
+    const cell = q<SVGElement>('[data-job-row="test"] [data-cell="failure"]');
+    expect(cell.getAttribute('tabindex')).toBe('0');
+    await act(async () => cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    expect(state.sel.trace).toBe(TRACE(2));
+  });
+
   it('truncates a long label with … and keeps the full name in a <title>', async () => {
     await show(widget('status-grid'), runs(12, [LONG]));
     const label = q<SVGTextElement>('[data-job-row] text');
@@ -298,6 +306,13 @@ describe('failures', () => {
     expect(rows[0]?.textContent).toContain('commit 9');
     expect(rows[0]?.textContent).toContain('pull_request · fix-x');
     expect(subtitles.at(-1)).toBe('2 failed runs');
+  });
+
+  it('says how many failed runs there are when the list is capped at 10', async () => {
+    const rows = runs(25, ['build'], () => ({ result: 'failure' }));
+    await show(widget('failures'), rows);
+    expect(host.querySelectorAll('[data-failure]')).toHaveLength(10);
+    expect(subtitles.at(-1)).toBe('latest 10 of 25 failed runs');
   });
 
   it('opens the job menu from a failed-job chip, and shows the failing step on hover', async () => {
@@ -351,6 +366,15 @@ describe('triggers', () => {
     expect(pr.textContent).toContain('7 jobs 95%');
     expect(pr.textContent).toContain('1 of 8 always');
     expect(subtitles.at(-1)).toBe('2 triggers');
+  });
+
+  it('gives the jobs condition in the chip title', async () => {
+    const rows = mixed().map((r) =>
+      r.task?.startsWith('extra') === true ? { ...r, condition: 'github.ref == main' } : r,
+    );
+    await show(widget('triggers'), rows);
+    const chip = q<HTMLElement>('[data-trigger="pull_request"] [title*="19 of 20"]');
+    expect(chip.title).toContain('github.ref == main');
   });
 
   it('opens the trigger menu on a click on the trigger name', async () => {

@@ -300,7 +300,7 @@ describe('triggers', () => {
         jobs: [
           job('check', 0, 5),
           ...(i < 19 ? ['a', 'b', 'c'].map((x) => job(x, 0, 5)) : []),
-          ...(i < 10 ? [job('d', 0, 5)] : []),
+          ...(i < 10 ? [{ ...job('d', 0, 5), condition: 'if: main' }] : []),
         ],
       }),
     );
@@ -309,8 +309,8 @@ describe('triggers', () => {
     expect(t.map((x) => x.trigger)).toEqual(['push', 'pull_request']);
     expect(t[0]).toMatchObject({ runs: 20, jobs: 5, always: 1, passedShare: 1 });
     expect(t[0]?.chips).toEqual([
-      { names: ['a', 'b', 'c'], share: 0.95, count: 19 },
-      { names: ['d'], share: 0.5, count: 10 },
+      { names: ['a', 'b', 'c'], share: 0.95, count: 19, conditions: [] },
+      { names: ['d'], share: 0.5, count: 10, conditions: ['if: main'] },
     ]);
     expect(t[1]).toMatchObject({ runs: 1, jobs: 1, always: 1, chips: [] });
   });

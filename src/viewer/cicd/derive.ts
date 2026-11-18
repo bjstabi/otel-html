@@ -438,6 +438,10 @@ export interface FailureEntry {
   failed: CiJob[];
 }
 
+/** How many runs failed in all, for the subtitle when `failures` is capped. */
+export const failedRunCount = (runs: readonly CiRun[]): number =>
+  runs.filter((r) => r.result === 'failure').length;
+
 /** The latest `limit` failed runs, newest first, with their failed jobs. */
 export function failures(runs: readonly CiRun[], limit: number): FailureEntry[] {
   return [...runs]
@@ -456,7 +460,7 @@ export interface TriggerRow {
   passedShare: number;
   jobs: number;
   always: number;
-  chips: { names: string[]; share: number; count: number }[];
+  chips: { names: string[]; share: number; count: number; conditions: string[] }[];
 }
 
 export function triggers(runs: readonly CiRun[]): TriggerRow[] {
@@ -470,8 +474,16 @@ export function triggers(runs: readonly CiRun[]): TriggerRow[] {
   const rows: TriggerRow[] = [];
   for (const [trigger, rs] of groups) {
     const ran = new Map<string, number>();
-    for (const r of rs)
+    const conditions = new Map<string, Set<string>>();
+    for (const r of rs) {
       for (const n of new Set(ranJobs(r).map((j) => j.name))) ran.set(n, (ran.get(n) ?? 0) + 1);
+      for (const j of r.jobs)
+        if (j.condition !== null && j.condition !== '') {
+          const set = conditions.get(j.name) ?? new Set<string>();
+          conditions.set(j.name, set);
+          set.add(j.condition);
+        }
+    }
     const ok = notCancelled(rs);
     const byCount = new Map<number, string[]>();
     let always = 0;
@@ -487,7 +499,12 @@ export function triggers(runs: readonly CiRun[]): TriggerRow[] {
       always,
       chips: [...byCount]
         .sort((a, b) => b[0] - a[0])
-        .map(([count, names]) => ({ names, share: count / rs.length, count })),
+        .map(([count, names]) => ({
+          names,
+          share: count / rs.length,
+          count,
+          conditions: [...new Set(names.flatMap((n) => [...(conditions.get(n) ?? [])]))].sort(),
+        })),
     });
   }
   return rows.sort((a, b) => b.runs - a.runs || (a.trigger < b.trigger ? -1 : 1));
