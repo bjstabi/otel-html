@@ -166,9 +166,10 @@ export function RangeSlider(props: RangeSliderProps): JSX.Element {
       onDoubleClick={() => onZoom(null)}
     >
       <div className="absolute inset-x-0 top-2.5 h-2 rounded-full bg-hairline" />
-      {ticks.map((tick) => (
+      {ticks.map((tick, i) => (
         <div
-          key={tick.t}
+          // biome-ignore lint/suspicious/noArrayIndexKey: runs can start at the same instant
+          key={`${tick.t}:${i}`}
           className="absolute top-1.5 h-4 w-0.5"
           style={{ left: `${pct(tick.t)}%`, backgroundColor: tick.color }}
         />

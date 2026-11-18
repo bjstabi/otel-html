@@ -614,8 +614,40 @@ describe('the slider on CI dashboards', () => {
     expect(cicdRows).toHaveBeenCalledTimes(1);
     const ticks = [...document.querySelectorAll<HTMLElement>('div.absolute.w-0\\.5')];
     expect(ticks).toHaveLength(12);
+    expect(screen.getAllByText('12 runs')).toHaveLength(1);
     const colours = new Set(ticks.map((t) => t.style.backgroundColor));
     expect(colours.size).toBe(2);
+  });
+
+  test('a zoom counts the runs starting inside it, in the bar and in the slider header', async () => {
+    const rows = Array.from({ length: 12 }, (_, i) => runRow(i + 1));
+    const t = '3000000000~6000000000';
+    renderShell(`#/dashboards/ci?${dParam({ sel: { t, trace: null } })}`, {
+      ...dataSourceOf(manifestWith([CI]), VALUES),
+      cicdRows: () => Promise.resolve(rows),
+    });
+    await waitFor(() => expect(screen.getAllByText(/\b4 runs\b/)).toHaveLength(2));
+  });
+
+  test('one run reads "1 run"; two runs at the same start each get a tick', async () => {
+    const rows = [runRow(2), { ...runRow(2), traceId: 'b'.repeat(32), runId: '9' }];
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    renderShell('#/dashboards/ci', {
+      ...dataSourceOf(manifestWith([CI]), VALUES),
+      cicdRows: () => Promise.resolve(rows),
+    });
+    await screen.findByText(/all 2 runs selected/);
+    expect(document.querySelectorAll('div.absolute.w-0\\.5')).toHaveLength(2);
+    expect(err.mock.calls.flat().join(' ')).not.toMatch(/same key/);
+  });
+
+  test('a single run reads "1 run"', async () => {
+    renderShell('#/dashboards/ci', {
+      ...dataSourceOf(manifestWith([CI]), VALUES),
+      cicdRows: () => Promise.resolve([runRow(2)]),
+    });
+    await waitFor(() => expect(screen.getAllByText('1 run')).toHaveLength(1));
+    await waitFor(() => expect(screen.getByText(/all 1 run selected/)).toBeTruthy());
   });
 
   test('a page without a cicd widget has no ticks and never calls cicdRows', async () => {

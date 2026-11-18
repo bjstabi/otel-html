@@ -280,6 +280,8 @@ function NotFound(props: { id: string; manifest: DataSource['manifest'] }): JSX.
 
 type ValuesByKey = Readonly<Record<string, VariableValues>>;
 
+const runsLabel = (n: number): string => `${n} ${n === 1 ? 'run' : 'runs'}`;
+
 /**
  * The filter bar with the CI runs on its slider: a tick per run and "N runs" (those inside the zoom), from the
  * widgets' shared fetch. A page with no `cicd` widget gets none and makes no request.
@@ -295,9 +297,12 @@ function CicdFilterBar(
       : {
           ...slider,
           ticks: cicd.ticks,
-          ...(cicd.count === null ? {} : { count: `${cicd.count} runs` }),
+          ...(cicd.count === null ? {} : { count: runsLabel(cicd.count) }),
         };
-  return <FilterBar {...rest} bound={bound} slider={withRuns} />;
+  const label = cicd.count === null ? undefined : runsLabel(cicd.count);
+  return (
+    <FilterBar {...rest} bound={bound} slider={withRuns} {...(label === undefined ? {} : { count: label })} />
+  );
 }
 
 function DashboardView(props: {
