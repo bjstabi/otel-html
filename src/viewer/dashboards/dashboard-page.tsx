@@ -136,6 +136,9 @@ function staleIds(entry: DashboardEntry, state: DashboardPageState): string[] {
     ...Object.keys(state.vars)
       .filter((k) => !keys.has(k))
       .map((k) => `vars.${k}`),
+    ...(state.run === null || entry.dashboard.widgets.some((w) => w.id === state.run?.from && opensRuns(w))
+      ? []
+      : [`run.${state.run.from}`]),
   ];
 }
 
@@ -345,9 +348,10 @@ function DashboardView(props: {
   // the side panel opens on the Jobs tab and leaves the tab as it found it
   useEffect(() => {
     if (!panelRun) return;
+    const before = store.getState().tabs.trace;
     setTab('trace', 'jobs');
-    return () => setTab('trace', 'flame');
-  }, [panelRun, setTab]);
+    return () => setTab('trace', before);
+  }, [panelRun, setTab, store]);
 
   /** Applies `fn` to the state as it is now, so two quick changes never overwrite each other. */
   const change = useCallback(

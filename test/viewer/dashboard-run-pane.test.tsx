@@ -273,6 +273,18 @@ describe('the open run on a dashboard page', () => {
     expect(screen.queryByTestId('trace-panel')).toBeNull();
   });
 
+  test('leaving the side panel puts the trace tab back to the one it found', async () => {
+    renderShell(open({ run: { from: 'runs', mode: 'panel' } }).replace('?', '?tab=waterfall&'), source());
+    const panel = await screen.findByTestId('trace-panel');
+    await waitFor(() =>
+      expect(within(panel).getByRole('tab', { name: 'Jobs' }).getAttribute('aria-selected')).toBe('true'),
+    );
+    await act(async () => {
+      fireEvent.click(within(panel).getByRole('button', { name: /Close trace/ }));
+    });
+    expect(window.location.hash).toContain('tab=waterfall');
+  });
+
   test('the pane close clears the run and the trace', async () => {
     renderShell(open({}), source());
     const pane = await screen.findByTestId('run-pane');
@@ -291,6 +303,12 @@ describe('the open run on a dashboard page', () => {
       expect(within(pane).getByText('The run is outside the current selection')).toBeTruthy(),
     );
     expect(within(pane).queryByTestId('run-caret')).toBeNull();
+  });
+
+  test('a run whose widget is not a cicd widget on the page is a stale id in the notice', async () => {
+    renderShell(open({ run: { from: 'nope', mode: 'attached' } }), source());
+    const notice = await screen.findByText(/This link refers to widgets or variables/);
+    expect(notice.textContent).toContain('run.nope');
   });
 
   test('a run of a widget that is not cicd opens no pane', async () => {

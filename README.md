@@ -385,7 +385,7 @@ A `metric` widget with `runBy` is a run chart: one point per CI run instead of o
 
 | `view` | shows | follows the variables |
 | --- | --- | --- |
-| `stat` | one tile, by `stat`: `success-rate`, `median-run`, `cache` (median duration of runs that replayed no task over the median of the others; `-` when either side is empty), `minutes`, `queue-p95` or `reruns`. It shows the change against the same length of time before the range, coloured so that better is green, and a sparkline for `median-run`, `minutes` and `queue-p95` | trigger, branch |
+| `stat` | one tile, by `stat`: `success-rate`, `median-run`, `cache` (median duration of runs that replayed no task over the median of the others; `–` when either side is empty), `minutes`, `queue-p95` or `reruns`. It shows the change against the same length of time before the range, coloured so that better is green, and a sparkline for `median-run`, `minutes` and `queue-p95` | trigger, branch |
 | `runs-trend` | p50 and p95 run duration over stacked passed, failed and cancelled counts per bucket (the subtitle names the bucket); a bucket's right-click menu zooms the slider to it | trigger, branch |
 | `runs` | one bar per run: height is the duration, colour the result, hollow when no task was replayed | trigger, branch |
 | `jobs` | one row per job: a sparkline with the p25 to p75 band and the failures marked, the latest and median duration, the change of the last 10 successful runs against the 20 before (shown once each side has 3), failed `k / n`; a row click expands its trend | all |
@@ -397,6 +397,8 @@ A `metric` widget with `runBy` is a run chart: one point per CI run instead of o
 | `tests` | the test suites of the latest run that has test spans: files by test time, with test and skipped counts; a row expands to its tests | the latest run |
 
 "All" means the dashboard's variables; the views that do not honour `job` or `runner` say "ignores job" in their header instead (the echo, above). A run's duration is the latest job end minus the run's start, cancelled runs are left out of percentiles, and CI minutes are the sum of job durations.
+
+**Variable values.** On a page with a `cicd` widget, the four CI keys (`vcs.ref.head.name`, `cicd.pipeline.trigger`, `cicd.pipeline.task.name` and `cicd.worker.labels`) list their values from the `cicd` table, not from the spans: the distinct values of the runs and jobs that started in the page window, for the first `cicd` widget's `pipeline`. That list shares the widgets' own fetch, so it costs no request of its own while no branch or trigger is bound. A selected value outside the window stays listed. Any other variable key, and every page without a `cicd` widget, reads the resources as before.
 
 **Interaction.** A click on a run mark (a bar, a dot, a cell, a table row) opens the run; a right-click, a long press or a ⋯ button opens a menu: on a job, "Filter the page by job" (or "Clear the job filter") and "Open its trend"; on a run, "Open the run here", "Open on GitHub", "Filter by trigger", "Show main only" or "Show pull requests only", and "Filter by job" for up to two of its failed jobs; on a runner or a trigger, "Filter the page by runner" or "by trigger". The menus set variables only, and a click on a mark never does.
 
@@ -1072,9 +1074,10 @@ b:50000,c:16384` measures some candidates (sorts a time DESC, b scope + time DES
 Measure the CI dashboard and other pages on a local rebuild of the live site's data, at 14 ms per request
 Downloads the live report (https://bjstabi.github.io/otel-html/branch/main/, about 140 MB; `-- --from <dir>` copies a
 downloaded report instead), merges it with this build's CLI into `<out>/rebuilt` (format 7 computes the indexes; about a
-minute), prints the `widget_traces` bytes against the spans bytes, serves it with a 14 ms delay and loads six pages cold
-three times each in Chromium (about 3 minutes): root, the CI dashboard with and without `-- --job <name>` bound, the
-traces list, logs and a trace open. Prints the median and range of requests, `spans.parquet` requests and settled time.
+minute), prints the `widget_traces` and `cicd` bytes against the spans bytes (and how many partitions carry `cicd: true`), serves
+it with a 14 ms delay and loads six pages cold three times each in Chromium (about 3 minutes): root, the CI dashboard with and without `-- --job <name>` bound, the
+traces list, logs and a trace open. Prints the median and range of requests, `spans.parquet` requests and settled time, then the frames per second of three
+scripted 2 s drags of the CI dashboard's zoom slider (about 20 s more).
 `-- --out <dir>` is required (`-- --from` must not be `<dir>`, inside it or above it); `-- --job <name>` defaults to `check`; `-- --build <dist>` measures another build; `-- --no-rebuild` serves `<out>/live` as is.
 
 

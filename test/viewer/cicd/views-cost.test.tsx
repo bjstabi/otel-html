@@ -130,7 +130,7 @@ let currentRows: CicdRow[];
 let sharedSource: DataSource | null;
 let gate: Promise<void> | null;
 
-async function show(w: Widget, rows: CicdRow[], shift = 0): Promise<void> {
+async function show(w: Widget, rows: CicdRow[], shift = 0, windowEnd = 14 * DAY): Promise<void> {
   currentRows = rows;
   sharedSource ??= {
     cicdRows: () => Promise.resolve(currentRows),
@@ -160,7 +160,7 @@ async function show(w: Widget, rows: CicdRow[], shift = 0): Promise<void> {
           >
             <CicdWidget
               widget={w}
-              scope={{ window: { start: 7 * DAY, end: 14 * DAY }, vars: [] } as never}
+              scope={{ window: { start: 7 * DAY, end: windowEnd }, vars: [] } as never}
               dashboard={{} as never}
               height={400}
               dataSource={dataSource}
@@ -392,6 +392,22 @@ describe('tests', () => {
     expect(host.querySelectorAll('[data-suite]')).toHaveLength(1);
     await act(async () => q<HTMLElement>('[data-test-file] button').click());
     expect(traceCalls).toEqual([TRACE(3), TRACE(2), TRACE(1)]);
+  });
+
+  it('keeps its result and asks for no trace again when only the window moves (a drag)', async () => {
+    details.set(TRACE(3), traceWithTests());
+    await show(widget('tests'), rows());
+    expect(traceCalls).toEqual([TRACE(3)]);
+    expect(host.querySelectorAll('[data-suite]')).toHaveLength(1);
+    const seen: string[] = [];
+    const watch = new MutationObserver(() => seen.push(host.textContent ?? ''));
+    watch.observe(host, { childList: true, subtree: true, characterData: true });
+    await show(widget('tests'), rows(), 0, 14 * DAY - 1);
+    await show(widget('tests'), rows(), 0, 14 * DAY - 2);
+    watch.disconnect();
+    expect(traceCalls).toEqual([TRACE(3)]);
+    expect(seen.some((t) => t.includes('Loading…'))).toBe(false);
+    expect(host.querySelectorAll('[data-suite]')).toHaveLength(1);
   });
 
   it('makes no getTrace call until its widget is intersecting (R40)', async () => {

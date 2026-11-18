@@ -36,16 +36,20 @@ type Found =
   | { status: 'error' }
   | { status: 'ready'; run: CiRun | null; suites: TestSuite[] };
 
-/** The newest run, within the cap, that has test spans; runs are read one after the other. */
-async function latestWithTests(
-  dataSource: DataSource,
-  runs: readonly CiRun[],
-  live: () => boolean,
-): Promise<Found> {
-  const newest = runs
+/** The runs asked for test spans: the newest with tasks recorded, within the cap. */
+function candidatesOf(runs: readonly CiRun[]): CiRun[] {
+  return runs
     .filter((r) => r.ran + r.replayed > 0)
     .sort((a, b) => b.start - a.start)
     .slice(0, MAX_RUNS);
+}
+
+/** The newest run, within the cap, that has test spans; runs are read one after the other. */
+async function latestWithTests(
+  dataSource: DataSource,
+  newest: readonly CiRun[],
+  live: () => boolean,
+): Promise<Found> {
   let failed = 0;
   for (const run of newest) {
     if (!live()) break;
@@ -137,19 +141,30 @@ export const TestsView: WidgetRenderer = ({ widget, scope, dataSource, actions: 
   const [picked, setPicked] = useState<string | null>(null);
   const [openFile, setOpenFile] = useState<string | null>(null);
   const runs = data.runs;
+  // the effect is keyed on the candidates' trace ids: a drag makes a new `runs` array every frame
+  const candidateIds = candidatesOf(runs)
+    .map((r) => r.traceId)
+    .join(',');
+  const runsRef = useRef(runs);
+  runsRef.current = runs;
+  const shownRun = useRef<string | null>(null);
   // an off-screen widget reads no trace: the read starts when the widget first comes into view (R40)
   const [rootRef, seen] = useSeen();
   useEffect(() => {
     if (data.status !== 'ready' || !seen) return;
     let live = true;
-    setFound({ status: 'loading' });
-    latestWithTests(dataSource, runs, () => live).then((f) => {
-      if (live) setFound(f);
+    // the shown result stays while its run is still a candidate
+    if (shownRun.current === null || !candidateIds.split(',').includes(shownRun.current))
+      setFound({ status: 'loading' });
+    latestWithTests(dataSource, candidatesOf(runsRef.current), () => live).then((f) => {
+      if (!live) return;
+      shownRun.current = f.status === 'ready' ? (f.run?.traceId ?? null) : null;
+      setFound(f);
     });
     return () => {
       live = false;
     };
-  }, [dataSource, runs, data.status, seen]);
+  }, [dataSource, candidateIds, data.status, seen]);
 
   const suites = found.status === 'ready' ? found.suites : [];
   const suite = suites.find((s) => s.id === picked) ?? suites[0];
