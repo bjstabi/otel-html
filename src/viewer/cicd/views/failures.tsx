@@ -5,7 +5,7 @@ import { useEpoch } from '../../dashboards/widgets/layout.js';
 import { useSubtitle } from '../../dashboards/widgets/subtitle.js';
 import { absoluteTime } from '../../shell/time-range.js';
 import { failedRunCount, failures } from '../derive.js';
-import { useRunActions } from '../run-actions.js';
+import { pointFromClick, useRunActions } from '../run-actions.js';
 import { useCicd } from '../use-cicd.js';
 import { CicdBody } from './body.js';
 
@@ -51,7 +51,7 @@ export const FailuresView: WidgetRenderer = ({ widget, scope, dataSource, action
                     data-failure={run.traceId}
                     {...(mark ? { 'data-run-ring': isSource ? 'full' : 'faint' } : {})}
                     className={`flex cursor-pointer items-start gap-3 border-b border-hairline px-3 py-2 hover:bg-page ${ring}`}
-                    onClick={() => openRun(run)}
+                    onClick={(e) => openRun(run, pointFromClick(e))}
                     {...menuTriggers((at) => runMenu(run, at))}
                   >
                     <span className="w-28 shrink-0 font-mono text-xs text-muted">

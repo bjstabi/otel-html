@@ -90,6 +90,8 @@ export interface WidgetFrameProps {
   editing: boolean;
   /** The page filters as this widget sees them; hidden under 768 px. */
   echo?: FilterEcho;
+  /** Drawn over the card (the open run's connector). */
+  overlay?: ReactNode;
   children: ReactNode;
 }
 
@@ -102,7 +104,7 @@ export function WidgetFrame(props: WidgetFrameProps): JSX.Element {
     <section
       aria-labelledby={titleId}
       data-widget={widget.id}
-      className="flex h-full min-h-0 flex-col overflow-hidden rounded-card border border-hairline bg-surface"
+      className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-card border border-hairline bg-surface"
     >
       <header className="flex items-center gap-2 border-b border-hairline px-3 py-1.5">
         {props.editing && (
@@ -145,6 +147,7 @@ export function WidgetFrame(props: WidgetFrameProps): JSX.Element {
       <div className="min-h-0 flex-1 overflow-auto p-2">
         <WidgetBoundary resetKey={props.resetKey}>{props.children}</WidgetBoundary>
       </div>
+      {props.overlay}
     </section>
   );
 }

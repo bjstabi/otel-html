@@ -29,6 +29,35 @@ const NOTICE_MS = 4000;
 
 type At = { x: number; y: number };
 
+/** Where the open run's mark is, as fractions (0..1) of the source widget's box. */
+type RunPoint = { x: number; y: number };
+
+/** The point of a click: the pointer, or the centre of the focused mark when a key made the click (no pointer). */
+export function pointFromClick(e: {
+  clientX: number;
+  clientY: number;
+  detail: number;
+  currentTarget: Element;
+}): At {
+  return e.detail === 0 && e.clientX === 0 && e.clientY === 0
+    ? centreOf(e.currentTarget)
+    : { x: e.clientX, y: e.clientY };
+}
+
+/** The centre of an element's box (for Enter on a focused mark, or a menu's target). */
+export function centreOf(el: Element): At {
+  const b = el.getBoundingClientRect();
+  return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+}
+
+/** `at` (client coordinates) as fractions of the widget's box; null when there is no box to measure. */
+function fractionsIn(widgetId: string, at: At): RunPoint | null {
+  const box = document.querySelector(`[data-widget="${CSS.escape(widgetId)}"]`)?.getBoundingClientRect();
+  if (box === undefined || box.width <= 0 || box.height <= 0) return null;
+  const clamp = (v: number): number => Math.min(1, Math.max(0, v));
+  return { x: clamp((at.x - box.left) / box.width), y: clamp((at.y - box.top) / box.height) };
+}
+
 interface RunActionsContext {
   dashboard: Dashboard;
   state: DashboardPageState;
@@ -39,6 +68,9 @@ interface RunActionsContext {
 interface Shared extends RunActionsContext {
   /** The pane mode last used on this page; it outlives `d.run`, which a trace change clears. */
   mode: { current: 'attached' | 'panel' };
+  /** Where the last run was opened (page-session state like the mode; never in the URL). */
+  point: RunPoint | null;
+  setPoint(p: RunPoint | null): void;
 }
 
 const Ctx = createContext<Shared | null>(null);
@@ -47,7 +79,8 @@ const Ctx = createContext<Shared | null>(null);
 export function RunActionsProvider(props: RunActionsContext & { children: ReactNode }): JSX.Element {
   const { children, ...value } = props;
   const mode = useRef<'attached' | 'panel'>('attached');
-  return <Ctx.Provider value={{ ...value, mode }}>{children}</Ctx.Provider>;
+  const [point, setPoint] = useState<RunPoint | null>(null);
+  return <Ctx.Provider value={{ ...value, mode, point, setPoint }}>{children}</Ctx.Provider>;
 }
 
 /** The quick filter that moves away from the run's own kind: main for a pull request, else pull requests. */
@@ -82,7 +115,8 @@ async function runUrl(dataSource: DataSource, traceId: CiRun['traceId']): Promis
 }
 
 export interface RunActions {
-  openRun(run: CiRun): void;
+  /** `at` is the mark's point in client coordinates; the caret and connector use it. */
+  openRun(run: CiRun, at?: At): void;
   /** Sets the pane mode for the open run and for the runs opened after it. */
   setMode(mode: 'attached' | 'panel'): void;
   runMenu(run: CiRun, at: At): void;
@@ -96,6 +130,8 @@ export interface RunActions {
   selectedTraceId: string | null;
   /** True when this widget is the one the open run was opened from. */
   isSource: boolean;
+  /** Where the open run's mark was, relative to its source widget; null when unknown (after a reload). */
+  runPoint: RunPoint | null;
   /** The menu and the notice; render it once in the view. */
   element: JSX.Element;
 }
@@ -103,7 +139,7 @@ export interface RunActions {
 export function useRunActions(widgetId: string): RunActions {
   const ctx = useContext(Ctx);
   if (ctx === null) throw new Error('useRunActions needs a RunActionsProvider');
-  const { dashboard, state, change, dataSource, mode } = ctx;
+  const { dashboard, state, change, dataSource, mode, point, setPoint } = ctx;
   const menu = useContextMenu();
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
@@ -126,13 +162,15 @@ export function useRunActions(widgetId: string): RunActions {
   };
 
   const openRun = useCallback(
-    (run: CiRun): void =>
+    (run: CiRun, at?: At): void => {
+      setPoint(at === undefined ? null : fractionsIn(widgetId, at));
       change((s) => ({
         ...s,
         sel: { ...s.sel, trace: parseTraceId(run.traceId, 'trace') },
         run: { from: widgetId, mode: mode.current },
-      })),
-    [change, widgetId, mode],
+      }));
+    },
+    [change, widgetId, mode, setPoint],
   );
   const setMode = useCallback(
     (m: 'attached' | 'panel'): void => {
@@ -198,6 +236,7 @@ export function useRunActions(widgetId: string): RunActions {
     runnerMenu: (label, at) => menu.open(at, label, filterItem('Filter the page by runner', RUNNER, label)),
     selectedTraceId: state.sel.trace,
     isSource: state.run?.from === widgetId,
+    runPoint: point,
     element: (
       <>
         {menu.element}

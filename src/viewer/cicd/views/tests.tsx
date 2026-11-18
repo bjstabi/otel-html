@@ -4,7 +4,7 @@ import { formatDuration } from '../../../semconv/formatters.js';
 import type { WidgetRenderer } from '../../dashboards/dashboard-page.js';
 import { useSubtitle } from '../../dashboards/widgets/subtitle.js';
 import type { DataSource } from '../../data/data-source.js';
-import { useRunActions } from '../run-actions.js';
+import { pointFromClick, useRunActions } from '../run-actions.js';
 import type { CiRun } from '../runs.js';
 import { type SuiteFile, type TestSuite, testSuites } from '../test-suites.js';
 import { useCicd } from '../use-cicd.js';
@@ -173,7 +173,7 @@ export const TestsView: WidgetRenderer = ({ widget, scope, dataSource, actions: 
                   type="button"
                   data-latest-run
                   title={run.title ?? `Run ${run.runId}`}
-                  onClick={() => actions.openRun(run)}
+                  onClick={(e) => actions.openRun(run, pointFromClick(e))}
                   className="rounded-full border border-hairline px-2 py-0.5 text-xs text-muted hover:text-ink"
                 >
                   latest run

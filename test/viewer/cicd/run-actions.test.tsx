@@ -120,6 +120,31 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('openRun point', () => {
+  const widgetBox = (): HTMLElement => {
+    const el = document.createElement('section');
+    el.setAttribute('data-widget', 'w9');
+    el.getBoundingClientRect = () => ({ left: 100, top: 50, width: 400, height: 200 }) as DOMRect;
+    document.body.append(el);
+    return el;
+  };
+
+  it('stores the mark as fractions of the source widget box, without touching the URL state', () => {
+    const el = widgetBox();
+    act(() => api.openRun(run(), { x: 200, y: 100 }));
+    el.remove();
+    expect(api.runPoint).toEqual({ x: 0.25, y: 0.25 });
+    expect(JSON.stringify(state)).not.toContain('0.25');
+  });
+
+  it('has no point when none is given or the widget has no box', () => {
+    act(() => api.openRun(run()));
+    expect(api.runPoint).toBeNull();
+    act(() => api.openRun(run(), { x: 5, y: 5 }));
+    expect(api.runPoint).toBeNull();
+  });
+});
+
 describe('openRun', () => {
   it('writes d.run and d.sel.trace', () => {
     act(() => api.openRun(run()));

@@ -97,6 +97,125 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const GRID_DASH = DashboardSchema.parse({
+  id: 'ci',
+  title: 'CI',
+  variables: ['cicd.pipeline.trigger'],
+  widgets: [
+    { id: 'grid', type: 'cicd', view: 'status-grid', x: 0, y: 0, w: 12, h: 8 },
+    { id: 'jobs', type: 'cicd', view: 'jobs', x: 0, y: 8, w: 12, h: 8 },
+  ],
+});
+const gridSource = (): DataSource => ({
+  ...source(),
+  ...dataSourceOf(manifestWith([GRID_DASH]), {
+    'cicd.pipeline.trigger': { values: ['push', 'schedule'], kind: 'string', capped: false },
+  }),
+  cicdRows: (q) =>
+    Promise.resolve(q.bindings.some((b) => b.key === 'cicd.pipeline.trigger') ? [] : [blank, jobRow]),
+  getTrace: () => Promise.resolve(runDetail),
+  percentileOf: () => Promise.resolve(null),
+  metricsForResources: () => Promise.resolve([]),
+});
+const boxed = (): void => {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    left: 0,
+    top: 0,
+    width: 1000,
+    height: 200,
+    right: 1000,
+    bottom: 200,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  });
+};
+
+describe('the caret and the connector (R36)', () => {
+  test('the caret follows the clicked mark, the connector draws in the source widget only', async () => {
+    boxed();
+    renderShell('#/dashboards/ci', gridSource());
+    const dot = await screen.findByRole('button', { name: /Fix the thing/ });
+    await act(async () => {
+      fireEvent.click(dot, { clientX: 250, clientY: 50 });
+    });
+    const pane = await screen.findByTestId('run-pane');
+    await waitFor(() => expect(within(pane).getByTestId('run-caret').style.left).toBe('25%'));
+    const connector = document.querySelector('[data-widget="grid"] [data-testid="run-connector"]');
+    expect(connector).not.toBeNull();
+    expect((connector as HTMLElement).style.left).toBe('25%');
+    expect((connector as HTMLElement).style.top).toBe('25%');
+    expect(document.querySelectorAll('[data-testid="run-connector"]')).toHaveLength(1);
+  });
+
+  test('without a point (a reload) the caret is centred and no connector draws', async () => {
+    renderShell(open({ run: { from: 'grid', mode: 'attached' } }), gridSource());
+    const pane = await screen.findByTestId('run-pane');
+    expect(within(pane).getByTestId('run-caret').style.left).toBe('50%');
+    expect(document.querySelector('[data-testid="run-connector"]')).toBeNull();
+  });
+
+  test('a reload of the source view keeps the pane and its Gantt; an empty answer hides the connector', async () => {
+    boxed();
+    let hold = true;
+    const ds: DataSource = {
+      ...gridSource(),
+      cicdRows: (q) => {
+        const bound = q.bindings.some((b) => b.key === 'cicd.pipeline.trigger');
+        if (!bound) return Promise.resolve([blank, jobRow]);
+        return hold ? new Promise(() => undefined) : Promise.resolve([]);
+      },
+    };
+    renderShell('#/dashboards/ci', ds);
+    const dot = await screen.findByRole('button', { name: /Fix the thing/ });
+    await act(async () => {
+      fireEvent.click(dot, { clientX: 250, clientY: 50 });
+    });
+    await screen.findByTestId('run-gantt');
+    const d = currentD();
+    await act(async () => {
+      window.location.hash = `#/dashboards/ci?${serializeUrlState({ d: { ...(d as DashboardPageState), vars: { 'cicd.pipeline.trigger': 'schedule' } } })}`;
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+    // the read is still pending: the last run stays
+    expect(screen.getByTestId('run-gantt')).toBeTruthy();
+    expect(screen.queryByText('Loading the run…')).toBeNull();
+    hold = false;
+  });
+
+  test('no connector once the run is outside the selection', async () => {
+    boxed();
+    renderShell('#/dashboards/ci', gridSource());
+    const dot = await screen.findByRole('button', { name: /Fix the thing/ });
+    await act(async () => {
+      fireEvent.click(dot, { clientX: 250, clientY: 50 });
+    });
+    await waitFor(() => expect(document.querySelector('[data-testid="run-connector"]')).not.toBeNull());
+    const d = currentD();
+    await act(async () => {
+      window.location.hash = `#/dashboards/ci?${serializeUrlState({ d: { ...(d as DashboardPageState), vars: { 'cicd.pipeline.trigger': 'schedule' } } })}`;
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+    await waitFor(() => expect(screen.getByText('The run is outside the current selection')).toBeTruthy());
+    expect(document.querySelector('[data-testid="run-connector"]')).toBeNull();
+  });
+
+  test('no connector in side-panel mode or when the run is outside the selection', async () => {
+    boxed();
+    renderShell('#/dashboards/ci', gridSource());
+    const dot = await screen.findByRole('button', { name: /Fix the thing/ });
+    await act(async () => {
+      fireEvent.click(dot, { clientX: 250, clientY: 50 });
+    });
+    const pane = await screen.findByTestId('run-pane');
+    await waitFor(() => expect(document.querySelector('[data-testid="run-connector"]')).not.toBeNull());
+    await act(async () => {
+      fireEvent.click(within(pane).getByRole('button', { name: /opens: attached/ }));
+    });
+    expect(document.querySelector('[data-testid="run-connector"]')).toBeNull();
+  });
+});
+
 describe('the open run on a dashboard page', () => {
   test('attached, the pane shows the run with a caret and the mode pill', async () => {
     renderShell(open({}), source());

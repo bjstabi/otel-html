@@ -168,7 +168,7 @@ export const JobsView: WidgetRenderer = ({
       click: (p: unknown) => {
         const i = indexOf(p);
         const x = i === null ? undefined : trend?.points[i];
-        if (x !== undefined) openRun(x.run);
+        if (x !== undefined) openRun(x.run, pointOf(p));
       },
       contextmenu: (p: unknown) => {
         const i = indexOf(p);

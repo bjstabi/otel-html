@@ -103,7 +103,7 @@ interface GridInsert {
 
 /**
  * Where the pane goes: at the largest bottom among the widgets whose vertical span overlaps the source's. The widgets
- * at or below that line move down by `rows`. Null when `after` is not a widget.
+ * at or below that line move down by `rows`, and one that crosses the line moves to just under the pane. Null when `after` is not a widget.
  */
 function placeInsert(
   widgets: readonly Widget[],
@@ -114,7 +114,10 @@ function placeInsert(
   const src = layout[at];
   if (src === undefined) return null;
   const y = Math.max(...layout.filter((l) => l.y < src.y + src.h && src.y < l.y + l.h).map((l) => l.y + l.h));
-  return { y, layout: layout.map((l) => (l.y >= y ? { ...l, y: l.y + insert.rows } : l)) };
+  // a widget that starts above the line and ends below it (beside the source, not overlapping its span) goes under the pane
+  const moved = (l: WidgetLayout): WidgetLayout =>
+    l.y >= y ? { ...l, y: l.y + insert.rows } : l.y + l.h > y ? { ...l, y: y + insert.rows } : l;
+  return { y, layout: layout.map(moved) };
 }
 
 export interface DashboardGridProps {

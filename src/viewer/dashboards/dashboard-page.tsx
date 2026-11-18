@@ -11,7 +11,7 @@ import {
 } from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import { RunActionsProvider } from '../cicd/run-actions.js';
-import { OpenRunBody, RunPane } from '../cicd/run-pane.js';
+import { OpenRunBody, RunConnector, RunPane } from '../cicd/run-pane.js';
 import { CicdProvider } from '../cicd/use-cicd.js';
 import { CicdWidget } from '../cicd/widget.js';
 import type { DataSource } from '../data/data-source.js';
@@ -437,6 +437,9 @@ function DashboardView(props: {
             : { label: open.label, onOpen: () => goTo(open.page, `/${open.page}`, open.patch) }
         }
         editing={editing}
+        {...(attachedRun !== null && attachedRun.widget.id === w.id
+          ? { overlay: <RunConnector {...attachedRun} /> }
+          : {})}
         echo={echoOf(w, d.variables, bound?.bindings ?? [])}
       >
         <Body
@@ -469,8 +472,11 @@ function DashboardView(props: {
     panelRun && runWidget !== undefined && runScope !== undefined && openTrace !== null
       ? { widget: runWidget, scope: runScope, traceId: openTrace }
       : null;
-  // (the caret points at the source widget's centre; the views do not report their mark's x)
-  const caretAt = stacked || sourceAt === undefined ? 0.5 : (sourceAt.x + sourceAt.w / 2) / GRID_COLUMNS;
+  // the source's span across the pane (stacked, the pane is as wide as the source's row)
+  const sourceSpan =
+    stacked || sourceAt === undefined
+      ? { left: 0, width: 1 }
+      : { left: sourceAt.x / GRID_COLUMNS, width: sourceAt.w / GRID_COLUMNS };
 
   const actions = (
     <>
@@ -574,7 +580,7 @@ function DashboardView(props: {
                             key={attachedRun.traceId}
                             {...attachedRun}
                             dataSource={dataSource}
-                            caretAt={caretAt}
+                            sourceSpan={sourceSpan}
                             heightPx={heightPx}
                             onRows={setPaneRows}
                             onClose={closeRun}

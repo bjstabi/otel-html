@@ -168,6 +168,36 @@ describe('RunGantt', () => {
   });
 });
 
+describe('RunGantt retries and edges', () => {
+  it('retries the trace read after a failure', async () => {
+    const getTrace = vi.fn().mockRejectedValueOnce(new Error('nope')).mockResolvedValue(detail);
+    mount(getTrace);
+    const check = () =>
+      within(document.querySelector('[data-job-row="check"]') as HTMLElement).getByRole('button', {
+        name: /check/,
+      });
+    fireEvent.click(check());
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    fireEvent.click(check());
+    fireEvent.click(check());
+    await waitFor(() => expect(screen.getByText('Run mise')).toBeTruthy());
+    expect(getTrace).toHaveBeenCalledTimes(2);
+  });
+
+  it('draws no edge from or to a job that did not run', () => {
+    const skipped: CiRun = {
+      ...run,
+      jobs: run.jobs.map((j) => (j.name === 'changes' ? { ...j, result: 'skipped' } : j)),
+    };
+    const ds = {
+      getTrace: vi.fn(),
+      manifest: { epochUnixNano: '1700000000000000000' },
+    } as unknown as DataSource;
+    render(<RunGantt run={skipped} dataSource={ds} />);
+    expect(document.querySelector('[data-edge]')).toBeNull();
+  });
+});
+
 describe('runPaneRows', () => {
   it('is ceil((content + 10) / 30)', () => {
     expect(runPaneRows(290)).toBe(10);

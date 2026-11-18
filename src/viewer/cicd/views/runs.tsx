@@ -62,7 +62,7 @@ export const RunsView: WidgetRenderer = ({ widget, scope, height }): JSX.Element
       click: (p: unknown) => {
         const i = indexOf(p);
         const r = i === null ? undefined : runs[i];
-        if (r !== undefined) openRun(r);
+        if (r !== undefined) openRun(r, pointOf(p));
       },
       contextmenu: (p: unknown) => {
         const i = indexOf(p);

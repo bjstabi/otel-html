@@ -4,7 +4,7 @@ import { menuTriggers } from '../../components/context-menu.js';
 import type { WidgetRenderer } from '../../dashboards/dashboard-page.js';
 import { useSubtitle } from '../../dashboards/widgets/subtitle.js';
 import { statusGrid } from '../derive.js';
-import { RunRing, useRunActions } from '../run-actions.js';
+import { centreOf, pointFromClick, RunRing, useRunActions } from '../run-actions.js';
 import { useCicd } from '../use-cicd.js';
 import { CicdBody } from './body.js';
 
@@ -67,9 +67,9 @@ export const StatusGridView: WidgetRenderer = ({ widget, scope, actions: page })
                     cy={DOTS_H / 2}
                     r={3.5}
                     className={`cursor-pointer ${DOT[r.result]}`}
-                    onClick={() => openRun(r)}
+                    onClick={(e) => openRun(r, pointFromClick(e))}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') openRun(r);
+                      if (e.key === 'Enter') openRun(r, centreOf(e.currentTarget));
                     }}
                     {...menuTriggers((at) => runMenu(r, at))}
                   >
@@ -117,9 +117,9 @@ export const StatusGridView: WidgetRenderer = ({ widget, scope, actions: page })
                             rx={1.5}
                             tabIndex={0}
                             className={`cursor-pointer ${FILL[cell]}`}
-                            onClick={() => openRun(run)}
+                            onClick={(e) => openRun(run, pointFromClick(e))}
                             onKeyDown={(e) => {
-                              if (e.key === 'Enter') openRun(run);
+                              if (e.key === 'Enter') openRun(run, centreOf(e.currentTarget));
                             }}
                             {...menuTriggers((at) => runMenu(run, at))}
                           >

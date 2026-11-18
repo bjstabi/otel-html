@@ -19,9 +19,13 @@ type OpenRun =
 /** The open run among the runs of the widget it was opened from (under that widget's current selection). */
 function useOpenRun(widget: Widget, scope: Pick<WidgetScope, 'window' | 'vars'>, traceId: string): OpenRun {
   const data = useCicd(widget, scope);
-  if (data.status === 'loading') return { status: 'loading' };
+  // while the source view reloads, the last run stays (the Gantt keeps its expansions)
+  const last = useRef<CiRun | null>(null);
+  if (data.status === 'loading')
+    return last.current?.traceId === traceId ? { status: 'ready', run: last.current } : { status: 'loading' };
   if (data.status === 'error') return { status: 'error', message: data.error?.message ?? 'unknown error' };
   const run = data.runs.find((r) => r.traceId === traceId);
+  last.current = run ?? null;
   return run === undefined ? { status: 'outside' } : { status: 'ready', run };
 }
 
@@ -75,8 +79,8 @@ export interface RunPaneProps {
   scope: Pick<WidgetScope, 'window' | 'vars'>;
   traceId: string;
   dataSource: DataSource;
-  /** The caret's place on the pane's top edge, 0..1 of its width. */
-  caretAt: number;
+  /** The source widget's left edge and width as fractions of the pane's width; the caret sits at the mark inside it. */
+  sourceSpan: { left: number; width: number };
   /** Pane height in px (the grid's). */
   heightPx: number;
   /** Reports the rows the content needs; the page lets the grid grow or shrink to it. */
@@ -90,8 +94,9 @@ export interface RunPaneProps {
  * after render and its height reported in grid rows.
  */
 export function RunPane(props: RunPaneProps): JSX.Element {
-  const { widget, scope, traceId, dataSource, caretAt, heightPx, onRows, onClose } = props;
+  const { widget, scope, traceId, dataSource, sourceSpan, heightPx, onRows, onClose } = props;
   const actions = useRunActions(widget.id);
+  const caretAt = actions.runPoint === null ? 0.5 : sourceSpan.left + actions.runPoint.x * sourceSpan.width;
   const open = useOpenRun(widget, scope, traceId);
   const content = useRef<HTMLDivElement>(null);
   const report = useRef(onRows);
@@ -146,5 +151,27 @@ export function RunPane(props: RunPaneProps): JSX.Element {
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * The dotted connector from the open run's mark down to the bottom edge of its source widget: drawn in the widget's
+ * frame, only while the run is attached and still in the view. Nothing draws when the mark's point is unknown.
+ */
+export function RunConnector(props: {
+  widget: Widget;
+  scope: Pick<WidgetScope, 'window' | 'vars'>;
+  traceId: string;
+}): JSX.Element | null {
+  const open = useOpenRun(props.widget, props.scope, props.traceId);
+  const { runPoint } = useRunActions(props.widget.id);
+  if (open.status !== 'ready' || runPoint === null) return null;
+  return (
+    <span
+      data-testid="run-connector"
+      aria-hidden
+      className="pointer-events-none absolute bottom-0 border-l-[1.5px] border-dotted border-accent"
+      style={{ left: `${runPoint.x * 100}%`, top: `${runPoint.y * 100}%` }}
+    />
   );
 }

@@ -140,7 +140,10 @@ export function RunGantt(props: { run: CiRun; dataSource: DataSource }): JSX.Ele
     setLoad({ status: 'loading' });
     dataSource.getTrace(parseTraceId(run.traceId, 'trace')).then(
       (detail) => setLoad({ status: 'ready', detail }),
-      (e: unknown) => setLoad({ status: 'error', message: e instanceof Error ? e.message : String(e) }),
+      (e: unknown) => {
+        requested.current = false; // reopening a job retries
+        setLoad({ status: 'error', message: e instanceof Error ? e.message : String(e) });
+      },
     );
   };
 
@@ -248,7 +251,14 @@ export function RunGantt(props: { run: CiRun; dataSource: DataSource }): JSX.Ele
     to.needs.length === 0
       ? []
       : run.jobs
-          .filter((from) => from !== to && from.id !== null && to.needs.includes(from.id))
+          .filter(
+            (from) =>
+              from !== to &&
+              from.id !== null &&
+              to.needs.includes(from.id) &&
+              jobStatus(from) !== null &&
+              jobStatus(to) !== null,
+          )
           .map((from) => ({ from, to })),
   );
   const endAt = last === -1 ? null : (run.jobs[last]?.end ?? null);

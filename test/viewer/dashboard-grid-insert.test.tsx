@@ -89,6 +89,30 @@ test('a widget beside the source that reaches lower pushes the pane lower', () =
   expect(grid.layout.find((l) => l.i === 'next')?.y).toBe(17);
 });
 
+test('a widget that crosses the pane line without touching the source span moves below the pane', () => {
+  const ws = DashboardSchema.parse({
+    id: 'd',
+    title: 'D',
+    widgets: [
+      { id: 'src', type: 'timeline', x: 0, y: 2, w: 6, h: 2 },
+      { id: 'tall', type: 'logs', x: 6, y: 3, w: 6, h: 5 },
+      { id: 'cross', type: 'logs', x: 0, y: 5, w: 6, h: 7 },
+    ],
+  }).widgets;
+  render(
+    <DashboardGrid
+      widgets={ws}
+      layout={ws.map(({ x, y, w, h }) => ({ x, y, w, h }))}
+      editing={false}
+      onLayout={() => undefined}
+      render={(w) => <p>{w.id}</p>}
+      insert={{ after: 'src', rows: 5, render: () => <p>pane</p> }}
+    />,
+  );
+  expect(grid.layout.find((l) => l.i === RUN_PANE_ID)?.y).toBe(8);
+  expect(grid.layout.find((l) => l.i === 'cross')?.y).toBe(13);
+});
+
 test('edit mode ignores the insert', () => {
   mount(true);
   expect(screen.queryByTestId('pane')).toBeNull();
