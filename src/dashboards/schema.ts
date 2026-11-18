@@ -103,11 +103,18 @@ export interface Variable {
   default: string | null;
 }
 
+/** A pill on the filter bar: pressing it sets these variables (a null clears one). */
+export interface QuickFilter {
+  label: string;
+  set: Record<string, string | null>;
+}
+
 export interface Dashboard {
   id: string;
   title: string;
   description: string;
   variables: Variable[];
+  quick: QuickFilter[];
   widgets: Widget[];
 }
 
@@ -187,6 +194,7 @@ export interface DashboardInput {
   title: string;
   description?: string | undefined;
   variables?: VariableInput[] | undefined;
+  quick?: { label: string; set: Record<string, string | null> }[] | undefined;
   widgets: WidgetInput[];
 }
 
@@ -206,6 +214,7 @@ export interface ViewInput {
 export const RESERVED_DASHBOARD_IDS: readonly ['fusion'] = ['fusion'];
 
 const MAX_VARIABLES = 8;
+const MAX_QUICK = 6;
 const MAX_WIDGETS = 50;
 /** The grid's width in columns, and the size bounds a widget layout must keep (the viewer's edit mode shares them). */
 export const GRID_COLUMNS = 12;
@@ -455,6 +464,17 @@ const buildDashboardSchema = (compiled: boolean): z.ZodType<Dashboard, Dashboard
       title: z.string().min(1),
       description: z.string().default(''),
       variables: z.array(VariableSchema).max(MAX_VARIABLES, `at most ${MAX_VARIABLES} variables`).default([]),
+      quick: z
+        .array(
+          z.strictObject({
+            label: z.string().min(1),
+            set: z
+              .record(z.string(), z.string().nullable())
+              .refine((r) => Object.keys(r).length > 0, 'sets at least one variable'),
+          }),
+        )
+        .max(MAX_QUICK, `at most ${MAX_QUICK} quick filters`)
+        .default([]),
       widgets: z.array(buildWidgetSchema(compiled)).min(1).max(MAX_WIDGETS, `at most ${MAX_WIDGETS} widgets`),
     })
     .transform((d, ctx): Dashboard => {
@@ -467,6 +487,26 @@ const buildDashboardSchema = (compiled: boolean): z.ZodType<Dashboard, Dashboard
             path: ['variables', i, 'key'],
             message: 'unique variable keys',
           });
+        }
+      });
+      d.quick.forEach((q, i) => {
+        if (d.quick.findIndex((o) => o.label === q.label) !== i) {
+          ctx.issues.push({
+            code: 'custom',
+            input: q,
+            path: ['quick', i, 'label'],
+            message: 'unique labels',
+          });
+        }
+        for (const key of Object.keys(q.set)) {
+          if (!d.variables.some((v) => v.key === key)) {
+            ctx.issues.push({
+              code: 'custom',
+              input: q,
+              path: ['quick', i, 'set', key],
+              message: `"${key}" is not one of the dashboard's variables`,
+            });
+          }
         }
       });
       widgets.forEach((w, j) => {

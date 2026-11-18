@@ -101,6 +101,7 @@ export function dashboardToYaml(
     title: fusion ? 'Fusion (copy)' : d.title,
     ...(d.description === '' ? {} : { description: d.description }),
     ...(d.variables.length === 0 ? {} : { variables: d.variables.map(variableInput) }),
+    ...(d.quick.length === 0 ? {} : { quick: d.quick }),
     widgets: d.widgets.map((w, i) => {
       const widget = withControls(w, controls);
       return widgetInput(widget, layout[i] ?? widget, i);

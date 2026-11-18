@@ -354,6 +354,16 @@ export interface HistoryPort {
   subscribe(cb: () => void): () => void;
 }
 
+/** The shortest gap between two URL writes while the state changes continuously (a slider drag): about four a second. */
+const URL_WRITE_MS = 250;
+const LIVE = new WeakSet<object>();
+
+/** Marks a dashboard state as one step of a continuous change: its URL write may be delayed (and merged with the next). */
+export function markLive(d: DashboardPageState): DashboardPageState {
+  LIVE.add(d);
+  return d;
+}
+
 /**
  * Two-way binding. Trace/span/log opens push history entries; every other change replaces. Returns an unbind function.
  * Invalid URL params are passed to `onErrors` and rewritten out of the URL.
@@ -364,12 +374,32 @@ export function bindUrl(
   onErrors: (errors: string[]) => void,
   epoch?: bigint,
   range: () => TimeWindow | null = () => null,
+  throttleMs = URL_WRITE_MS,
 ): () => void {
   const current = (): string => serializeUrlState(selectionToUrlState(store.getState()));
   let applying = false;
   let last = '';
+  // A live change (a slider drag, see `markLive`) is written at once when none was written in the last `throttleMs`,
+  // else once more at the end of that interval with the latest value: Firefox and WebKit rate-limit replaceState and
+  // throw. The store is never held back, and any other change writes at once, with whatever was waiting.
+  let pending: string | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let lastWrite = Number.NEGATIVE_INFINITY;
+  const drop = (): void => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    pending = null;
+  };
+  const flush = (): void => {
+    const search = pending;
+    drop();
+    if (search === null) return;
+    lastWrite = Date.now();
+    history.write(search, 'replace');
+  };
 
   const applyUrl = (): void => {
+    drop(); // the URL changed under us (Back, a link, a route change): it wins over a write not yet made
     const { anchor } = store.getState();
     const { state, errors } = parseUrlState(history.read());
     applying = true;
@@ -389,14 +419,30 @@ export function bindUrl(
   const unsubscribeStore = store.subscribe((next, prev) => {
     if (applying) return;
     const search = serializeUrlState(selectionToUrlState(next));
-    if (search === last) return;
+    const live = next.dashboard !== prev.dashboard && next.dashboard !== null && LIVE.has(next.dashboard);
+    if (search === last) {
+      if (!live) flush(); // a commit of what was already written live
+      return;
+    }
     last = search;
     const opened =
       next.traceId !== prev.traceId || next.spanId !== prev.spanId || next.logRef !== prev.logRef;
-    history.write(search, opened ? 'push' : 'replace');
+    if (opened) {
+      drop();
+      lastWrite = Date.now();
+      history.write(search, 'push');
+      return;
+    }
+    pending = search;
+    const wait = lastWrite + throttleMs - Date.now();
+    if (!live || wait <= 0) flush();
+    else if (timer === undefined) timer = setTimeout(flush, wait);
   });
   const unsubscribeHistory = history.subscribe(applyUrl);
+  window.addEventListener('pagehide', flush);
   return () => {
+    flush();
+    window.removeEventListener('pagehide', flush);
     unsubscribeStore();
     unsubscribeHistory();
   };

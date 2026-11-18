@@ -267,10 +267,52 @@ describe('time range', () => {
     expect(screen.getByLabelText('Absolute range').textContent).toContain('2023-11-15T07:13:20.000Z');
     await user.click(screen.getByRole('button', { name: 'Zoom out' }));
     expect(window.location.hash).toBe(`#/traces?t=${8 * HOUR}~${10 * HOUR}`);
-    await user.click(screen.getByRole('button', { name: '15m' }));
-    expect(window.location.hash).toBe(`#/traces?t=${10 * HOUR - 900_000_000_000}~${10 * HOUR}`);
     await user.click(entire);
     expect(window.location.hash).toBe('#/traces');
+  });
+});
+
+describe('custom range', () => {
+  test('Apply sets t to the window, and is disabled unless from < to', async () => {
+    const user = userEvent.setup();
+    renderShell('#/traces');
+    await user.click(screen.getByRole('button', { name: 'custom…' }));
+    const from = screen.getByLabelText('Custom range from (UTC)');
+    const to = screen.getByLabelText('Custom range to (UTC)');
+    const apply = screen.getByRole('button', { name: 'Apply' });
+    const iso = (rel: number): string =>
+      new Date(Number((BigInt(rel) + BigInt(baseManifest.epochUnixNano)) / 1_000_000n))
+        .toISOString()
+        .slice(0, 19);
+    await user.clear(from);
+    await user.type(from, iso(2 * HOUR));
+    await user.clear(to);
+    await user.type(to, iso(2 * HOUR));
+    expect((apply as HTMLButtonElement).disabled).toBe(true);
+    await user.clear(to);
+    await user.type(to, iso(3 * HOUR));
+    expect((apply as HTMLButtonElement).disabled).toBe(false);
+    await user.click(apply);
+    expect(window.location.hash).toBe(`#/traces?t=${2 * HOUR}~${3 * HOUR}`);
+    expect(screen.queryByLabelText('Custom range from (UTC)')).toBeNull();
+  });
+
+  test('a from before the run start is clamped to the start, and Apply without edits keeps the window', async () => {
+    const user = userEvent.setup();
+    renderShell(`#/traces?t=${HOUR + 500_000_000}~${2 * HOUR + 700_000_000}`);
+    await user.click(screen.getByRole('button', { name: 'custom…' }));
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(window.location.hash).toBe(`#/traces?t=${HOUR + 500_000_000}~${2 * HOUR + 700_000_000}`);
+    await user.click(screen.getByRole('button', { name: 'custom…' }));
+    const iso = (rel: number): string =>
+      new Date(Number((BigInt(rel) + BigInt(baseManifest.epochUnixNano)) / 1_000_000n))
+        .toISOString()
+        .slice(0, 19);
+    const from = screen.getByLabelText('Custom range from (UTC)');
+    await user.clear(from);
+    await user.type(from, iso(-5 * HOUR));
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(window.location.hash).toBe(`#/traces?t=0~${2 * HOUR + 700_000_000}`);
   });
 });
 
@@ -286,34 +328,40 @@ describe('presets and the default window', () => {
     });
   };
 
-  test('6h, 24h and 7d appear only when the range is longer than each', () => {
+  test('1h to 1y appear only when the range is longer than each', () => {
     const labels = (): string[] =>
       within(screen.getByRole('group', { name: 'Time range' }))
         .getAllByRole('button')
         .map((b) => b.textContent ?? '')
-        .filter((t) => /^(Entire run|\d+[mhd])$/.test(t));
+        .filter((t) => /^(Entire run|\d+[mhdy])$/.test(t));
     renderShell('#/traces');
-    expect(labels()).toEqual(['Entire run', '15m', '1h', '6h']);
+    expect(labels()).toEqual(['Entire run', '1h']);
     cleanup();
     renderShell('#/traces', withDefault(undefined, 30));
-    expect(labels()).toEqual(['Entire run', '15m', '1h', '6h', '24h']);
+    expect(labels()).toEqual(['Entire run', '1h', '24h']);
     cleanup();
     renderShell('#/traces', withDefault(undefined, 8 * 24));
-    expect(labels()).toEqual(['Entire run', '15m', '1h', '6h', '24h', '7d']);
+    expect(labels()).toEqual(['Entire run', '1h', '24h', '7d']);
+    cleanup();
+    renderShell('#/traces', withDefault(undefined, 400 * 24));
+    expect(labels()).toEqual(['Entire run', '1h', '24h', '7d', '30d', '90d', '1y']);
+    expect(screen.getByRole('button', { name: 'custom…' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '15m' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '6h' })).toBeNull();
   });
 
   test('with a default the first load has no t; Entire run writes t=all and reopens as the entire run', async () => {
     const user = userEvent.setup();
-    const ds = withDefault('6h');
+    const ds = withDefault('1h');
     renderShell('#/traces', ds);
     expect(window.location.hash).toBe('#/traces');
-    expect(screen.getByRole('button', { name: '6h' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: '1h' }).getAttribute('aria-pressed')).toBe('true');
     await user.click(screen.getByRole('button', { name: 'Entire run' }));
     expect(window.location.hash).toBe('#/traces?t=all');
     cleanup();
     renderShell('#/traces?t=all', ds);
     expect(screen.getByRole('button', { name: 'Entire run' }).getAttribute('aria-pressed')).toBe('true');
-    await user.click(screen.getByRole('button', { name: '6h' }));
+    await user.click(screen.getByRole('button', { name: '1h' }));
     expect(window.location.hash).toBe('#/traces');
   });
 
@@ -340,9 +388,9 @@ describe('presets and the default window', () => {
           <Shell dataSource={ds} history={history} />
         </ThemeProvider>
       );
-      const view = render(ui(withDefault('6h', 10)));
+      const view = render(ui(withDefault('1h', 10)));
       const before = screen.getByLabelText('Absolute range').textContent ?? '';
-      view.rerender(ui(withDefault('6h', 12)));
+      view.rerender(ui(withDefault('1h', 12)));
       const after = screen.getByLabelText('Absolute range').textContent ?? '';
       const url = window.location.hash;
       cleanup();
@@ -366,10 +414,10 @@ describe('presets and the default window', () => {
       within(screen.getByRole('region', { name: 'Logs' }))
         .getByRole('link', { name: 'Explorer' })
         .getAttribute('href');
-    renderShell('#/traces?t=all', withDefault('6h'));
+    renderShell('#/traces?t=all', withDefault('1h'));
     expect(logsHref()).toContain('t=all');
     cleanup();
-    renderShell('#/traces', withDefault('6h'));
+    renderShell('#/traces', withDefault('1h'));
     expect(logsHref()).not.toContain('t=');
   });
 });
@@ -698,8 +746,8 @@ describe('navigation carries the selection', () => {
     );
     expect(window.location.hash).toBe(`#/logs?${t}`);
     expect(range()).toBe(before);
-    await user.click(screen.getByRole('button', { name: '15m' }));
-    const narrowed = `t=${10 * HOUR - 900_000_000_000}~${10 * HOUR}`;
+    await user.click(screen.getByRole('button', { name: '1h' }));
+    const narrowed = `t=${9 * HOUR}~${10 * HOUR}`;
     expect(window.location.hash).toBe(`#/logs?${narrowed}`);
     await user.keyboard('gt');
     expect(window.location.hash).toBe(`#/traces?${narrowed}`);

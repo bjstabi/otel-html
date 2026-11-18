@@ -27,7 +27,8 @@ export interface Palette {
 
 const DEFAULT_PALETTE: Palette = { light: CATEGORICAL_LIGHT, dark: CATEGORICAL_DARK };
 
-export const STATUS = { critical: '#d03b3b', warning: '#fab219' } as const;
+/** Status colours (mirrored by `--oh-good`, `--oh-critical` and `--oh-warning` in tokens.css; `good` is the same in both modes). */
+export const STATUS = { critical: '#d03b3b', warning: '#fab219', good: '#0ca30c' } as const;
 
 /**
  * Log severity colours per mode (mirrored by the `--oh-sev-*` tokens in tokens.css; a test keeps them in sync).

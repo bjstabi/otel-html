@@ -264,3 +264,178 @@ test('below 768 px the widgets stack in reading order and the layout cannot be e
   await expect(page.getByRole('button', { name: 'Edit layout' })).toBeDisabled();
   expect(problems).toEqual([]);
 });
+
+/** The page filter bar of a dashboard. */
+const filterBar = (page: Page): Locator => page.getByTestId('filter-bar');
+
+/** The run-charts report spans about 31 h, so the shorter presets are offered there (the dashboards fixture is seconds long). */
+const RUNS_DASHBOARD = (reportUrl: (name: 'run-charts') => string): string =>
+  `${reportUrl('run-charts')}/index.html#/dashboards/runs`;
+
+test('the range menu sets the page window and the label names it', async ({ page, reportUrl }) => {
+  const problems = watchProblems(page);
+  await page.goto(RUNS_DASHBOARD(reportUrl));
+  const bar = filterBar(page);
+  const menu = bar.getByRole('button', { name: 'Time range' });
+  await expect(menu).toContainText('entire run');
+  await menu.click();
+  // The longest preset a 31 h run offers; 30d and above appear only on a longer run.
+  await expect(page.getByRole('menuitem', { name: '30d', exact: true })).toHaveCount(0);
+  await page.getByRole('menuitem', { name: '24h', exact: true }).click();
+  await expect(page).toHaveURL(/[?&]t=/);
+  await expect(menu).toContainText('last 24 hours');
+  expect(problems).toEqual([]);
+});
+
+test('dragging the slider zooms: the label reads last…, of…, and "↺ full range" clears it', async ({
+  page,
+  reportUrl,
+}) => {
+  const problems = watchProblems(page);
+  await page.goto(RUNS_DASHBOARD(reportUrl));
+  const bar = filterBar(page);
+  const menu = bar.getByRole('button', { name: 'Time range' });
+  await expect(bar.getByRole('button', { name: '↺ full range' })).toHaveCount(0);
+  const track = bar.getByTestId('range-slider');
+  await expect(track).toBeVisible();
+  const box = await track.boundingBox();
+  if (box === null) throw new Error('the slider is laid out');
+  const handle = await bar.getByRole('slider', { name: 'Zoom start' }).boundingBox();
+  if (handle === null) throw new Error('the start handle is laid out');
+  const y = handle.y + handle.height / 2;
+  await page.mouse.move(handle.x + handle.width / 2, y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.5, y, { steps: 8 });
+  await page.mouse.up();
+  await expect(menu).toContainText(/last .* of /);
+  const full = bar.getByRole('button', { name: '↺ full range' });
+  await expect(full).toBeVisible();
+  await full.click();
+  await expect(full).toHaveCount(0);
+  await expect(menu).not.toContainText(' of ');
+  expect(problems).toEqual([]);
+});
+
+test('at 390 px a slider handle is at least 24 px wide', async ({ page, reportUrl }) => {
+  const problems = watchProblems(page);
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto(RUNS_DASHBOARD(reportUrl));
+  const handle = await filterBar(page).getByRole('slider', { name: 'Zoom start' }).boundingBox();
+  if (handle === null) throw new Error('the start handle is laid out');
+  expect(handle.width).toBeGreaterThanOrEqual(24);
+  expect(handle.height).toBeGreaterThanOrEqual(24);
+  expect(problems).toEqual([]);
+});
+
+test('Fusion: three long filter chips never push the buttons out of a widget header', async ({
+  page,
+  reportUrl,
+}) => {
+  const problems = watchProblems(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const vars = {
+    'service.name': 'a-service-with-a-very-long-name',
+    'deployment.environment.name': 'an-environment-with-a-very-long-name',
+    'host.name': 'a-host-with-a-very-long-name',
+  };
+  await page.goto(
+    `${reportUrl('dashboards')}/index.html#/dashboards/fusion?d=${encodeURIComponent(JSON.stringify({ vars }))}`,
+  );
+  const logs = widget(page, 'logs');
+  await expect(logs.getByText('host.name = a-host-with-a-very-long-name')).toBeAttached();
+  const frame = await logs.boundingBox();
+  if (frame === null) throw new Error('the Logs widget is laid out');
+  for (const name of [/follows selection/, /Open in/]) {
+    const button = logs.locator('header').getByRole('button', { name });
+    await expect(button).toBeVisible();
+    const box = await button.boundingBox();
+    if (box === null) throw new Error(`${name} is laid out`);
+    expect(box.x).toBeGreaterThanOrEqual(frame.x);
+    expect(box.x + box.width).toBeLessThanOrEqual(frame.x + frame.width);
+    const clipped = await button.evaluate((el) => el.scrollWidth > el.clientWidth);
+    expect(clipped).toBe(false);
+  }
+  expect(problems).toEqual([]);
+});
+
+test('Checkout: a quick filter sets a chip and its × clears it', async ({ page, reportUrl }) => {
+  const problems = watchProblems(page);
+  await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/checkout`);
+  const bar = filterBar(page);
+  const production = bar.getByRole('button', { name: 'Production', exact: true });
+  await expect(production).toHaveAttribute('aria-pressed', 'false');
+  await production.click();
+  const env = bar.getByRole('combobox', { name: 'environment' });
+  await expect(env).toContainText('environment = production');
+  await expect(production).toHaveAttribute('aria-pressed', 'true');
+  await bar.getByRole('button', { name: 'Clear environment' }).click();
+  await expect(env).toContainText('+ environment');
+  await expect(production).toHaveAttribute('aria-pressed', 'false');
+  expect(problems).toEqual([]);
+});
+
+test('Checkout: the pinned filter bar stays in view while scrolling, the unpinned one scrolls away', async ({
+  page,
+  reportUrl,
+}) => {
+  const problems = watchProblems(page);
+  await page.setViewportSize({ width: 1280, height: 500 });
+  await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/checkout`);
+  const bar = filterBar(page);
+  const last = widget(page, 'w8');
+  await expect(bar).toBeInViewport();
+  await last.scrollIntoViewIfNeeded();
+  await expect(bar).toBeInViewport();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const pin = bar.getByRole('button', { name: 'Pin filters' });
+  await expect(pin).toHaveAttribute('aria-pressed', 'true');
+  await pin.click();
+  await expect(pin).toHaveAttribute('aria-pressed', 'false');
+  await last.scrollIntoViewIfNeeded();
+  await expect(bar).not.toBeInViewport();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await pin.click();
+  await last.scrollIntoViewIfNeeded();
+  await expect(bar).toBeInViewport();
+  expect(problems).toEqual([]);
+});
+
+test('at 390 px nothing scrolls sideways, the menu opens the sidebar and two small widgets share a row', async ({
+  page,
+  reportUrl,
+}) => {
+  const problems = watchProblems(page);
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/checkout`);
+  const a = widget(page, 'w7');
+  const b = widget(page, 'w8');
+  await expect(a).toBeVisible();
+  await expect(b).toBeVisible();
+  const [boxA, boxB] = [await a.boundingBox(), await b.boundingBox()];
+  if (boxA === null || boxB === null) throw new Error('the small widgets are laid out');
+  expect(boxB.y).toBeCloseTo(boxA.y, 0);
+  expect(boxB.x).toBeGreaterThan(boxA.x + boxA.width - 1);
+  expect(boxB.x + boxB.width).toBeLessThanOrEqual(390);
+  const sideways = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(sideways).toBeLessThanOrEqual(0);
+  const bar = await filterBar(page).boundingBox();
+  if (bar === null) throw new Error('the filter bar is laid out');
+  expect(bar.x + bar.width).toBeLessThanOrEqual(390);
+  const menu = page.getByRole('button', { name: 'Menu' });
+  await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
+  await menu.click();
+  await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
+  await expect(menu).toBeFocused();
+  // Another page does not scroll sideways either.
+  await page.goto(`${reportUrl('dashboards')}/index.html#/traces`);
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+  await page.waitForTimeout(500);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+  ).toBeLessThanOrEqual(0);
+  expect(problems).toEqual([]);
+});

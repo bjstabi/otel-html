@@ -282,6 +282,37 @@
               ]
             }
           },
+          "quick": {
+            "default": [],
+            "maxItems": 6,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "set": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "label",
+                "set"
+              ],
+              "additionalProperties": false
+            }
+          },
           "widgets": {
             "minItems": 1,
             "maxItems": 50,

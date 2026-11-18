@@ -9,6 +9,9 @@
   --oh-accent: #0f766e;
   --oh-critical: #d03b3b;
   --oh-warning: #fab219;
+  --oh-good: #0ca30c;
+  --oh-good-ink: #006300;
+  --oh-ok-cell: #d6e9fb;
   --oh-series-1: #2a78d6;
   --oh-series-2: #eb6834;
   --oh-series-3: #1baf7a;
@@ -40,6 +43,9 @@
     --oh-muted: #96958c;
     --oh-hairline: #2e2e2b;
     --oh-accent: #2dd4bf;
+    --oh-good: #0ca30c;
+    --oh-good-ink: #3ddc3d;
+    --oh-ok-cell: #23385a;
     --oh-series-1: #3987e5;
     --oh-series-2: #d95926;
     --oh-series-3: #199e70;
@@ -69,6 +75,9 @@
   --oh-muted: #96958c;
   --oh-hairline: #2e2e2b;
   --oh-accent: #2dd4bf;
+  --oh-good: #0ca30c;
+  --oh-good-ink: #3ddc3d;
+  --oh-ok-cell: #23385a;
   --oh-series-1: #3987e5;
   --oh-series-2: #d95926;
   --oh-series-3: #199e70;
@@ -98,6 +107,9 @@
   --color-accent: var(--oh-accent);
   --color-critical: var(--oh-critical);
   --color-warning: var(--oh-warning);
+  --color-good: var(--oh-good);
+  --color-good-ink: var(--oh-good-ink);
+  --color-ok-cell: var(--oh-ok-cell);
   --color-series-1: var(--oh-series-1);
   --color-series-2: var(--oh-series-2);
   --color-series-3: var(--oh-series-3);

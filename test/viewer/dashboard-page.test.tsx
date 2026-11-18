@@ -29,6 +29,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -94,6 +95,36 @@ describe('the dashboard page', () => {
   });
 });
 
+describe('the filter echo in widget headers', () => {
+  const metricFrame = () => main().getByRole('region', { name: /Metrics/ });
+  test('a bound variable shows as a chip in the header; nothing bound shows none', async () => {
+    renderShell(
+      `#/dashboards/fusion?${dParam({ vars: { 'service.name': 'web' } })}`,
+      dataSourceOf(baseManifest, VALUES),
+    );
+    await waitFor(() => expect(within(metricFrame()).getByText('service.name = web')).toBeTruthy());
+    cleanup();
+    renderShell('#/dashboards/fusion', dataSourceOf(baseManifest, VALUES));
+    await waitFor(() => expect(main().getAllByRole('region')).toHaveLength(4));
+    expect(screen.queryByText(/service\.name = /)).toBeNull();
+  });
+
+  test('at 390 px no chip is shown', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: true,
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    renderShell(
+      `#/dashboards/fusion?${dParam({ vars: { 'service.name': 'web' } })}`,
+      dataSourceOf(baseManifest, VALUES),
+    );
+    await waitFor(() => expect(main().getAllByRole('region')).toHaveLength(4));
+    expect(within(metricFrame()).queryByText('service.name = web')).toBeNull();
+  });
+});
+
 describe('selection chips', () => {
   const SEL = { sel: { t: '3600000000000~3660000000000', trace: TRACE } };
 
@@ -129,7 +160,7 @@ describe('variables', () => {
   test('a variable with no values is hidden and counted', async () => {
     renderShell('#/dashboards/fusion', dataSourceOf(baseManifest, VALUES));
     await screen.findByText('2 variables have no values in this report');
-    expect(screen.getByText('service.name')).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: 'service.name' })).toBeTruthy();
     expect(screen.queryByText('host.name')).toBeNull();
   });
 

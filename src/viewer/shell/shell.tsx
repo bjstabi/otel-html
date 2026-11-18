@@ -1,10 +1,11 @@
 import { Tooltip } from '@base-ui/react/tooltip';
-import { X } from 'lucide-react';
-import { type JSX, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Menu, X } from 'lucide-react';
+import { type JSX, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Redirect, Route, Router, Switch } from 'wouter';
 import type { AnyManifest } from '../../format/manifest.js';
 import { SELECTION_MODES } from '../../query/pages.js';
 import { DashboardPage } from '../dashboards/dashboard-page.js';
+import { useStacked } from '../dashboards/grid.js';
 import { DashboardsListPage } from '../dashboards/list-page.js';
 import { defaultDashboardRoute } from '../dashboards/registry.js';
 import { RunSessionProvider } from '../dashboards/run-session.js';
@@ -162,6 +163,7 @@ export function Shell(props: {
   // pressed in between were lost.
   useLayoutEffect(() => bindUrl(store, history, setErrors, epoch, range), [store, history, epoch, range]);
 
+  const phone = useStacked();
   const goTo = useCallback<GoTo>(
     (page, route, extra = {}, alsoDropped = []) => {
       const { url, dropped } = carryTo(store.getState(), pageOfRoute(currentRoute(window)), page);
@@ -222,8 +224,8 @@ export function Shell(props: {
         <ColorsProvider>
           <Tooltip.Provider>
             <Router hook={useRoute}>
-              <div className="flex min-h-screen bg-page text-ink">
-                <Sidebar manifest={manifest} />
+              <div className={`flex min-h-screen bg-page text-ink ${phone ? 'flex-col' : ''}`}>
+                <ShellNav manifest={manifest} phone={phone} />
                 <div className="flex min-w-0 flex-1 flex-col">
                   <UrlErrors errors={errors} onDismiss={() => setErrors([])} />
                   <CarryNotice carried={carried} onDismiss={() => setCarried(null)} />
@@ -240,6 +242,40 @@ export function Shell(props: {
         </ColorsProvider>
       </GoToContext.Provider>
     </SelectionProvider>
+  );
+}
+
+/** The sidebar; below the stacking breakpoint it is a drawer behind a menu button, which gets the focus back. */
+function ShellNav({ manifest, phone }: { manifest: AnyManifest; phone: boolean }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const [route] = useRoute();
+  const button = useRef<HTMLButtonElement>(null);
+  const wasOpen = useRef(false);
+  const drawerId = useId();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a navigation closes the drawer
+  useEffect(() => setOpen(false), [route, phone]);
+  useEffect(() => {
+    if (wasOpen.current && !open) button.current?.focus();
+    wasOpen.current = open;
+  }, [open]);
+  if (!phone) return <Sidebar manifest={manifest} />;
+  return (
+    <>
+      <div className="flex items-center border-b border-hairline p-2">
+        <button
+          ref={button}
+          type="button"
+          aria-label="Menu"
+          aria-expanded={open}
+          aria-controls={open ? drawerId : undefined}
+          onClick={() => setOpen((o) => !o)}
+          className="rounded-full border border-hairline bg-surface p-2 text-ink-2"
+        >
+          <Menu size={16} aria-hidden />
+        </button>
+      </div>
+      {open && <Sidebar manifest={manifest} drawer={{ onClose: () => setOpen(false), id: drawerId }} />}
+    </>
   );
 }
 

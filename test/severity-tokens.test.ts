@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { SEVERITY_DARK, SEVERITY_LIGHT } from '../src/viewer/theme/palette.js';
+import { SEVERITY_DARK, SEVERITY_LIGHT, STATUS } from '../src/viewer/theme/palette.js';
 
 /** `--oh-*` declarations of every block in tokens.css whose selector line matches `selector`. */
 function tokens(css: string, selector: RegExp): Map<string, string> {
@@ -39,5 +39,22 @@ describe('tokens.css severity tokens', () => {
     expect([light.get('--oh-surface'), light.get('--oh-muted')]).toEqual(['#ffffff', '#6b6f78']);
     for (const dark of [darkAuto, darkForced])
       expect([dark.get('--oh-surface'), dark.get('--oh-muted')]).toEqual(['#1a1a19', '#96958c']);
+  });
+});
+
+describe('tokens.css good tokens', () => {
+  const css = readFileSync(new URL('../src/viewer/theme/tokens.css', import.meta.url), 'utf8');
+
+  it('STATUS.good is --oh-good in all three blocks, and --color-good follows it', () => {
+    expect([...css.matchAll(/--oh-good: (#[0-9a-f]+);/g)].map((m) => m[1])).toEqual([
+      STATUS.good,
+      STATUS.good,
+      STATUS.good,
+    ]);
+    expect(css).toContain('--color-good: var(--oh-good);');
+    expect(css.match(/--oh-good-ink: #006300;/g)).toHaveLength(1);
+    expect(css.match(/--oh-good-ink: #3ddc3d;/g)).toHaveLength(2);
+    expect(css.match(/--oh-ok-cell: #d6e9fb;/g)).toHaveLength(1);
+    expect(css.match(/--oh-ok-cell: #23385a;/g)).toHaveLength(2);
   });
 });

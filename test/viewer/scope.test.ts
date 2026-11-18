@@ -13,7 +13,9 @@ import type {
 import { compileCondition } from '../../src/ottl/compile.js';
 import {
   bindings,
+  fixedScope,
   following,
+  honours,
   resourcesMatching,
   runByKey,
   scopeFor,
@@ -388,5 +390,24 @@ describe('resourcesMatching', () => {
       [b],
     );
     expect(resourcesMatching([a, b, c], [bind('service.name', 'nope')])).toEqual([]);
+  });
+});
+
+describe('honours and fixedScope', () => {
+  const variable = (key: string) => ({ key, label: key, default: null });
+  test('every generic widget honours every variable and has no fixed scope', () => {
+    for (const w of Object.values(WIDGETS)) {
+      expect(honours(w, variable('service.name'))).toBe(true);
+      expect(fixedScope(w)).toBeNull();
+    }
+  });
+
+  test('a run chart does not honour the variable on its runBy key, and honours the others', () => {
+    const run = {
+      ...WIDGETS.metric,
+      runBy: 'resource.attributes["run"]',
+    } as Widget;
+    expect(honours(run, variable('run'))).toBe(false);
+    expect(honours(run, variable('service.name'))).toBe(true);
   });
 });

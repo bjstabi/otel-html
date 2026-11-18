@@ -153,7 +153,7 @@ function AddFilter(props: {
   const [value, setValue] = useState('');
   return (
     <form
-      className="flex items-center gap-1"
+      className="flex max-w-full flex-wrap items-center gap-1"
       onSubmit={(e) => {
         e.preventDefault();
         // On failure the parent shows the error and the typed input stays.

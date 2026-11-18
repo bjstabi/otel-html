@@ -406,7 +406,7 @@ async function buildLongRangeReport(): Promise<void> {
   await convertTo(reportDir('long-range'), [file], 'long range run');
 }
 
-/** The `default-window` report: 48 one-span traces 15 minutes apart (a range of 11 h 45 min), `viewer.defaultWindow: 6h`. */
+/** The `default-window` report: 48 one-span traces 15 minutes apart (a range of 11 h 45 min), `viewer.defaultWindow: 1h`. */
 async function buildDefaultWindowReport(): Promise<void> {
   const inputs = new URL('default-window-inputs/', REPORTS_DIR);
   await mkdir(inputs, { recursive: true });
@@ -436,7 +436,7 @@ async function buildDefaultWindowReport(): Promise<void> {
       ],
     }),
   );
-  await writeFile(config, JSON.stringify({ viewer: { defaultWindow: '6h' } }));
+  await writeFile(config, JSON.stringify({ viewer: { defaultWindow: '1h' } }));
   await convertTo(reportDir('default-window'), [file], 'default window run', undefined, config);
 }
 

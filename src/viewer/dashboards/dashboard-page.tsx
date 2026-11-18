@@ -1,31 +1,36 @@
 import { Menu } from '@base-ui/react/menu';
 import { ChevronDown, Copy, LayoutDashboard, Pencil } from 'lucide-react';
 import { type JSX, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import type { RunControls, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
+import type { RunControls, Variable, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import type { DataSource } from '../data/data-source.js';
+import { manifestRange } from '../data/manifest-range.js';
 import type { TimeWindow } from '../data/time-window.js';
 import { LogPanel } from '../logs/log-panel.js';
 import { CONTROL, POPUP } from '../shell/controls.js';
 import { useGoTo } from '../shell/go-to.js';
 import { CopyButton, PageChrome } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
-import { absoluteTime } from '../shell/time-range.js';
+import { absoluteTime, activePreset } from '../shell/time-range.js';
 import type { UrlPatch } from '../state/carry.js';
 import { type DashboardPageState, EMPTY_DASHBOARD_STATE } from '../state/dashboard-state.js';
 import type { Page } from '../state/page-options.js';
+import { markLive } from '../state/selection.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
 import { formatWindow, parseWindow, windowParam } from '../state/url-state.js';
 import { type KeyedState, useKeyedAsync } from '../state/use-keyed-async.js';
 import { TracePanel } from '../traces/trace-panel.js';
 import { dashboardToYaml } from './copy-config.js';
 import { DashboardLink } from './dashboard-link.js';
+import { FilterBar } from './filter-bar.js';
 import { DashboardGrid, useStacked } from './grid.js';
 import { type DashboardEntry, dashboardsOf, findDashboard } from './registry.js';
 import { useRunSession } from './run-session.js';
 import {
   bindings,
+  fixedScope,
   following,
+  honours,
   scopeFor,
   selectedOf,
   type VariableBinding,
@@ -34,8 +39,8 @@ import {
   type WidgetScope,
 } from './scope.js';
 import { SelectionChips } from './selection-chips.js';
-import { VariablesBar, withVariable } from './variables-bar.js';
-import { WidgetFrame } from './widget-frame.js';
+import { withVariable } from './variables-bar.js';
+import { type FilterEcho, WidgetFrame } from './widget-frame.js';
 import { FacetChartWidget } from './widgets/facet-chart.js';
 import { LogsWidget } from './widgets/logs.js';
 import { effectiveQueries, MetricWidget, type Narrowing, useNarrowing } from './widgets/metric.js';
@@ -83,6 +88,18 @@ export const WIDGETS: Record<WidgetType, WidgetRenderer> = {
 
 const CARD = 'max-w-xl rounded-card border border-hairline bg-surface p-6';
 
+/** The header's echo of the page filters: a chip per active variable, filled when the widget honours it. */
+function echoOf(w: Widget, variables: readonly Variable[], active: readonly VariableBinding[]): FilterEcho {
+  const echo: FilterEcho = { honoured: [], ignored: [], scope: fixedScope(w) };
+  for (const b of active) {
+    const v = variables.find((x) => x.key === b.key);
+    if (v === undefined) continue;
+    if (honours(w, v)) echo.honoured.push(`${v.label} = ${b.value}`);
+    else echo.ignored.push(v.label);
+  }
+  return echo;
+}
+
 function layoutOf(widgets: readonly Widget[]): WidgetLayout[] {
   return widgets.map(({ x, y, w, h }) => ({ x, y, w, h }));
 }
@@ -102,6 +119,24 @@ function staleIds(entry: DashboardEntry, state: DashboardPageState): string[] {
       .filter((k) => !keys.has(k))
       .map((k) => `vars.${k}`),
   ];
+}
+
+/** The page window as a preset text for the slider's label (`all`, `7d`); null for a custom window. */
+function presetOf(w: TimeWindow | null, manifest: DataSource['manifest'], floor: boolean): string | null {
+  const range = manifestRange(manifest);
+  if (range === null) return null;
+  const label = activePreset(w, range, BigInt(manifest.epochUnixNano), floor);
+  return label === 'Entire run' ? 'all' : label;
+}
+
+/**
+ * The URL text of a slider zoom: whole nanoseconds (a pointer rarely lands on one), the start no earlier than the URL
+ * can state (0 unanchored, the anchor's own zero otherwise).
+ */
+function zoomText(z: readonly [number, number], anchor: bigint | null): string {
+  const lowest = anchor === null ? 0 : -Number(anchor);
+  const start = Math.max(lowest, Math.round(z[0]));
+  return formatWindow({ start, end: Math.max(start, Math.round(z[1])) }, anchor ?? undefined);
 }
 
 function windowText(w: TimeWindow | null, epoch: ReturnType<typeof parseUnixNanos>): string {
@@ -247,6 +282,7 @@ function DashboardView(props: {
   const page = useSelection((s) => s.window);
   const defaultWindow = useSelection((s) => s.defaultWindow);
   const anchor = useSelection((s) => s.anchor);
+  const anchored = anchor !== null;
   const traceId = useSelection((s) => s.traceId);
   const logRef = useSelection((s) => s.logRef);
   const clear = useSelection((s) => s.clear);
@@ -261,9 +297,10 @@ function DashboardView(props: {
 
   /** Applies `fn` to the state as it is now, so two quick changes never overwrite each other. */
   const change = useCallback(
-    (fn: (s: DashboardPageState) => DashboardPageState): void => {
+    (fn: (s: DashboardPageState) => DashboardPageState, live = false): void => {
       const s = store.getState();
-      s.setDashboard(fn(s.dashboard ?? EMPTY_DASHBOARD_STATE));
+      const next = fn(s.dashboard ?? EMPTY_DASHBOARD_STATE);
+      s.setDashboard(live ? markLive(next) : next);
     },
     [store],
   );
@@ -308,6 +345,7 @@ function DashboardView(props: {
       ? { status: 'ready', value: lastReady.value }
       : loaded;
 
+  const extent = page ?? manifestRange(manifest);
   const stale = staleIds(entry, state);
   const bound = values.status === 'ready' ? bindings(d, state, values.value) : null;
   const sel = {
@@ -373,6 +411,7 @@ function DashboardView(props: {
             : { label: open.label, onOpen: () => goTo(open.page, `/${open.page}`, open.patch) }
         }
         editing={editing}
+        echo={echoOf(w, d.variables, bound?.bindings ?? [])}
       >
         <Body
           widget={w}
@@ -423,7 +462,7 @@ function DashboardView(props: {
   );
 
   return (
-    <PageChrome title={d.title} manifest={manifest} actions={actions}>
+    <PageChrome title={d.title} manifest={manifest} actions={actions} timeRange={false}>
       <div className="flex flex-col gap-3">
         <PageOptionNotice
           message={
@@ -443,15 +482,27 @@ function DashboardView(props: {
             Loading variables…
           </p>
         )}
-        {bound !== null && values.status === 'ready' && (
-          <VariablesBar
-            variables={d.variables}
-            values={values.value}
-            bound={bound}
-            state={state}
-            onChange={(vars) => change((s) => ({ ...s, vars }))}
-          />
-        )}
+        <FilterBar
+          dashboard={d}
+          manifest={manifest}
+          values={values.status === 'ready' ? values.value : null}
+          bound={bound}
+          state={state}
+          onVars={(vars) => change((s) => ({ ...s, vars }))}
+          onZoom={(z, live) =>
+            change((s) => ({ ...s, sel: { ...s.sel, t: z === null ? null : zoomText(z, anchor) } }), live)
+          }
+          slider={
+            extent === null
+              ? null
+              : {
+                  extent: [extent.start, extent.end],
+                  zoom: sel.t === null ? null : [sel.t.start, sel.t.end],
+                  preset: presetOf(page, manifest, !anchored),
+                  epoch: BigInt(manifest.epochUnixNano),
+                }
+          }
+        />
         <SelectionChips
           state={state}
           epoch={epoch}

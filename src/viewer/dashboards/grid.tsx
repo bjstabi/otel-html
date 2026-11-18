@@ -46,6 +46,27 @@ function byPosition(a: WidgetLayout, b: WidgetLayout): number {
   return a.y - b.y || a.x - b.x;
 }
 
+/** A widget this narrow (or narrower) shares a stacked row with its neighbour. */
+const SMALL_W = 3;
+
+/** Column spans (of two) for stacked widgets in reading order: small ones pair up, an unpaired or wide one takes the row. */
+function stackedSpans(widths: readonly number[]): number[] {
+  const spans = widths.map(() => 2);
+  let run = 0;
+  widths.forEach((w, i) => {
+    if (w > SMALL_W) {
+      run = 0;
+      return;
+    }
+    run += 1;
+    if (run % 2 === 0) {
+      spans[i] = 1;
+      spans[i - 1] = 1;
+    }
+  });
+  return spans;
+}
+
 /** One grid item: the widget's place and the bounds that keep a resized layout valid for the config schema. */
 export function layoutItem(id: string, at: WidgetLayout, editing: boolean): LayoutItem {
   return {
@@ -80,15 +101,15 @@ export function DashboardGrid(props: DashboardGridProps): JSX.Element {
   const placed = widgets.map((widget, i) => ({ widget, at: layout[i] ?? widget }));
 
   if (stacked) {
+    const ordered = [...placed].sort((a, b) => byPosition(a.at, b.at));
+    const spans = stackedSpans(ordered.map(({ at }) => at.w));
     return (
-      <div className="flex flex-col gap-2.5">
-        {[...placed]
-          .sort((a, b) => byPosition(a.at, b.at))
-          .map(({ widget, at }) => (
-            <div key={widget.id} style={{ height: widgetHeightPx(at.h) }}>
-              {render(widget, widgetHeightPx(at.h))}
-            </div>
-          ))}
+      <div className="grid grid-cols-2 gap-2.5">
+        {ordered.map(({ widget, at }, i) => (
+          <div key={widget.id} style={{ height: widgetHeightPx(at.h), gridColumn: `span ${spans[i] ?? 2}` }}>
+            {render(widget, widgetHeightPx(at.h))}
+          </div>
+        ))}
       </div>
     );
   }

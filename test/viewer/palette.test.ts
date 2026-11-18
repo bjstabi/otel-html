@@ -13,7 +13,7 @@ describe('palette', () => {
   it('has seven fixed categorical entries per mode and fixed status colours', () => {
     expect(CATEGORICAL_LIGHT).toHaveLength(7);
     expect(CATEGORICAL_DARK).toHaveLength(7);
-    expect(STATUS).toEqual({ critical: '#d03b3b', warning: '#fab219' });
+    expect(STATUS).toEqual({ critical: '#d03b3b', warning: '#fab219', good: '#0ca30c' });
   });
 
   it('assigns first-seen order and keeps colorFor stable', () => {

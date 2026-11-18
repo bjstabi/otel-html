@@ -1,5 +1,5 @@
 import { BarChart3, LayoutDashboard, Moon, ScrollText, Sun, SunMoon, Waypoints } from 'lucide-react';
-import type { JSX, ReactNode } from 'react';
+import { type JSX, type ReactNode, useEffect, useRef } from 'react';
 import type { AnyManifest } from '../../format/manifest.js';
 import { dashboardsOf } from '../dashboards/registry.js';
 import { applyPatch, carryTo, type UrlPatch } from '../state/carry.js';
@@ -170,11 +170,72 @@ function ThemeToggle(): JSX.Element {
   );
 }
 
-export function Sidebar({ manifest }: { manifest: AnyManifest }): JSX.Element {
+/**
+ * The primary navigation. `drawer` is the phone form: an overlay panel the shell opens from its menu button; it
+ * is a modal dialog: it takes focus when it opens and keeps it (Tab cycles inside), and Escape on it, a click outside it or following a link closes it.
+ */
+export function Sidebar({
+  manifest,
+  drawer,
+}: {
+  manifest: AnyManifest;
+  drawer?: { onClose(): void; id?: string };
+}): JSX.Element {
   const [current] = useRoute();
   const sections = [dashboardsSection(manifest), ...STATIC_SECTIONS];
-  return (
-    <aside className="flex w-60 shrink-0 flex-col gap-4 border-r border-hairline p-3">
+  const panel = useRef<HTMLElement>(null);
+  const close = drawer?.onClose;
+  useEffect(() => {
+    if (close === undefined) return;
+    panel.current?.focus();
+    const onClick = (e: MouseEvent): void => {
+      if (e.target instanceof Element && e.target.closest('a') !== null) close();
+    };
+    const el = panel.current;
+    el?.addEventListener('click', onClick);
+    return () => {
+      el?.removeEventListener('click', onClick);
+    };
+  }, [close]);
+  // Escape closes the drawer; Tab cycles inside it (the backdrop covers the page behind it)
+  const onKeyDown = (e: React.KeyboardEvent<HTMLElement>): void => {
+    if (close === undefined) return;
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      close();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    const focusable = [
+      ...(panel.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), [tabindex="0"]') ??
+        []),
+    ];
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (first === undefined || last === undefined) return;
+    const at = document.activeElement;
+    if (e.shiftKey && (at === first || at === panel.current)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && at === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+  const aside = (
+    <aside
+      ref={panel}
+      id={drawer?.id}
+      {...(drawer === undefined ? {} : ({ role: 'dialog', 'aria-modal': true } as const))}
+      onKeyDown={onKeyDown}
+      tabIndex={drawer === undefined ? undefined : -1}
+      aria-label={drawer === undefined ? undefined : 'Navigation'}
+      className={
+        drawer === undefined
+          ? 'flex w-60 shrink-0 flex-col gap-4 border-r border-hairline p-3'
+          : 'fixed inset-y-0 left-0 z-40 flex w-60 max-w-[85vw] flex-col gap-4 overflow-y-auto border-r border-hairline bg-page p-3 shadow-lg outline-none'
+      }
+    >
       <RunCard manifest={manifest} />
       <nav aria-label="Primary" className="flex flex-1 flex-col gap-3">
         {sections.map((s) => (
@@ -216,5 +277,17 @@ export function Sidebar({ manifest }: { manifest: AnyManifest }): JSX.Element {
       </nav>
       <ThemeToggle />
     </aside>
+  );
+  if (drawer === undefined) return aside;
+  return (
+    <>
+      <div
+        aria-hidden
+        data-testid="drawer-backdrop"
+        className="fixed inset-0 z-30 bg-ink/30"
+        onClick={close}
+      />
+      {aside}
+    </>
   );
 }

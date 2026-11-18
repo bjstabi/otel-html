@@ -59,6 +59,9 @@ async function open(page: Page, reportUrl: (name: 'run-charts') => string, id = 
   await expect(host).toBeVisible();
   await expect.poll(async () => (await readRunChart(host)).lines.length).toBeGreaterThan(0);
   await layoutSettled(page, host);
+  // The page filter bar and its slider push the card's slider below the fold; the tests drag it with the mouse.
+  await host.scrollIntoViewIfNeeded();
+  await layoutSettled(page, host);
   return host;
 }
 
@@ -258,7 +261,7 @@ test.describe('a rebuild during a hover on one plot leaves no line dim', () => {
   > = {
     'a click on the dot': async (page, _host, dot) => {
       await page.mouse.click(dot.x, dot.y);
-      await expect(page.getByRole('combobox', { name: 'run' })).toHaveText(runChartRunId(3));
+      await expect(page.getByRole('combobox', { name: 'run' })).toHaveText(`run = ${runChartRunId(3)}`);
     },
     'a toggle from the keyboard': async (page) => {
       await page.keyboard.press('Enter');
@@ -435,7 +438,7 @@ test('clicking a dot filters to the run and keeps all columns', async ({ page, r
   const before = await readRunChart(host);
   const dot = await runDot(host, RUN_CHART_OUTLIER_JOB, 2);
   await page.mouse.click(dot.x, dot.y);
-  await expect(page.getByRole('combobox', { name: 'run' })).toHaveText(runChartRunId(2));
+  await expect(page.getByRole('combobox', { name: 'run' })).toHaveText(`run = ${runChartRunId(2)}`);
   await expect.poll(async () => (await readRunChart(host)).guides).toBe(RUN_CHART_JOBS.length);
   const after = await readRunChart(host);
   expect(after.lines.map((l) => l.xs)).toEqual(before.lines.map((l) => l.xs));
@@ -465,10 +468,12 @@ test("the dashboard window's change clears the zoom", async ({ page, reportUrl }
   const host = await open(page, reportUrl);
   await zoomPastOldest(page, host);
   await expect(toggle(page, 'Reset')).toBeEnabled();
-  await page.getByRole('button', { name: '1h', exact: true }).click();
+  await page.getByRole('button', { name: 'Time range' }).click();
+  await page.getByRole('menuitem', { name: '1h', exact: true }).click();
   // The card drops its zoom when a result for another window arrives: let the 1h chart arrive before going back.
   await expect.poll(async () => (await readRunChart(host)).lines[0]?.xs.length).toBeLessThan(RUNS);
-  await page.getByRole('button', { name: 'Entire run', exact: true }).click();
+  await page.getByRole('button', { name: 'Time range' }).click();
+  await page.getByRole('menuitem', { name: 'Entire run', exact: true }).click();
   await expectConfigured(page, hostOf(page));
 });
 
