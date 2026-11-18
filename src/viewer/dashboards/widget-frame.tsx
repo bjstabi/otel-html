@@ -2,6 +2,7 @@ import { ArrowUpRight, GripVertical, Link2 } from 'lucide-react';
 import { Component, type JSX, type ReactNode, useId } from 'react';
 import type { Widget, WidgetType } from '../../dashboards/schema.js';
 import { ErrorCard } from '../components/explorer-states.js';
+import { useStacked } from './grid.js';
 
 const TYPE_TITLES: Record<WidgetType, string> = {
   timeline: 'Timeline',
@@ -45,6 +46,36 @@ class WidgetBoundary extends Component<
   }
 }
 
+/** What the header says about the page filters: honoured (filled), ignored (dashed), or a fixed scope (dashed). */
+export interface FilterEcho {
+  honoured: string[];
+  ignored: string[];
+  scope: string | null;
+}
+
+function EchoChips({ echo }: { echo: FilterEcho }): JSX.Element | null {
+  const stacked = useStacked();
+  if (stacked) return null;
+  const filled = 'rounded-full bg-hairline px-2 py-0.5 text-xs text-ink-2 whitespace-nowrap';
+  const dashed =
+    'rounded-full border border-dashed border-hairline px-2 py-0.5 text-xs text-muted whitespace-nowrap';
+  return (
+    <>
+      {echo.honoured.map((t) => (
+        <span key={`h:${t}`} className={filled}>
+          {t}
+        </span>
+      ))}
+      {echo.ignored.map((l) => (
+        <span key={`i:${l}`} className={dashed}>
+          ignores {l}
+        </span>
+      ))}
+      {echo.scope !== null && <span className={dashed}>{echo.scope}</span>}
+    </>
+  );
+}
+
 export interface WidgetFrameProps {
   /** Identifies the widget's inputs: when it changes, a failed widget is rendered again. */
   resetKey: string;
@@ -55,6 +86,8 @@ export interface WidgetFrameProps {
   onFollow(v: boolean): void;
   openIn: { label: string; onOpen(): void } | null;
   editing: boolean;
+  /** The page filters as this widget sees them; hidden under 768 px. */
+  echo?: FilterEcho;
   children: ReactNode;
 }
 
@@ -83,6 +116,7 @@ export function WidgetFrame(props: WidgetFrameProps): JSX.Element {
           {title}
         </h2>
         <span className="min-w-0 flex-1 truncate text-xs text-muted">{props.subtitle}</span>
+        {props.echo !== undefined && <EchoChips echo={props.echo} />}
         {following !== null && (
           <button
             type="button"

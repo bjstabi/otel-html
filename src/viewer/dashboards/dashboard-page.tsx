@@ -1,7 +1,7 @@
 import { Menu } from '@base-ui/react/menu';
 import { ChevronDown, Copy, LayoutDashboard, Pencil } from 'lucide-react';
 import { type JSX, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import type { RunControls, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
+import type { RunControls, Variable, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import type { DataSource } from '../data/data-source.js';
 import { manifestRange } from '../data/manifest-range.js';
@@ -27,7 +27,9 @@ import { type DashboardEntry, dashboardsOf, findDashboard } from './registry.js'
 import { useRunSession } from './run-session.js';
 import {
   bindings,
+  fixedScope,
   following,
+  honours,
   scopeFor,
   selectedOf,
   type VariableBinding,
@@ -37,7 +39,7 @@ import {
 } from './scope.js';
 import { SelectionChips } from './selection-chips.js';
 import { withVariable } from './variables-bar.js';
-import { WidgetFrame } from './widget-frame.js';
+import { type FilterEcho, WidgetFrame } from './widget-frame.js';
 import { FacetChartWidget } from './widgets/facet-chart.js';
 import { LogsWidget } from './widgets/logs.js';
 import { effectiveQueries, MetricWidget, type Narrowing, useNarrowing } from './widgets/metric.js';
@@ -84,6 +86,18 @@ export const WIDGETS: Record<WidgetType, WidgetRenderer> = {
 };
 
 const CARD = 'max-w-xl rounded-card border border-hairline bg-surface p-6';
+
+/** The header's echo of the page filters: a chip per active variable, filled when the widget honours it. */
+function echoOf(w: Widget, variables: readonly Variable[], active: readonly VariableBinding[]): FilterEcho {
+  const echo: FilterEcho = { honoured: [], ignored: [], scope: fixedScope(w) };
+  for (const b of active) {
+    const v = variables.find((x) => x.key === b.key);
+    if (v === undefined) continue;
+    if (honours(w, v)) echo.honoured.push(`${v.label} = ${b.value}`);
+    else echo.ignored.push(v.label);
+  }
+  return echo;
+}
 
 function layoutOf(widgets: readonly Widget[]): WidgetLayout[] {
   return widgets.map(({ x, y, w, h }) => ({ x, y, w, h }));
@@ -385,6 +399,7 @@ function DashboardView(props: {
             : { label: open.label, onOpen: () => goTo(open.page, `/${open.page}`, open.patch) }
         }
         editing={editing}
+        echo={echoOf(w, d.variables, bound?.bindings ?? [])}
       >
         <Body
           widget={w}

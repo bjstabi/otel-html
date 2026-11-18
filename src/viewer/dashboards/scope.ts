@@ -1,5 +1,5 @@
 import { andConditions, traceCondition } from '../../dashboards/conditions.js';
-import type { Dashboard, Widget, WidgetType } from '../../dashboards/schema.js';
+import type { Dashboard, Variable, Widget, WidgetType } from '../../dashboards/schema.js';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId } from '../../model/ids.js';
@@ -123,6 +123,23 @@ export const WIDGET_SCOPE: Record<
   toplist: { window: 'selection', band: false, trace: 'filter' },
   table: { window: 'selection', band: false, trace: 'filter' },
 };
+
+/**
+ * Whether the widget's data is narrowed by the variable. Table-driven by widget type so a type that ignores some
+ * variables (or all, see `fixedScope`) adds a row; every generic type honours every variable.
+ */
+const HONOURS: Partial<Record<WidgetType, (variable: Variable) => boolean>> = {};
+
+export function honours(widget: Widget, variable: Variable): boolean {
+  return HONOURS[widget.type]?.(variable) ?? true;
+}
+
+const FIXED_SCOPE: Partial<Record<WidgetType, (widget: Widget) => string | null>> = {};
+
+/** A text for a widget whose scope the page filters do not change (shown as a dashed chip); null when none. */
+export function fixedScope(widget: Widget): string | null {
+  return FIXED_SCOPE[widget.type]?.(widget) ?? null;
+}
 
 /** Whether the widget follows the selection: the URL override, else the config. The timeline never does. */
 export function following(widget: Widget, state: DashboardPageState): boolean {
