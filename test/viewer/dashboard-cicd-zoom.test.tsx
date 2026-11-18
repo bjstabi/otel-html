@@ -112,6 +112,6 @@ describe('the page window from a cicd widget', () => {
     await act(async () => (await screen.findByText('Zoom the slider to this bucket')).click());
     const [a, b] = String(currentD()?.sel?.t).split('~').map(Number);
     expect(a).toBe(0);
-    expect(b).toBeLessThan(bucketAt.end);
+    expect(b).toBe(10 * 3_600_000_000_000);
   });
 });

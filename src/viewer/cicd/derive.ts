@@ -292,6 +292,9 @@ function bucketBounds(span: readonly [number, number], step: number, epochNs: bi
       if (b >= span[1]) break;
     }
   }
+  // a zero-width span on a grid point still gets one bucket
+  const [only] = bounds;
+  if (bounds.length < 2 && only !== undefined) bounds.push(only + step);
   return bounds;
 }
 

@@ -185,6 +185,12 @@ describe('trendBuckets', () => {
     expect(t.buckets.map((b) => b.runs.length)).toEqual([1, 1, 0, 0, 0, 1, 0]);
   });
 
+  test('a zero-width span on a grid point keeps one bucket with the run', () => {
+    const t = trendBuckets([run(0)], [0, 0], EPOCH);
+    expect(t.buckets).toHaveLength(1);
+    expect(t.buckets[0]?.runs).toHaveLength(1);
+  });
+
   test('runs outside the span are left out of the partial buckets', () => {
     const t = trendBuckets([run(-10 * MIN), run(6 * HOUR + MIN), run(MIN)], [0, 6 * HOUR], EVENING);
     expect(t.buckets.reduce((s, b) => s + b.runs.length, 0)).toBe(1);
