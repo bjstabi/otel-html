@@ -83,6 +83,20 @@ describe('context menu keyboard trigger', () => {
   });
 });
 
+describe('focus return to an SVG trigger', () => {
+  it('Escape after Shift+F10 on an SVG element focuses it again', () => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    svg.setAttribute('tabindex', '0');
+    host.append(svg);
+    svg.focus();
+    expect(document.activeElement).toBe(svg);
+    act(() => api.open({ x: 5, y: 5 }, null, items));
+    expect(document.activeElement).not.toBe(svg);
+    key('Escape');
+    expect(document.activeElement).toBe(svg);
+  });
+});
+
 describe('context menu', () => {
   it('focuses the first item; ArrowDown then Enter runs the second and closes', () => {
     act(() => api.open({ x: 10, y: 10 }, null, items));

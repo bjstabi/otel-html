@@ -10,7 +10,7 @@ import {
 import type { Widget } from '../../dashboards/schema.js';
 import { honours, PageShared, registerValuesSource, type WidgetScope } from '../dashboards/scope.js';
 import type { CicdQuery, CicdRow } from '../data/cicd-query.js';
-import type { DataSource } from '../data/data-source.js';
+import type { DataSource, ResourceValues } from '../data/data-source.js';
 import type { TimeWindow } from '../data/time-window.js';
 import { STATUS } from '../theme/palette.js';
 import { narrowJobs, splitPeriods } from './derive.js';
@@ -286,22 +286,30 @@ for (const [key, { kind, pick }] of Object.entries(VALUE_FIELDS)) {
     if (first === undefined) return null;
     const pipeline = first.type === 'cicd' ? first.pipeline : null;
     const store = storeOf(shared, dataSource);
-    const last = shared.get(LAST_ROWS, () => new Map<string | null, readonly CicdRow[]>());
+    const last = shared.get(
+      LAST_ROWS,
+      () => new Map<string | null, { asked: string; rows: readonly CicdRow[] }>(),
+    );
+    // an empty answer is `emptyInWindow` (the page keeps the variable and a selected value) and never a fetch of the report
+    const answer = (rows: readonly CicdRow[], win: TimeWindow | null): ResourceValues => {
+      const values = valuesOf(rows, kind, pick, win);
+      return values.length === 0
+        ? ({ values, kind: 'string', capped: false, emptyInWindow: true } as ResourceValues)
+        : { values, kind: 'string', capped: false };
+    };
     return async (window) => {
-      if (window === null)
-        return {
-          values: valuesOf(last.get(pipeline) ?? [], kind, pick, null),
-          kind: 'string',
-          capped: false,
-        };
+      if (window === null) return answer(last.get(pipeline)?.rows ?? [], null);
+      const asked = JSON.stringify(window);
+      last.set(pipeline, { asked, rows: last.get(pipeline)?.rows ?? [] });
       const fetchWin = fetchWindow(window);
       const rows = await store.load(fetchKey(fetchWin, [], pipeline), {
         window: fetchWin,
         bindings: [],
         pipeline,
       });
-      last.set(pipeline, rows);
-      return { values: valuesOf(rows, kind, pick, window), kind: 'string', capped: false };
+      // an older read that finishes late does not replace the newest window's rows
+      if (last.get(pipeline)?.asked === asked) last.set(pipeline, { asked, rows });
+      return answer(rows, window);
     };
   });
 }

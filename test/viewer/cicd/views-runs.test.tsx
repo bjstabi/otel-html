@@ -350,6 +350,7 @@ describe('runs chart keyboard access', () => {
   it('ArrowRight then Enter opens the second run, and the live region names it', async () => {
     await show(widget('runs'), rows());
     const el = box();
+    await act(async () => el.dispatchEvent(new FocusEvent('focusin', { bubbles: true })));
     await key(el, 'ArrowRight');
     await key(el, 'ArrowRight');
     expect(el.querySelector('[aria-live]')?.textContent).toMatch(/commit 2 · failure/);
@@ -366,6 +367,39 @@ describe('runs chart keyboard access', () => {
     const ringOf = (): { data: number[][] } | undefined =>
       (series() as unknown as { id?: string; data: number[][] }[]).find((x) => x.id === 'current-run');
     expect(ringOf()?.data[0]?.[0]).toBe(11);
+  });
+
+  it('announces nothing after a blur, nor when the runs change', async () => {
+    await show(widget('runs'), rows());
+    const el = box();
+    await act(async () => el.dispatchEvent(new FocusEvent('focusin', { bubbles: true })));
+    await key(el, 'ArrowRight');
+    expect(el.querySelector('[aria-live]')?.textContent).not.toBe('');
+    await act(async () => el.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
+    expect(el.querySelector('[aria-live]')?.textContent).toBe('');
+    await show(widget('runs'), [...rows()].reverse());
+    expect(q('[aria-live]').textContent).toBe('');
+  });
+
+  it('keeps the current run when the runs shift under it', async () => {
+    await show(widget('runs'), rows());
+    const el = box();
+    await act(async () => el.dispatchEvent(new FocusEvent('focusin', { bubbles: true })));
+    await key(el, 'ArrowRight');
+    await key(el, 'ArrowRight');
+    const before = el.querySelector('[aria-live]')?.textContent;
+    await show(
+      widget('runs'),
+      rows().filter((r) => r.traceId !== TRACE(1)),
+    );
+    expect(q('[aria-live]').textContent).toBe(before);
+  });
+
+  it('suppresses the browser menu on the container', async () => {
+    await show(widget('runs'), rows());
+    const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    await act(async () => box().dispatchEvent(ev));
+    expect(ev.defaultPrevented).toBe(true);
   });
 
   it('ContextMenu and Shift+F10 open the run menu at the mark', async () => {

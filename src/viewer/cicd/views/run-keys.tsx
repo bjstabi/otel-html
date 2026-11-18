@@ -1,4 +1,4 @@
-import { type JSX, type KeyboardEvent, useCallback, useState } from 'react';
+import { type JSX, type KeyboardEvent, type MouseEvent, useCallback, useState } from 'react';
 import { formatDuration } from '../../../semconv/formatters.js';
 import type { RunActions } from '../run-actions.js';
 import type { CiRun } from '../runs.js';
@@ -22,14 +22,18 @@ export function useRunKeys(
     onKeyDown(e: KeyboardEvent<HTMLElement>): void;
     onFocus(): void;
     onBlur(): void;
+    /** The Menu key's keyup also fires `contextmenu`: the browser's own menu must not show over ours. */
+    onContextMenu(e: MouseEvent<HTMLElement>): void;
   };
   /** The polite live region naming the current run; render it inside the container. */
   live: JSX.Element;
 } {
   const { openRun, runMenu } = actions;
-  const [index, setIndex] = useState<number | null>(null);
+  // the current run is tracked by trace id, so it does not shift as the runs change during a drag
+  const [currentId, setCurrentId] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
-  const at = index === null ? null : Math.min(index, runs.length - 1);
+  const found = currentId === null ? -1 : runs.findIndex((r) => r.traceId === currentId);
+  const at = found < 0 ? null : found;
   const run = at === null ? undefined : runs[at];
 
   const onKeyDown = useCallback(
@@ -39,7 +43,7 @@ export function useRunKeys(
       const from = at ?? -1;
       const go = (i: number): void => {
         e.preventDefault();
-        setIndex(Math.max(0, Math.min(last, i)));
+        setCurrentId(runs[Math.max(0, Math.min(last, i))]?.traceId ?? null);
       };
       const box = e.currentTarget.getBoundingClientRect();
       if (e.key === 'ArrowRight') go(at === null ? 0 : from + 1);
@@ -67,11 +71,15 @@ export function useRunKeys(
       tabIndex: 0,
       onKeyDown,
       onFocus: () => setFocused(true),
-      onBlur: () => setFocused(false),
+      onBlur: () => {
+        setFocused(false);
+        setCurrentId(null);
+      },
+      onContextMenu: (e: MouseEvent<HTMLElement>) => e.preventDefault(),
     },
     live: (
       <span aria-live="polite" className="sr-only">
-        {run === undefined
+        {!focused || run === undefined
           ? ''
           : `${run.title ?? `Run ${run.runId}`} · ${run.result} · ${formatDuration(run.duration)}`}
       </span>

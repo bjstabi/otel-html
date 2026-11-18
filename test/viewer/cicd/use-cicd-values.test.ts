@@ -76,8 +76,31 @@ describe('the CI values sources', () => {
     expect(cicdRows.mock.calls.every(([q]) => q.window !== null)).toBe(true);
   });
 
+  test('a window and the period before it with no runs keep the variable (emptyInWindow), with no whole-report fetch', async () => {
+    const cicdRows = vi.fn((q: { window: { start: number; end: number } | null }) =>
+      Promise.resolve(
+        rows.filter((r) => q.window === null || (r.start >= q.window.start && r.start <= q.window.end)),
+      ),
+    );
+    const ctx = { widgets, dataSource: { cicdRows } as unknown as DataSource, shared: new PageShared() };
+    const read = async (key: string, window: { start: number; end: number } | null) => {
+      const source = valuesSourceFor(key, ctx);
+      if (source === null) throw new Error('no source');
+      return source(window);
+    };
+    const got = await variableValues('vcs.ref.head.name', { start: 9000, end: 9100 }, read, 'main');
+    expect(got.values).toEqual([]);
+    expect(got.kind).toBe('string');
+    expect(got.emptyInWindow).toBe(true);
+    expect(cicdRows).toHaveBeenCalledTimes(1);
+  });
+
   test('tell a window with no runs from a report without the key, without a second fetch', async () => {
-    const cicdRows = vi.fn((_q: { window: unknown }) => Promise.resolve(rows));
+    const cicdRows = vi.fn((q: { window: { start: number; end: number } | null }) =>
+      Promise.resolve(
+        rows.filter((r) => q.window === null || (r.start >= q.window.start && r.start <= q.window.end)),
+      ),
+    );
     const ctx = { widgets, dataSource: { cicdRows } as unknown as DataSource, shared: new PageShared() };
     const read = async (key: string, window: { start: number; end: number } | null) => {
       const source = valuesSourceFor(key, ctx);

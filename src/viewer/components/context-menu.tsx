@@ -25,9 +25,12 @@ export function useContextMenu(): {
   element: JSX.Element | null;
 } {
   const [state, setState] = useState<Open | null>(null);
-  const opener = useRef<HTMLElement | null>(null);
+  const opener = useRef<HTMLElement | SVGElement | null>(null);
   const open = useCallback((at: At, title: string | null, items: readonly MenuItem[]) => {
-    if (opener.current === null && document.activeElement instanceof HTMLElement)
+    if (
+      opener.current === null &&
+      (document.activeElement instanceof HTMLElement || document.activeElement instanceof SVGElement)
+    )
       opener.current = document.activeElement;
     setState({ at, title, items });
   }, []);
