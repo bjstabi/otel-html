@@ -1,14 +1,7 @@
 import { Menu } from '@base-ui/react/menu';
 import { ChevronDown, Copy, LayoutDashboard, Pencil } from 'lucide-react';
 import { type JSX, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import {
-  GRID_COLUMNS,
-  type RunControls,
-  type Variable,
-  type Widget,
-  type WidgetLayout,
-  type WidgetType,
-} from '../../dashboards/schema.js';
+import type { RunControls, Variable, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import { RunActionsProvider } from '../cicd/run-actions.js';
 import { OpenRunBody, RunConnector, RunPane } from '../cicd/run-pane.js';
@@ -463,7 +456,6 @@ function DashboardView(props: {
   const runScope = runWidget === undefined ? undefined : scopes.get(runWidget.id)?.scope;
   const openTrace = state.sel.trace;
   const closeRun = (): void => change((s) => ({ ...s, run: null, sel: { ...s.sel, trace: null } }));
-  const sourceAt = runWidget === undefined ? undefined : layout[d.widgets.indexOf(runWidget)];
   const attachedRun =
     state.run?.mode === 'attached' && runWidget !== undefined && runScope !== undefined && openTrace !== null
       ? { widget: runWidget, scope: runScope, traceId: openTrace }
@@ -472,12 +464,6 @@ function DashboardView(props: {
     panelRun && runWidget !== undefined && runScope !== undefined && openTrace !== null
       ? { widget: runWidget, scope: runScope, traceId: openTrace }
       : null;
-  // the source's span across the pane (stacked, the pane is as wide as the source's row)
-  const sourceSpan =
-    stacked || sourceAt === undefined
-      ? { left: 0, width: 1 }
-      : { left: sourceAt.x / GRID_COLUMNS, width: sourceAt.w / GRID_COLUMNS };
-
   const actions = (
     <>
       <DashboardSwitcher entries={entries} />
@@ -580,7 +566,6 @@ function DashboardView(props: {
                             key={attachedRun.traceId}
                             {...attachedRun}
                             dataSource={dataSource}
-                            sourceSpan={sourceSpan}
                             heightPx={heightPx}
                             onRows={setPaneRows}
                             onClose={closeRun}

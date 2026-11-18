@@ -1,5 +1,5 @@
 import { X } from 'lucide-react';
-import { type JSX, useEffect, useRef } from 'react';
+import { type JSX, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Widget } from '../../dashboards/schema.js';
 import type { WidgetScope } from '../dashboards/scope.js';
 import type { DataSource } from '../data/data-source.js';
@@ -79,8 +79,6 @@ export interface RunPaneProps {
   scope: Pick<WidgetScope, 'window' | 'vars'>;
   traceId: string;
   dataSource: DataSource;
-  /** The source widget's left edge and width as fractions of the pane's width; the caret sits at the mark inside it. */
-  sourceSpan: { left: number; width: number };
   /** Pane height in px (the grid's). */
   heightPx: number;
   /** Reports the rows the content needs; the page lets the grid grow or shrink to it. */
@@ -94,9 +92,24 @@ export interface RunPaneProps {
  * after render and its height reported in grid rows.
  */
 export function RunPane(props: RunPaneProps): JSX.Element {
-  const { widget, scope, traceId, dataSource, sourceSpan, heightPx, onRows, onClose } = props;
+  const { widget, scope, traceId, dataSource, heightPx, onRows, onClose } = props;
   const actions = useRunActions(widget.id);
-  const caretAt = actions.runPoint === null ? 0.5 : sourceSpan.left + actions.runPoint.x * sourceSpan.width;
+  const section = useRef<HTMLElement>(null);
+  const [caretAt, setCaretAt] = useState(0.5);
+  const x = actions.runPoint?.x;
+  // the caret sits over the mark: the source widget's measured left edge plus the mark's share of its width
+  useLayoutEffect(() => {
+    const place = (): void => {
+      const pane = section.current?.getBoundingClientRect();
+      const src = document.querySelector(`[data-widget="${CSS.escape(widget.id)}"]`)?.getBoundingClientRect();
+      const known =
+        x !== undefined && pane !== undefined && src !== undefined && pane.width > 0 && src.width > 0;
+      setCaretAt(known ? Math.min(1, Math.max(0, (src.left - pane.left + x * src.width) / pane.width)) : 0.5);
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
+  }, [widget.id, x]);
   const open = useOpenRun(widget, scope, traceId);
   const content = useRef<HTMLDivElement>(null);
   const report = useRef(onRows);
@@ -114,6 +127,7 @@ export function RunPane(props: RunPaneProps): JSX.Element {
   const title = open.status === 'ready' ? (open.run.title ?? `Run ${open.run.runId}`) : 'Run';
   return (
     <section
+      ref={section}
       aria-label="Open run"
       data-testid="run-pane"
       className="relative flex flex-col overflow-auto rounded-card border border-hairline bg-surface"

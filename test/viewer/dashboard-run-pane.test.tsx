@@ -148,6 +148,33 @@ describe('the caret and the connector (R36)', () => {
     expect(document.querySelectorAll('[data-testid="run-connector"]')).toHaveLength(1);
   });
 
+  test('the caret is measured from the source widget and pane rects', async () => {
+    const box = (left: number, width: number): DOMRect =>
+      ({
+        left,
+        width,
+        right: left + width,
+        top: 0,
+        height: 200,
+        bottom: 200,
+        x: left,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.getAttribute('data-widget') === 'grid') return box(500, 400);
+      if (this.getAttribute('data-testid') === 'run-pane') return box(0, 1000);
+      return box(0, 1000);
+    });
+    renderShell('#/dashboards/ci', gridSource());
+    const dot = await screen.findByRole('button', { name: /Fix the thing/ });
+    await act(async () => {
+      fireEvent.click(dot, { clientX: 700, clientY: 50 });
+    });
+    const pane = await screen.findByTestId('run-pane');
+    await waitFor(() => expect(within(pane).getByTestId('run-caret').style.left).toBe('70%'));
+  });
+
   test('without a point (a reload) the caret is centred and no connector draws', async () => {
     renderShell(open({ run: { from: 'grid', mode: 'attached' } }), gridSource());
     const pane = await screen.findByTestId('run-pane');

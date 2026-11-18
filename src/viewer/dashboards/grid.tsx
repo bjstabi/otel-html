@@ -114,10 +114,33 @@ function placeInsert(
   const src = layout[at];
   if (src === undefined) return null;
   const y = Math.max(...layout.filter((l) => l.y < src.y + src.h && src.y < l.y + l.h).map((l) => l.y + l.h));
-  // a widget that starts above the line and ends below it (beside the source, not overlapping its span) goes under the pane
   const moved = (l: WidgetLayout): WidgetLayout =>
     l.y >= y ? { ...l, y: l.y + insert.rows } : l.y + l.h > y ? { ...l, y: y + insert.rows } : l;
-  return { y, layout: layout.map(moved) };
+  const next = layout.map(moved);
+  // the grid does not resolve overlap in an input layout: sweep the moved widgets top down and push each below
+  // whatever already placed it now overlaps (the pane included)
+  const apart = (a: WidgetLayout, b: WidgetLayout): boolean =>
+    a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+  const placed: WidgetLayout[] = [{ x: 0, y, w: GRID_COLUMNS, h: insert.rows }];
+  layout.forEach((l, i) => {
+    if (next[i] === l) placed.push(l);
+  });
+  const order = layout
+    .map((_l, i) => i)
+    .filter((i) => next[i] !== layout[i])
+    .sort((a, b) => (next[a]?.y ?? 0) - (next[b]?.y ?? 0));
+  for (const i of order) {
+    const m = { ...(next[i] as WidgetLayout) };
+    for (
+      let hit = placed.find((p) => !apart(m, p));
+      hit !== undefined;
+      hit = placed.find((p) => !apart(m, p))
+    )
+      m.y = hit.y + hit.h;
+    next[i] = m;
+    placed.push(m);
+  }
+  return { y, layout: next };
 }
 
 export interface DashboardGridProps {

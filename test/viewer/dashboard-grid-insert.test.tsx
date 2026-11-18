@@ -113,6 +113,39 @@ test('a widget that crosses the pane line without touching the source span moves
   expect(grid.layout.find((l) => l.i === 'cross')?.y).toBe(13);
 });
 
+test('the moved widgets cascade so that no two items overlap', () => {
+  const ws = DashboardSchema.parse({
+    id: 'd',
+    title: 'D',
+    widgets: [
+      { id: 'a', type: 'timeline', x: 0, y: 0, w: 6, h: 5 },
+      { id: 's', type: 'logs', x: 6, y: 0, w: 6, h: 10 },
+      { id: 'b', type: 'logs', x: 0, y: 5, w: 6, h: 8 },
+      { id: 'c', type: 'logs', x: 0, y: 13, w: 6, h: 5 },
+    ],
+  }).widgets;
+  render(
+    <DashboardGrid
+      widgets={ws}
+      layout={ws.map(({ x, y, w, h }) => ({ x, y, w, h }))}
+      editing={false}
+      onLayout={() => undefined}
+      render={(w) => <p>{w.id}</p>}
+      insert={{ after: 'a', rows: 6, render: () => <p>pane</p> }}
+    />,
+  );
+  const at = (id: string) => grid.layout.find((l) => l.i === id);
+  expect(at(RUN_PANE_ID)?.y).toBe(10);
+  expect(at('b')?.y).toBe(16);
+  expect(at('c')?.y).toBe(24);
+  for (const p of grid.layout)
+    for (const q of grid.layout) {
+      if (p === q) continue;
+      const apart = p.x + p.w <= q.x || q.x + q.w <= p.x || p.y + p.h <= q.y || q.y + q.h <= p.y;
+      expect(apart, `${p.i} and ${q.i}`).toBe(true);
+    }
+});
+
 test('edit mode ignores the insert', () => {
   mount(true);
   expect(screen.queryByTestId('pane')).toBeNull();
