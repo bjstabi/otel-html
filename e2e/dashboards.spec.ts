@@ -316,6 +316,48 @@ test('dragging the slider zooms: the label reads last…, of…, and "↺ full r
   expect(problems).toEqual([]);
 });
 
+test('at 390 px a slider handle is at least 24 px wide', async ({ page, reportUrl }) => {
+  const problems = watchProblems(page);
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto(RUNS_DASHBOARD(reportUrl));
+  const handle = await filterBar(page).getByRole('slider', { name: 'Zoom start' }).boundingBox();
+  if (handle === null) throw new Error('the start handle is laid out');
+  expect(handle.width).toBeGreaterThanOrEqual(24);
+  expect(handle.height).toBeGreaterThanOrEqual(24);
+  expect(problems).toEqual([]);
+});
+
+test('Fusion: three long filter chips never push the buttons out of a widget header', async ({
+  page,
+  reportUrl,
+}) => {
+  const problems = watchProblems(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const vars = {
+    'service.name': 'a-service-with-a-very-long-name',
+    'deployment.environment.name': 'an-environment-with-a-very-long-name',
+    'host.name': 'a-host-with-a-very-long-name',
+  };
+  await page.goto(
+    `${reportUrl('dashboards')}/index.html#/dashboards/fusion?d=${encodeURIComponent(JSON.stringify({ vars }))}`,
+  );
+  const logs = widget(page, 'logs');
+  await expect(logs.getByText('host.name = a-host-with-a-very-long-name')).toBeAttached();
+  const frame = await logs.boundingBox();
+  if (frame === null) throw new Error('the Logs widget is laid out');
+  for (const name of [/follows selection/, /Open in/]) {
+    const button = logs.locator('header').getByRole('button', { name });
+    await expect(button).toBeVisible();
+    const box = await button.boundingBox();
+    if (box === null) throw new Error(`${name} is laid out`);
+    expect(box.x).toBeGreaterThanOrEqual(frame.x);
+    expect(box.x + box.width).toBeLessThanOrEqual(frame.x + frame.width);
+    const clipped = await button.evaluate((el) => el.scrollWidth > el.clientWidth);
+    expect(clipped).toBe(false);
+  }
+  expect(problems).toEqual([]);
+});
+
 test('Checkout: a quick filter sets a chip and its × clears it', async ({ page, reportUrl }) => {
   const problems = watchProblems(page);
   await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/checkout`);
@@ -345,11 +387,14 @@ test('Checkout: the pinned filter bar stays in view while scrolling, the unpinne
   await last.scrollIntoViewIfNeeded();
   await expect(bar).toBeInViewport();
   await page.evaluate(() => window.scrollTo(0, 0));
-  await bar.getByRole('button', { name: 'Unpin filters' }).click();
+  const pin = bar.getByRole('button', { name: 'Pin filters' });
+  await expect(pin).toHaveAttribute('aria-pressed', 'true');
+  await pin.click();
+  await expect(pin).toHaveAttribute('aria-pressed', 'false');
   await last.scrollIntoViewIfNeeded();
   await expect(bar).not.toBeInViewport();
   await page.evaluate(() => window.scrollTo(0, 0));
-  await bar.getByRole('button', { name: 'Pin filters' }).click();
+  await pin.click();
   await last.scrollIntoViewIfNeeded();
   await expect(bar).toBeInViewport();
   expect(problems).toEqual([]);
