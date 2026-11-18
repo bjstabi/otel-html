@@ -16,6 +16,7 @@ import {
 } from './counting-engine.js';
 import {
   buildScalingReport,
+  ciOf,
   isMerged,
   type ScalingReport,
   type Shape,
@@ -184,7 +185,7 @@ export async function stepsFor(entry: CatalogueEntry, axis: Axis): Promise<Step[
   const declared = DECLARED[entry.id];
   const reference = declared?.scanOf === undefined ? entry : entryOf(declared.scanOf);
   const steps: Step[] = [];
-  for (const shape of stepsOf(axis, entry.spacing, isMerged(entry))) {
+  for (const shape of stepsOf(axis, entry.spacing, isMerged(entry), false, ciOf(entry))) {
     const own = await measuredOf(entry, shape);
     const ref = reference === entry ? own : await measuredOf(reference, shape);
     const selectedGroups = (entry.window ? shape.inside : shape.outside + shape.inside) * shape.rowGroups;
@@ -236,7 +237,7 @@ export async function printTable(): Promise<void> {
         continue;
       }
       const parts: string[] = [];
-      for (const shape of stepsOf(axis, entry.spacing, isMerged(entry))) {
+      for (const shape of stepsOf(axis, entry.spacing, isMerged(entry), false, ciOf(entry))) {
         const m = await measuredOf(entry, shape);
         parts.push(`${m.small}+${m.large}`);
       }

@@ -6,7 +6,8 @@ import { type Context, spanRow } from '../../src/format/parquet/rows.js';
 import type { AnyValue } from '../../src/model/anyvalue.js';
 import type { RelNanos, SpanId, TraceId, UnixNanos } from '../../src/model/ids.js';
 import type { ResourceRef, ScopeRef, SpanRecord } from '../../src/model/records.js';
-import { CicdRowSet, encodeCicd } from '../../src/writer/cicd-rows.js';
+import { encodeCicd } from '../../src/writer/cicd-encode.js';
+import { CicdRowSet } from '../../src/writer/cicd-rows.js';
 
 const EPOCH = 1_700_000_000_000_000_000n as UnixNanos;
 const str = (value: string): AnyValue => ({ kind: 'string', value });

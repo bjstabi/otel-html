@@ -3,7 +3,7 @@ import { globSync, readFileSync } from 'node:fs';
 import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { type Axis, CATALOGUE } from '../../src/viewer/data/catalogue.js';
-import { BASE, CROSS, isMerged, type Shape, shapeKey, stepsOf } from './generator.js';
+import { BASE, CROSS, ciOf, isMerged, type Shape, shapeKey, stepsOf } from './generator.js';
 
 /**
  * What the generated scaling reports depend on, as globs relative to the repo root: the lockfile, the writer and what it
@@ -123,7 +123,7 @@ export function scalingShapes(): Shape[] {
   for (const entry of CATALOGUE)
     for (const axis of AXES) {
       if (axis === 'window' && !entry.window) continue;
-      for (const shape of stepsOf(axis, entry.spacing, isMerged(entry))) add(shape);
+      for (const shape of stepsOf(axis, entry.spacing, isMerged(entry), false, ciOf(entry))) add(shape);
       // the compacted cases of classes.test.ts: the `.short` entries on retention and window
       if (axis !== 'density' && entry.id.endsWith('.short'))
         for (const shape of stepsOf(axis, entry.spacing, false, true)) add(shape);

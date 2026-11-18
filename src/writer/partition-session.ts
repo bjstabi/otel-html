@@ -62,7 +62,8 @@ import {
   writeManifest,
   writeStateSlotV2,
 } from './checkpoint.js';
-import { CicdRowSet, encodeCicd } from './cicd-rows.js';
+import { encodeCicd } from './cicd-encode.js';
+import { CicdRowSet } from './cicd-rows.js';
 import { compactPartitions, latestTemplates, timeGroups, timeRangeOf } from './compaction.js';
 import { DedupeSet } from './dedupe.js';
 import { renderIndexHtml } from './html.js';

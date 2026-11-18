@@ -33,7 +33,8 @@ export type Family =
   | 'read by id'
   | 'distinct values'
   | 'patterns'
-  | 'metrics';
+  | 'metrics'
+  | 'rows by trace';
 
 /** One existing value of each kind the point reads and the conditions need (the generator's report holds them). */
 export interface ScalingIds {
@@ -725,6 +726,26 @@ export const CATALOGUE = [
     builders: [...METRIC_CATALOG],
     run: async (ds) => ds.metricsForResources((await ds.metricCatalog()).resources),
   }),
+  // the CI runs that start in the window, from the rows table the writer derived (every partition's file, whole)
+  entry({
+    id: 'cicd.rows',
+    family: 'rows by trace',
+    method: 'cicdRows',
+    builders: ['cicdRowsQuery'],
+    spacing: 'dense',
+    window: true,
+    run: (ds, ctx) => ds.cicdRows({ window: windowOf(ctx), bindings: [], pipeline: null }),
+  }),
+  // the same request on a report whose partitions lack that table: the writer's derivation over their spans
+  entry({
+    id: 'cicd.rows.scan',
+    family: 'rows by trace',
+    method: 'cicdRows',
+    builders: ['cicdSpansQuery'],
+    spacing: 'dense',
+    window: true,
+    run: (ds, ctx) => ds.cicdRows({ window: windowOf(ctx), bindings: [], pipeline: null }),
+  }),
   point({
     id: 'metrics.points',
     family: 'metrics',
@@ -782,6 +803,8 @@ const PERCENTILE_SHORT =
   'percentileOf reads every span of the service and resource; §3.4 leaves it as it is on a short report';
 const TRACE_LIST_SCAN =
   'a trace list under a short window or an attribute condition reads the spans of the traces it matches; §3.4 allows scan';
+const CICD_SCAN =
+  'partitions without the cicd flag (older or upgraded) are answered by deriving the rows from the spans files of every such partition, whatever the window';
 const BY_ID_BASELINE =
   "the rows around a log are read from its partition's logs file, which grows with the density; §3.4 leaves the other reads by id to the baseline";
 
@@ -976,6 +999,13 @@ const BASELINE: Record<string, Declared> = {
   'metrics.runQuery.failed': decl(['fixed', 'fixed', 'files']),
   'metrics.forResources': decl(['fixed', 'fixed', null]),
   'metrics.points': decl(['files', 'fixed', null]),
+  // every partition's rows file is read whole, in parallel, whatever the window: the file count grows with the partitions
+  'cicd.rows': decl(['files', 'files', 'files']),
+  // the scan reads the spans files of every partition without the flag, whatever the window (a trace's rows may sit in any
+  // of them), and those files are read by range: the serial reads grow with the partitions as well as with the density
+  'cicd.rows.scan': decl(['scan', 'scan', 'scan'], {
+    allowed: { retention: CICD_SCAN, density: CICD_SCAN, window: CICD_SCAN },
+  }),
 };
 
 /** The builders whose statements read a traces or patterns file. */

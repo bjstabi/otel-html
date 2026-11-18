@@ -80,6 +80,12 @@ export function tracedDataSource(ds: DataSource): DataSource {
         (r) => r.services.length,
         () => ds.services(opts, signal),
       ),
+    cicdRows: (q, signal) =>
+      query(
+        'cicdRows',
+        (r) => r.length,
+        () => ds.cicdRows(q, signal),
+      ),
     patterns: (q, signal) =>
       query(
         'patterns',

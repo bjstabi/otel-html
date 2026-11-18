@@ -94,6 +94,7 @@ import { TimeBuckets } from '../../rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS } from '../../semconv/severity.js';
 import { durationAxis } from '../traces/views.js';
 import { batcherFor } from './batcher.js';
+import { readCicdRows } from './cicd-query.js';
 import type { DataSource, TraceDetail } from './data-source.js';
 import { metricMethods } from './duckdb-metrics.js';
 import { afterCursor, inReadOrder, readPage } from './list-pages.js';
@@ -1875,6 +1876,7 @@ export function createDuckDbDataSource(opts: {
         caps.facetValueCap,
       );
     },
+    cicdRows: (q, signal) => readCicdRows({ engine: sink, manifest, epoch }, q, signal),
     ...metricMethods({ engine, manifest, epoch, range }),
     close: () => engine.close(),
   };

@@ -1,6 +1,5 @@
 import { attributesFromJson } from '../format/columns.js';
 import type { ColumnBatch } from '../format/parquet/batch.js';
-import { encodeTable } from '../format/parquet/codec.js';
 import type { Row } from '../format/parquet/rows.js';
 import type { AnyValue, Attributes } from '../model/anyvalue.js';
 
@@ -238,9 +237,4 @@ export class CicdRowSet {
 
 function plain(v: AnyValue): unknown {
   return v.kind === 'string' ? v.value : v.kind === 'int' ? Number(v.value) : null;
-}
-
-/** The `cicd.parquet` bytes of `rows` (sorted by trace id, kind and start). */
-export function encodeCicd(rows: readonly Row[], rowGroupRows: number): Uint8Array {
-  return encodeTable('cicd', rows, { rowGroupRows });
 }

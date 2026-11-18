@@ -36,7 +36,8 @@ import { encodeServiceShare, type ShareSpan, serviceShareOf } from '../format/se
 import { OtelHtmlError } from '../model/errors.js';
 import { AttributeKeyCounts } from './attribute-keys.js';
 import { at } from './checkpoint.js';
-import { CicdRowSet, encodeCicd } from './cicd-rows.js';
+import { encodeCicd } from './cicd-encode.js';
+import { CicdRowSet } from './cicd-rows.js';
 import type { FileSystem } from './ports.js';
 import {
   logRollupRows,

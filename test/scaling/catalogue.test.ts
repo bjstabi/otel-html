@@ -5,7 +5,7 @@ import { CATALOGUE, type CatalogueContext, type CatalogueEntry } from '../../src
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import type { LogNeed, SpanNeed } from '../../src/viewer/data/results.js';
 import { openCountingEngine } from '../../test-support/scaling/counting-engine.js';
-import { BASE, buildScalingReport, type ScalingReport } from '../../test-support/scaling/generator.js';
+import { BASE, buildScalingReport, ciOf, type ScalingReport } from '../../test-support/scaling/generator.js';
 
 const SQL_DIR = 'src/query/sql';
 
@@ -32,6 +32,7 @@ async function recording<T extends object>(load: () => Promise<T>): Promise<T> {
 vi.mock('../../src/query/sql/spans.js', () =>
   recording(() => vi.importActual('../../src/query/sql/spans.js')),
 );
+vi.mock('../../src/query/sql/cicd.js', () => recording(() => vi.importActual('../../src/query/sql/cicd.js')));
 vi.mock('../../src/query/sql/logs.js', () => recording(() => vi.importActual('../../src/query/sql/logs.js')));
 vi.mock('../../src/query/sql/points.js', () =>
   recording(() => vi.importActual('../../src/query/sql/points.js')),
@@ -166,7 +167,9 @@ describe('the catalogue', () => {
 
   test('the catalogue names no CI key, widget kind or dashboard', () => {
     // the one routed entry names the request's own field (`widgetIndex`), its id, and the id of its query
-    const own = /traces\.list\.widget|widgetIndex|widgetQuery/g;
+    // and the CI rows entries: their ids, method, builders and the reason a scan is allowed name the table they read
+    const own =
+      /traces\.list\.widget|widgetIndex|widgetQuery|cicd(?:\.rows(?:\.scan)?|Rows\w*|Spans\w*| flag|_SCAN)|CICD_SCAN/g;
     const text = JSON.stringify(CATALOGUE.map((e) => [e.id, e.needs, e.builders]));
     expect(text.replace(own, '')).not.toMatch(/cicd|widget|dashboard/i);
     expect(readFileSync('src/viewer/data/catalogue.ts', 'utf8').replace(own, '')).not.toMatch(
@@ -177,18 +180,28 @@ describe('the catalogue', () => {
 
 describe('each entry runs exactly the builders it names', () => {
   // a long window needs the sparse spacing (a window of two partitions six hours apart); the others use the dense one
-  const reports = new Map<'dense' | 'sparse', ScalingReport>();
+  // the shapes entries run on: the two spacings, and the dense one with CI runs as the writer leaves them and as an upgrade does
+  const SHAPES = [
+    { ...BASE, spacing: 'dense' },
+    { ...BASE, spacing: 'sparse' },
+    { ...BASE, spacing: 'dense', ci: 'flagged' },
+    { ...BASE, spacing: 'dense', ci: 'unflagged' },
+  ] as const;
+  const keyOf = (spacing: string, ci: string | undefined): string =>
+    `${spacing}${ci === undefined ? '' : `-${ci}`}`;
+  const reports = new Map<string, ScalingReport>();
   let close: () => Promise<void>;
-  let make: (spacing: 'dense' | 'sparse') => ReturnType<typeof createDuckDbDataSource>;
+  let make: (key: string) => ReturnType<typeof createDuckDbDataSource>;
 
   beforeAll(async () => {
     const closers: (() => Promise<void>)[] = [];
-    const engines = new Map<'dense' | 'sparse', Awaited<ReturnType<typeof openCountingEngine>>>();
-    for (const spacing of ['dense', 'sparse'] as const) {
-      const report = await buildScalingReport({ ...BASE, spacing });
-      reports.set(spacing, report);
+    const engines = new Map<string, Awaited<ReturnType<typeof openCountingEngine>>>();
+    for (const shape of SHAPES) {
+      const key = keyOf(shape.spacing, 'ci' in shape ? shape.ci : undefined);
+      const report = await buildScalingReport(shape);
+      reports.set(key, report);
       const counting = await openCountingEngine(report.dir, report.manifest);
-      engines.set(spacing, counting);
+      engines.set(key, counting);
       closers.push(async () => {
         await counting.close();
         await report.close();
@@ -197,10 +210,10 @@ describe('each entry runs exactly the builders it names', () => {
     close = async () => {
       for (const c of closers) await c();
     };
-    make = (spacing) => {
-      const report = reports.get(spacing);
-      const counting = engines.get(spacing);
-      if (report === undefined || counting === undefined) throw new Error(`no ${spacing} report`);
+    make = (key) => {
+      const report = reports.get(key);
+      const counting = engines.get(key);
+      if (report === undefined || counting === undefined) throw new Error(`no ${key} report`);
       return createDuckDbDataSource({ engine: counting.engine, manifest: report.manifest });
     };
   }, 180_000);
@@ -213,9 +226,10 @@ describe('each entry runs exactly the builders it names', () => {
     async (_id, entry) => {
       recorded.clear();
       // a fresh data source per entry: the metric catalog and the trace are memoised per source
-      const ds = make(entry.spacing);
-      const report = reports.get(entry.spacing);
-      if (report === undefined) throw new Error(`no ${entry.spacing} report`);
+      const key = keyOf(entry.spacing, ciOf(entry));
+      const ds = make(key);
+      const report = reports.get(key);
+      if (report === undefined) throw new Error(`no ${key} report`);
       const ctx: CatalogueContext = { window: entry.window ? report.window : null, ids: report.ids };
       await entry.run(ds, ctx);
       expect([...recorded].sort()).toEqual([...entry.builders].sort());

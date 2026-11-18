@@ -105,6 +105,7 @@ export function dataSourceOf(
     traceLogs: unused,
     surroundingLogs: unused,
     patterns: () => Promise.resolve({ rows: [], total: 0 }),
+    cicdRows: () => Promise.resolve([]),
     metricCatalog: () => Promise.resolve({ entries: [], resources: [], scopes: [] }),
     metricShowOptions: () => Promise.resolve([]),
     metricQuery: unused,
