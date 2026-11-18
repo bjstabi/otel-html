@@ -41,6 +41,7 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 const key = (k: string): void => {
@@ -65,7 +66,9 @@ describe('context menu', () => {
     expect(menu()).toBeNull();
     act(() => api.open({ x: 10, y: 10 }, 'T', items));
     act(() => {
-      document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+      document.body.dispatchEvent(
+        Object.assign(new Event('pointerdown', { bubbles: true }), { pointerType: 'mouse' }),
+      );
     });
     expect(menu()).toBeNull();
   });
@@ -85,7 +88,6 @@ describe('context menu', () => {
     act(() => api.open({ x: window.innerWidth - 10, y: 5 }, null, items));
     const left = Number.parseFloat(menu()?.style.left ?? '');
     expect(left).toBeLessThanOrEqual(window.innerWidth - 200);
-    vi.restoreAllMocks();
   });
 
   it('opens on a 500 ms touch press, not on 200 ms', () => {
@@ -112,5 +114,76 @@ describe('context menu', () => {
     expect(menu()).toBeNull();
     press(500);
     expect(menu()).not.toBeNull();
+  });
+
+  const down = (target: HTMLElement, x = 5, y = 5): void => {
+    act(() => {
+      target.dispatchEvent(
+        Object.assign(new Event('pointerdown', { bubbles: true }), {
+          pointerType: 'touch',
+          clientX: x,
+          clientY: y,
+        }),
+      );
+    });
+  };
+  const target = (): HTMLElement => document.querySelector('[data-testid="target"]') as HTMLElement;
+
+  it('returns focus to the opener on Escape', () => {
+    const b = document.createElement('button');
+    host.append(b);
+    b.focus();
+    act(() => api.open({ x: 10, y: 10 }, null, items));
+    expect(document.activeElement).not.toBe(b);
+    key('Escape');
+    expect(document.activeElement).toBe(b);
+  });
+
+  it('does not open when the finger moves 20 px before 500 ms', () => {
+    vi.useFakeTimers();
+    down(target());
+    act(() => {
+      target().dispatchEvent(
+        Object.assign(new Event('pointermove', { bubbles: true }), { clientX: 25, clientY: 5 }),
+      );
+      vi.advanceTimersByTime(600);
+    });
+    expect(menu()).toBeNull();
+  });
+
+  it('a re-created triggers object still cancels on pointer-up', () => {
+    vi.useFakeTimers();
+    down(target());
+    act(() => root.render(<Probe />));
+    act(() => {
+      vi.advanceTimersByTime(200);
+      target().dispatchEvent(new Event('pointerup', { bubbles: true }));
+      vi.advanceTimersByTime(600);
+    });
+    expect(menu()).toBeNull();
+  });
+
+  it('swallows the click after a long press opened the menu', () => {
+    vi.useFakeTimers();
+    const onClick = vi.fn();
+    target().addEventListener('click', onClick);
+    down(target());
+    act(() => {
+      vi.advanceTimersByTime(500);
+      target().dispatchEvent(new Event('pointerup', { bubbles: true }));
+    });
+    expect(menu()).not.toBeNull();
+    target().dispatchEvent(new Event('click', { bubbles: true }));
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it('closes on Tab and Home/End move focus', () => {
+    act(() => api.open({ x: 10, y: 10 }, null, items));
+    key('End');
+    expect(document.activeElement?.textContent).toContain('Third');
+    key('Home');
+    expect(document.activeElement?.textContent).toContain('First');
+    key('Tab');
+    expect(menu()).toBeNull();
   });
 });

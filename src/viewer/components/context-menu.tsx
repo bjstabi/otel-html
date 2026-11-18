@@ -1,4 +1,5 @@
 import {
+  type CSSProperties,
   type JSX,
   type MouseEvent,
   type PointerEvent,
@@ -19,16 +20,23 @@ const LONG_PRESS_MS = 500;
 
 export function useContextMenu(): {
   open(at: At, title: string | null, items: readonly MenuItem[]): void;
-  element: JSX.Element;
+  element: JSX.Element | null;
 } {
   const [state, setState] = useState<Open | null>(null);
   const open = useCallback((at: At, title: string | null, items: readonly MenuItem[]) => {
+    if (opener.current === null && document.activeElement instanceof HTMLElement)
+      opener.current = document.activeElement;
     setState({ at, title, items });
   }, []);
-  const close = useCallback(() => setState(null), []);
+  const opener = useRef<HTMLElement | null>(null);
+  const close = useCallback(() => {
+    setState(null);
+    opener.current?.focus();
+    opener.current = null;
+  }, []);
   return {
     open,
-    element: state === null ? <></> : <Menu key={`${state.at.x},${state.at.y}`} {...state} onClose={close} />,
+    element: state === null ? null : <Menu key={`${state.at.x},${state.at.y}`} {...state} onClose={close} />,
   };
 }
 
@@ -66,6 +74,11 @@ function Menu(props: Open & { onClose(): void }): JSX.Element {
     if (e.key === 'Escape') {
       e.preventDefault();
       onClose();
+    } else if (e.key === 'Tab') {
+      onClose();
+    } else if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault();
+      buttons[e.key === 'Home' ? 0 : buttons.length - 1]?.focus();
     } else if (e.key === 'Enter') {
       e.preventDefault();
       buttons[at]?.click();
@@ -111,32 +124,73 @@ function Menu(props: Open & { onClose(): void }): JSX.Element {
   );
 }
 
+type Press = { timer: ReturnType<typeof setTimeout> | undefined; x: number; y: number; fired: boolean };
+const presses = new WeakMap<EventTarget, Press>();
+const MOVE_SLOP = 10;
+const SUPPRESS_MS = 600;
+
+function cancelPress(target: EventTarget): void {
+  const p = presses.get(target);
+  if (p === undefined) return;
+  if (p.timer !== undefined) clearTimeout(p.timer);
+  p.timer = undefined;
+  if (!p.fired) presses.delete(target);
+}
+
+// After a long press opened the menu, the lift is followed by a click (and maybe a contextmenu) on
+// the target; swallow the click once and keep the `fired` mark until it is past.
+function suppressFollowUp(target: EventTarget): void {
+  const swallow = (e: Event): void => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  document.addEventListener('click', swallow, { capture: true, once: true });
+  setTimeout(() => {
+    document.removeEventListener('click', swallow, { capture: true });
+    presses.delete(target);
+  }, SUPPRESS_MS);
+}
+
 export function menuTriggers(open: (at: At) => void): {
   onContextMenu(e: MouseEvent): void;
   onPointerDown(e: PointerEvent): void;
-  onPointerUp(): void;
-  onPointerCancel(): void;
+  onPointerMove(e: PointerEvent): void;
+  onPointerUp(e: PointerEvent): void;
+  onPointerLeave(e: PointerEvent): void;
+  onPointerCancel(e: PointerEvent): void;
+  style: CSSProperties;
 } {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const cancel = (): void => {
-    if (timer !== undefined) clearTimeout(timer);
-    timer = undefined;
-  };
   return {
+    style: { WebkitTouchCallout: 'none' },
     onContextMenu: (e) => {
       e.preventDefault();
+      if (presses.get(e.currentTarget)?.fired === true) return;
       open({ x: e.clientX, y: e.clientY });
     },
     onPointerDown: (e) => {
       if (e.pointerType !== 'touch') return;
-      const at = { x: e.clientX, y: e.clientY };
-      cancel();
-      timer = setTimeout(() => {
-        timer = undefined;
-        open(at);
+      const target = e.currentTarget;
+      cancelPress(target);
+      const press: Press = { timer: undefined, x: e.clientX, y: e.clientY, fired: false };
+      press.timer = setTimeout(() => {
+        press.timer = undefined;
+        press.fired = true;
+        open({ x: press.x, y: press.y });
       }, LONG_PRESS_MS);
+      presses.set(target, press);
     },
-    onPointerUp: cancel,
-    onPointerCancel: cancel,
+    onPointerMove: (e) => {
+      const p = presses.get(e.currentTarget);
+      if (p === undefined || p.fired) return;
+      if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > MOVE_SLOP) cancelPress(e.currentTarget);
+    },
+    onPointerUp: (e) => {
+      const target = e.currentTarget;
+      const fired = presses.get(target)?.fired === true;
+      cancelPress(target);
+      if (fired) suppressFollowUp(target);
+    },
+    onPointerLeave: (e) => cancelPress(e.currentTarget),
+    onPointerCancel: (e) => cancelPress(e.currentTarget),
   };
 }
