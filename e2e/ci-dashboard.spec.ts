@@ -67,7 +67,11 @@ test('a status-grid cell opens the run under the grid, its caret over the cell; 
 
   await pane.getByRole('button', { name: /side panel/ }).click();
   await expect(page.getByTestId('run-pane')).toHaveCount(0);
-  await expect(page.getByRole('tab', { name: 'Jobs' })).toHaveAttribute('aria-selected', 'true');
+  // the panel narrows the page, so all 15 widgets lay out again while it reads the trace: ~0.2 s idle, 2.7-3.8 s with
+  // four WebKit workers on one core, and past the 5 s default on a CI runner
+  await expect(page.getByRole('tab', { name: 'Jobs' })).toHaveAttribute('aria-selected', 'true', {
+    timeout: 15_000,
+  });
   await expect(page.getByTestId('run-gantt')).toBeVisible();
   expect(problems).toEqual([]);
 });
