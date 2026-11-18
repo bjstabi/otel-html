@@ -43,7 +43,7 @@ export const DashboardPageStateSchema: z.ZodType<DashboardPageState> = z.strictO
     .default(null),
 });
 
-/** The URL key `d`: JSON text to a state, or one error line naming the offending path (`d.sel.t`). */
+/** The URL key `d`: JSON text to a state (a `run` with no `sel.trace` to open is dropped), or one error line naming the offending path (`d.sel.t`). */
 export function parseDashboardParam(
   raw: string,
 ): { ok: true; state: DashboardPageState } | { ok: false; error: string } {
@@ -54,7 +54,11 @@ export function parseDashboardParam(
     return { ok: false, error: `d: expected a JSON object, got ${shown(raw)}` };
   }
   const r = DashboardPageStateSchema.safeParse(json);
-  if (r.success) return { ok: true, state: r.data };
+  if (r.success)
+    return {
+      ok: true,
+      state: r.data.run !== null && r.data.sel.trace === null ? { ...r.data, run: null } : r.data,
+    };
   return { ok: false, error: paramError('d', json, r.error.issues[0]) };
 }
 

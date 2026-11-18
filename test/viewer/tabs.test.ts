@@ -1,14 +1,16 @@
 import { describe, expect, test } from 'vitest';
+import type { TraceDetail } from '../../src/viewer/data/data-source.js';
 import type { LogRow } from '../../src/viewer/data/log-query.js';
 import { availableLogTabs, LOG_TAB_IDS, LOG_TABS } from '../../src/viewer/logs/tabs.js';
 import { availableTabs, isTraceTabId, TRACE_TAB_IDS, TRACE_TABS } from '../../src/viewer/traces/tabs.js';
-import { detailOf, traceRow } from './trace-rows.js';
+import { detailOf, str, traceRow } from './trace-rows.js';
 
 const none = { hasMetrics: false };
 
 describe('TRACE_TABS', () => {
   test('lists the tabs in order, logs and metrics before errors', () => {
     expect(TRACE_TABS.map((t) => t.id)).toEqual([
+      'jobs',
       'flame',
       'waterfall',
       'spans',
@@ -18,6 +20,36 @@ describe('TRACE_TABS', () => {
       'errors',
     ]);
     expect([...TRACE_TAB_IDS].sort()).toEqual(TRACE_TABS.map((t) => t.id).sort());
+  });
+
+  test('jobs shows only on a CI run trace (a root span whose resource has cicd.pipeline.run.id)', () => {
+    const plain = detailOf([traceRow(1, null, 0, 10)]);
+    expect(availableTabs(plain, none).map((t) => t.id)).not.toContain('jobs');
+    const resource = (attrs: Record<string, string>): TraceDetail => ({
+      ...plain,
+      resources: () => ({
+        attributes: new Map(Object.entries(attrs).map(([k, v]) => [k, str(v)])),
+        droppedAttributesCount: 0,
+        schemaUrl: '',
+      }),
+    });
+    expect(availableTabs(resource({ 'cicd.pipeline.run.id': '9' }), none).map((t) => t.id)).toContain('jobs');
+    expect(availableTabs(resource({ 'service.name': 'x' }), none).map((t) => t.id)).not.toContain('jobs');
+    // a child span alone does not make a run trace
+    const child = detailOf([traceRow(1, null, 0, 10), traceRow(2, 1, 1, 2)]);
+    expect(
+      availableTabs(
+        { ...resource({ 'cicd.pipeline.run.id': '9' }), spans: child.spans, tree: child.tree },
+        none,
+      ).map((t) => t.id),
+    ).toContain('jobs');
+    const orphan = detailOf([traceRow(2, 1, 1, 2)]);
+    expect(
+      availableTabs(
+        { ...resource({ 'cicd.pipeline.run.id': '9' }), spans: orphan.spans, tree: orphan.tree },
+        none,
+      ).map((t) => t.id),
+    ).not.toContain('jobs');
   });
 
   test('logs shows only when the trace has logs', () => {

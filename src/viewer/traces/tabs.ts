@@ -1,9 +1,11 @@
 import type { SpanId } from '../../model/ids.js';
 import type { SpanRecord } from '../../model/records.js';
 import { StatusCode } from '../../model/records.js';
+import { isRunTrace } from '../cicd/run-trace.js';
 import type { TraceDetail } from '../data/data-source.js';
 
 export const TRACE_TAB_IDS = [
+  'jobs',
   'flame',
   'waterfall',
   'spans',
@@ -37,8 +39,9 @@ function hasErrorSpans(detail: TraceDetail): boolean {
   );
 }
 
-/** Logs shows when the trace has logs; Metrics when its resources have metrics; Errors when a span failed. */
+/** Jobs shows for a CI run trace; Logs shows when the trace has logs; Metrics when its resources have metrics; Errors when a span failed. */
 export const TRACE_TABS: readonly TraceTab[] = [
+  { id: 'jobs', label: 'Jobs', available: isRunTrace },
   { id: 'flame', label: 'Flame graph', available: () => true },
   { id: 'waterfall', label: 'Waterfall', available: () => true },
   { id: 'spans', label: 'Span list', available: () => true },

@@ -44,7 +44,12 @@ const median = (xs: readonly number[]): number | null => quantile(xs, 0.5);
 
 /** A job's status; null when it did not run (skipped). */
 export function jobStatus(j: CiJob): CiStatus | null {
-  const r = j.result.toLowerCase();
+  return resultStatus(j.result);
+}
+
+/** A job or step result as a status; null when it did not run (skipped). */
+export function resultStatus(result: string): CiStatus | null {
+  const r = result.toLowerCase();
   if (r === 'success') return 'success';
   if (r === 'cancellation' || r === 'cancelled' || r === 'canceled') return 'cancelled';
   if (r.startsWith('skip')) return null;

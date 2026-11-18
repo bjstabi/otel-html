@@ -67,6 +67,13 @@ function stackedSpans(widths: readonly number[]): number[] {
   return spans;
 }
 
+/** Whether `spans[i]` is the second of a stacked pair. */
+function pairedBefore(spans: readonly number[], i: number): boolean {
+  let run = 0;
+  for (let k = i - 1; k >= 0 && spans[k] === 1; k--) run++;
+  return run % 2 === 1;
+}
+
 /** One grid item: the widget's place and the bounds that keep a resized layout valid for the config schema. */
 export function layoutItem(id: string, at: WidgetLayout, editing: boolean): LayoutItem {
   return {
@@ -83,6 +90,33 @@ export function layoutItem(id: string, at: WidgetLayout, editing: boolean): Layo
   };
 }
 
+/** The grid item id of the inserted pane. */
+export const RUN_PANE_ID = 'oh-run-pane';
+
+/** A full-width item put under the row of widget `after`, which pushes the rows below it down by `rows`. */
+interface GridInsert {
+  after: string;
+  /** Grid rows the pane takes. */
+  rows: number;
+  render(heightPx: number): JSX.Element;
+}
+
+/**
+ * Where the pane goes: at the largest bottom among the widgets whose vertical span overlaps the source's. The widgets
+ * at or below that line move down by `rows`. Null when `after` is not a widget.
+ */
+function placeInsert(
+  widgets: readonly Widget[],
+  layout: readonly WidgetLayout[],
+  insert: Pick<GridInsert, 'after' | 'rows'>,
+): { y: number; layout: WidgetLayout[] } | null {
+  const at = widgets.findIndex((w) => w.id === insert.after);
+  const src = layout[at];
+  if (src === undefined) return null;
+  const y = Math.max(...layout.filter((l) => l.y < src.y + src.h && src.y < l.y + l.h).map((l) => l.y + l.h));
+  return { y, layout: layout.map((l) => (l.y >= y ? { ...l, y: l.y + insert.rows } : l)) };
+}
+
 export interface DashboardGridProps {
   widgets: readonly Widget[];
   /** `layout[i]` is the position of `widgets[i]`. */
@@ -91,25 +125,52 @@ export interface DashboardGridProps {
   /** The layout after a drag or resize ends, in `widgets` order. */
   onLayout(layout: WidgetLayout[]): void;
   render(widget: Widget, heightPx: number): JSX.Element;
+  /** A pane between rows (the open run); ignored while editing. */
+  insert?: GridInsert;
 }
 
 /** The 12-column grid (20 px rows, 10 px gaps); a vertical stack on narrow screens, where layout editing is off. */
 export function DashboardGrid(props: DashboardGridProps): JSX.Element {
   const { widgets, layout, editing, onLayout, render } = props;
+  const insert = editing ? undefined : props.insert;
   const stacked = useStacked();
   const { width, containerRef, mounted } = useContainerWidth();
-  const placed = widgets.map((widget, i) => ({ widget, at: layout[i] ?? widget }));
+  const base = widgets.map((widget, i) => ({ widget, at: layout[i] ?? widget }));
+  const put =
+    insert === undefined
+      ? null
+      : placeInsert(
+          widgets,
+          base.map(({ at }) => at),
+          insert,
+        );
+  const placed = put === null ? base : base.map((p, i) => ({ ...p, at: put.layout[i] ?? p.at }));
 
   if (stacked) {
     const ordered = [...placed].sort((a, b) => byPosition(a.at, b.at));
     const spans = stackedSpans(ordered.map(({ at }) => at.w));
+    const source = insert === undefined ? -1 : ordered.findIndex(({ widget }) => widget.id === insert.after);
+    // the pane follows the whole stacked row that holds its source: a pair stays together
+    const paneAfter =
+      source === -1
+        ? -1
+        : spans[source] === 1 && spans[source + 1] === 1 && !pairedBefore(spans, source)
+          ? source + 1
+          : source;
     return (
       <div className="grid grid-cols-2 gap-2.5">
-        {ordered.map(({ widget, at }, i) => (
+        {ordered.flatMap(({ widget, at }, i) => [
           <div key={widget.id} style={{ height: widgetHeightPx(at.h), gridColumn: `span ${spans[i] ?? 2}` }}>
             {render(widget, widgetHeightPx(at.h))}
-          </div>
-        ))}
+          </div>,
+          ...(insert !== undefined && i === paneAfter
+            ? [
+                <div key={RUN_PANE_ID} style={{ gridColumn: 'span 2' }}>
+                  {insert.render(widgetHeightPx(insert.rows))}
+                </div>,
+              ]
+            : []),
+        ])}
       </div>
     );
   }
@@ -119,7 +180,12 @@ export function DashboardGrid(props: DashboardGridProps): JSX.Element {
       {mounted && (
         <ReactGridLayout
           width={width}
-          layout={placed.map(({ widget, at }) => layoutItem(widget.id, at, editing))}
+          layout={[
+            ...placed.map(({ widget, at }) => layoutItem(widget.id, at, editing)),
+            ...(insert === undefined || put === null
+              ? []
+              : [layoutItem(RUN_PANE_ID, { x: 0, y: put.y, w: GRID_COLUMNS, h: insert.rows }, false)]),
+          ]}
           gridConfig={{
             cols: GRID_COLUMNS,
             rowHeight: ROW_PX,
@@ -135,6 +201,9 @@ export function DashboardGrid(props: DashboardGridProps): JSX.Element {
           {placed.map(({ widget, at }) => (
             <div key={widget.id}>{render(widget, widgetHeightPx(at.h))}</div>
           ))}
+          {insert !== undefined && put !== null && (
+            <div key={RUN_PANE_ID}>{insert.render(widgetHeightPx(insert.rows))}</div>
+          )}
         </ReactGridLayout>
       )}
     </div>

@@ -89,4 +89,12 @@ describe('the d URL key', () => {
     expect(isPristine(store.getState().dashboard ?? EMPTY_DASHBOARD_STATE)).toBe(false);
     expect(serializeUrlState(selectionToUrlState(store.getState()))).not.toBe('');
   });
+  test('a run with no sel.trace is dropped, one with a trace is kept', () => {
+    const dropped = parseDashboardParam('{"run":{"from":"w1","mode":"panel"}}');
+    expect(dropped.ok && dropped.state.run).toBeNull();
+    const kept = parseDashboardParam(
+      JSON.stringify({ sel: { trace: 'a'.repeat(32) }, run: { from: 'w1', mode: 'attached' } }),
+    );
+    expect(kept.ok && kept.state.run).toEqual({ from: 'w1', mode: 'attached' });
+  });
 });

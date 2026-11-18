@@ -1,9 +1,17 @@
 import { Menu } from '@base-ui/react/menu';
 import { ChevronDown, Copy, LayoutDashboard, Pencil } from 'lucide-react';
 import { type JSX, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import type { RunControls, Variable, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
+import {
+  GRID_COLUMNS,
+  type RunControls,
+  type Variable,
+  type Widget,
+  type WidgetLayout,
+  type WidgetType,
+} from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import { RunActionsProvider } from '../cicd/run-actions.js';
+import { OpenRunBody, RunPane } from '../cicd/run-pane.js';
 import { CicdProvider } from '../cicd/use-cicd.js';
 import { CicdWidget } from '../cicd/widget.js';
 import type { DataSource } from '../data/data-source.js';
@@ -90,6 +98,8 @@ export const WIDGETS: Record<WidgetType, WidgetRenderer> = {
   cicd: CicdWidget,
 };
 
+/** The run pane's height until its content is measured. */
+const DEFAULT_PANE_ROWS = 12;
 const CARD = 'max-w-xl rounded-card border border-hairline bg-surface p-6';
 
 /** The header's echo of the page filters: a chip per active variable, filled when the widget honours it. */
@@ -295,10 +305,20 @@ function DashboardView(props: {
   /** Counts the widgets report for their frames ("12 in selected time"), by widget id. */
   const [subtitles, setSubtitles] = useState<Readonly<Record<string, string>>>({});
   const stacked = useStacked();
+  /** The attached run pane's height in grid rows, as its content measures. */
+  const [paneRows, setPaneRows] = useState(DEFAULT_PANE_ROWS);
+  const setTab = useSelection((s) => s.setTab);
   const epoch = parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano');
   const layout = props.layout ?? layoutOf(d.widgets);
   const session = useRunSession();
   const controls = useSyncExternalStore(session.subscribe, () => session.controlsOf(d.id));
+  const panelRun = state.run?.mode === 'panel' && state.sel.trace !== null;
+  // the side panel opens on the Jobs tab and leaves the tab as it found it
+  useEffect(() => {
+    if (!panelRun) return;
+    setTab('trace', 'jobs');
+    return () => setTab('trace', 'flame');
+  }, [panelRun, setTab]);
 
   /** Applies `fn` to the state as it is now, so two quick changes never overwrite each other. */
   const change = useCallback(
@@ -434,6 +454,24 @@ function DashboardView(props: {
     );
   };
 
+  // the open run: from a `cicd` widget that is still on the page, attached under it or in the trace panel
+  const runFrom = state.run === null ? undefined : d.widgets.find((w) => w.id === state.run?.from);
+  const runWidget = runFrom?.type === 'cicd' ? runFrom : undefined;
+  const runScope = runWidget === undefined ? undefined : scopes.get(runWidget.id)?.scope;
+  const openTrace = state.sel.trace;
+  const closeRun = (): void => change((s) => ({ ...s, run: null, sel: { ...s.sel, trace: null } }));
+  const sourceAt = runWidget === undefined ? undefined : layout[d.widgets.indexOf(runWidget)];
+  const attachedRun =
+    state.run?.mode === 'attached' && runWidget !== undefined && runScope !== undefined && openTrace !== null
+      ? { widget: runWidget, scope: runScope, traceId: openTrace }
+      : null;
+  const panelRunBody =
+    panelRun && runWidget !== undefined && runScope !== undefined && openTrace !== null
+      ? { widget: runWidget, scope: runScope, traceId: openTrace }
+      : null;
+  // (the caret points at the source widget's centre; the views do not report their mark's x)
+  const caretAt = stacked || sourceAt === undefined ? 0.5 : (sourceAt.x + sourceAt.w / 2) / GRID_COLUMNS;
+
   const actions = (
     <>
       <DashboardSwitcher entries={entries} />
@@ -468,80 +506,109 @@ function DashboardView(props: {
   );
 
   return (
-    <PageChrome title={d.title} manifest={manifest} actions={actions} timeRange={false}>
-      <div className="flex flex-col gap-3">
-        <PageOptionNotice
-          message={
-            stale.length === 0
-              ? null
-              : `This link refers to widgets or variables this dashboard does not have: ${stale.join(', ')}`
-          }
-          onReset={() => change(() => EMPTY_DASHBOARD_STATE)}
-        />
-        {values.status === 'error' && (
-          <p role="alert" className="font-mono text-xs text-critical">
-            Could not read the variables' values: {values.message}
-          </p>
-        )}
-        {values.status === 'loading' && (
-          <p role="status" aria-busy="true" className="text-sm text-muted">
-            Loading variables…
-          </p>
-        )}
-        <FilterBar
-          dashboard={d}
-          manifest={manifest}
-          values={values.status === 'ready' ? values.value : null}
-          bound={bound}
-          state={state}
-          onVars={(vars) => change((s) => ({ ...s, vars }))}
-          onZoom={(z, live) =>
-            change((s) => ({ ...s, sel: { ...s.sel, t: z === null ? null : zoomText(z, anchor) } }), live)
-          }
-          slider={
-            extent === null
-              ? null
-              : {
-                  extent: [extent.start, extent.end],
-                  zoom: sel.t === null ? null : [sel.t.start, sel.t.end],
-                  preset: presetOf(page, manifest, !anchored),
-                  epoch: BigInt(manifest.epochUnixNano),
-                }
-          }
-        />
-        <SelectionChips
-          state={state}
-          epoch={epoch}
-          {...(anchor === null ? {} : { anchor })}
-          outside={outside}
-          onChange={(next) => change(() => next)}
-        />
-        {bound !== null && (
-          <CicdProvider dataSource={dataSource} extent={extent}>
-            <RunActionsProvider dashboard={d} state={state} change={change} dataSource={dataSource}>
+    <CicdProvider dataSource={dataSource} extent={extent}>
+      <RunActionsProvider dashboard={d} state={state} change={change} dataSource={dataSource}>
+        <PageChrome title={d.title} manifest={manifest} actions={actions} timeRange={false}>
+          <div className="flex flex-col gap-3">
+            <PageOptionNotice
+              message={
+                stale.length === 0
+                  ? null
+                  : `This link refers to widgets or variables this dashboard does not have: ${stale.join(', ')}`
+              }
+              onReset={() => change(() => EMPTY_DASHBOARD_STATE)}
+            />
+            {values.status === 'error' && (
+              <p role="alert" className="font-mono text-xs text-critical">
+                Could not read the variables' values: {values.message}
+              </p>
+            )}
+            {values.status === 'loading' && (
+              <p role="status" aria-busy="true" className="text-sm text-muted">
+                Loading variables…
+              </p>
+            )}
+            <FilterBar
+              dashboard={d}
+              manifest={manifest}
+              values={values.status === 'ready' ? values.value : null}
+              bound={bound}
+              state={state}
+              onVars={(vars) => change((s) => ({ ...s, vars }))}
+              onZoom={(z, live) =>
+                change((s) => ({ ...s, sel: { ...s.sel, t: z === null ? null : zoomText(z, anchor) } }), live)
+              }
+              slider={
+                extent === null
+                  ? null
+                  : {
+                      extent: [extent.start, extent.end],
+                      zoom: sel.t === null ? null : [sel.t.start, sel.t.end],
+                      preset: presetOf(page, manifest, !anchored),
+                      epoch: BigInt(manifest.epochUnixNano),
+                    }
+              }
+            />
+            <SelectionChips
+              state={state}
+              epoch={epoch}
+              {...(anchor === null ? {} : { anchor })}
+              outside={outside}
+              onChange={(next) => change(() => next)}
+            />
+            {bound !== null && (
               <DashboardGrid
                 widgets={d.widgets}
                 layout={layout}
                 editing={editing}
                 onLayout={props.onLayout}
                 render={renderWidget}
+                {...(attachedRun === null
+                  ? {}
+                  : {
+                      insert: {
+                        after: attachedRun.widget.id,
+                        rows: paneRows,
+                        render: (heightPx: number) => (
+                          <RunPane
+                            key={attachedRun.traceId}
+                            {...attachedRun}
+                            dataSource={dataSource}
+                            caretAt={caretAt}
+                            heightPx={heightPx}
+                            onRows={setPaneRows}
+                            onClose={closeRun}
+                          />
+                        ),
+                      },
+                    })}
               />
-            </RunActionsProvider>
-          </CicdProvider>
-        )}
-      </div>
-      {logRef !== null && (
-        <LogPanel dataSource={dataSource} logRef={logRef} onClose={() => clear('logRef')} />
-      )}
-      {traceId !== null && (
-        <TracePanel
-          dataSource={dataSource}
-          traceId={traceId}
-          layout="overlay"
-          onClose={() => clear('traceId')}
-        />
-      )}
-    </PageChrome>
+            )}
+          </div>
+          {logRef !== null && (
+            <LogPanel dataSource={dataSource} logRef={logRef} onClose={() => clear('logRef')} />
+          )}
+          {panelRunBody !== null ? (
+            <TracePanel
+              dataSource={dataSource}
+              traceId={panelRunBody.traceId}
+              layout="overlay"
+              onClose={closeRun}
+              renderJobs={() => <OpenRunBody {...panelRunBody} dataSource={dataSource} />}
+            />
+          ) : (
+            traceId !== null && (
+              <TracePanel
+                dataSource={dataSource}
+                traceId={traceId}
+                layout="overlay"
+                onClose={() => clear('traceId')}
+              />
+            )
+          )}
+        </PageChrome>
+      </RunActionsProvider>
+    </CicdProvider>
   );
 }
 
