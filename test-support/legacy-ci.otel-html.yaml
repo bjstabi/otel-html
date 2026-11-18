@@ -1,0 +1,92 @@
+# The CI dashboard before the cicd widget type: spans-scanning widgets (traces, toplists, run charts). The shipped CI
+# config no longer has them; tests of the widget_traces index, the toplist rollups and run charts use this copy.
+title: CI
+viewer:
+  home: dashboards
+  defaultDashboard: ci
+  defaultWindow: 7d
+dashboards:
+  - id: ci
+    title: CI
+    variables:
+      - key: cicd.pipeline.name
+        label: workflow
+      - key: cicd.pipeline.run.id
+        label: run
+      - key: cicd.pipeline.task.name
+        label: job
+    widgets:
+      - type: timeline
+        x: 0
+        y: 0
+        w: 12
+        h: 6
+      - type: metric
+        title: Job duration
+        x: 0
+        y: 6
+        w: 12
+        h: 20
+        runBy: resource.attributes["cicd.pipeline.run.id"]
+        failedWhen: attributes["cicd.pipeline.task.run.result"] == "failure" or attributes["cicd.pipeline.task.run.result"] == "timeout" or attributes["cicd.pipeline.task.run.result"] == "error"
+        queries:
+          - id: a
+            metric: cicd.pipeline.task.run.duration
+            where: resource.attributes["cicd.pipeline.name"] == "ci"
+            show: avg
+            by: ['attributes["cicd.pipeline.task.name"]']
+        display: lines
+      - type: metric
+        title: Queue time
+        x: 0
+        y: 38
+        w: 12
+        h: 12
+        runBy: resource.attributes["cicd.pipeline.run.id"]
+        controls:
+          split: false
+        queries:
+          - id: a
+            metric: cicd.pipeline.task.run.queue.duration
+            where: resource.attributes["cicd.pipeline.name"] == "ci"
+            show: avg
+            by: ['attributes["cicd.pipeline.task.name"]']
+      - type: toplist
+        # Steps counts the publisher's step spans by name; the query keeps it to them.
+        title: Steps
+        x: 0
+        y: 26
+        w: 6
+        h: 12
+        signal: spans
+        query: instrumentation_scope.name == "otel-html-ci" and attributes["github.job.step.number"] != nil
+        groupBy: span.name
+      - type: toplist
+        # Slowest steps ranks the same spans by their longest duration.
+        title: Slowest steps
+        x: 6
+        y: 26
+        w: 6
+        h: 12
+        signal: spans
+        query: instrumentation_scope.name == "otel-html-ci" and attributes["github.job.step.number"] != nil
+        groupBy: span.name
+        measure: duration.max
+      - type: traces
+        title: Runs
+        x: 0
+        y: 50
+        w: 6
+        h: 10
+        mode: traces
+        # The run span sits on the run's resource, so with `job` set the job span (unless skipped) is what lists the run.
+        # The scope term lets the scan skip the row groups that hold only test spans, and keeps the root spans of other
+        # instrumentation out of the list (#270).
+        query: instrumentation_scope.name == "otel-html-ci" and (IsRootSpan() or (attributes["cicd.pipeline.task.run.id"] != nil and attributes["cicd.pipeline.task.run.result"] != "skip"))
+      - type: logs
+        title: Warnings and errors
+        x: 6
+        y: 50
+        w: 6
+        h: 10
+        query: severity_number >= 13

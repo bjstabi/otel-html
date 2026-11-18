@@ -472,10 +472,10 @@ function partitionJson(shape: Shape, n: number): Record<string, unknown>[] {
   ];
 }
 
-/** The dashboards of the shipped CI config. */
+/** The dashboards of the legacy CI config copy (test-support/legacy-ci.otel-html.yaml): the spans-scanning widgets the live site had before the cicd type, which the scaling shapes model. */
 function ciDashboards(): unknown[] {
   return (
-    parse(readFileSync(join(import.meta.dirname, '../../.github/otel-html-ci.yaml'), 'utf8')) as {
+    parse(readFileSync(join(import.meta.dirname, '../legacy-ci.otel-html.yaml'), 'utf8')) as {
       dashboards: unknown[];
     }
   ).dashboards;

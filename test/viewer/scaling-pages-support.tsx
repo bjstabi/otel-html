@@ -66,12 +66,12 @@ function withMetric(value: unknown, metric: string): unknown {
 }
 
 /**
- * The shipped CI dashboard, with the statistics keys the writer adds for the variables of a dashboard and its metric
+ * The CI dashboard as the live site had it before the cicd widgets (the legacy copy: its page scans spans, which the scaling catalogue pins), with the statistics keys the writer adds for the variables of a dashboard and its metric
  * queries pointed at the metric of the generated report (a query of a metric the report lacks asks nothing).
  */
 export function manifestWithCi(base: ManifestV4, metric: string): ManifestV4 {
   const config = ConfigSchema.parse(
-    withMetric(parse(readFileSync('.github/otel-html-ci.yaml', 'utf8')), metric),
+    withMetric(parse(readFileSync('test-support/legacy-ci.otel-html.yaml', 'utf8')), metric),
   );
   const keys = config.dashboards.flatMap((d) =>
     (d.dashboard.variables ?? []).map((v) => `resource:${typeof v === 'string' ? v : v.key}`),

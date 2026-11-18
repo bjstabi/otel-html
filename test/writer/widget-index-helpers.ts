@@ -8,7 +8,7 @@ import type { JsonObject } from '../../test-support/otlp-builders.js';
 import { otlp } from '../../test-support/writer-deps.js';
 import { spanIdOf, traceIdOf } from './helpers.js';
 
-const CI_YAML = '.github/otel-html-ci.yaml';
+const CI_YAML = 'test-support/legacy-ci.otel-html.yaml';
 export const T0 = 1_700_000_000_000_000_000n;
 
 export async function ciConfig(): Promise<ResolvedConfig> {

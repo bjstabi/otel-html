@@ -15,7 +15,10 @@ vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 const logger = { debug() {}, info() {}, warn() {}, error() {} };
 
 it('a routed statement reads the widget_traces files the host allows', async () => {
-  const input = (await loadConfigFile(createNodeFileSystem(), '.github/otel-html-ci.yaml')) as ConfigInput;
+  const input = (await loadConfigFile(
+    createNodeFileSystem(),
+    'test-support/legacy-ci.otel-html.yaml',
+  )) as ConfigInput;
   const fixture = await buildFormat4Report(
     [ciRequest([{ i: 1 }, { i: 2, job: 'success', task: 'build' }, ...filler(400)])],
     { config: input, close: false },

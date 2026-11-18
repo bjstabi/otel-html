@@ -81,7 +81,7 @@ describe('rawOnly', () => {
 });
 
 describe('the CI dashboard toplists', () => {
-  const config = ConfigSchema.parse(parse(readFileSync('.github/otel-html-ci.yaml', 'utf8')));
+  const config = ConfigSchema.parse(parse(readFileSync('test-support/legacy-ci.otel-html.yaml', 'utf8')));
   const dimensions = rollupDimensions('spans', statisticsKeysFor('spans', config));
   const toplists = config.dashboards.flatMap((d) =>
     d.dashboard.widgets.flatMap((w) => (w.type === 'toplist' && w.signal === 'spans' ? [w] : [])),

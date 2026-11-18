@@ -12,7 +12,7 @@ import { BASE, CROSS, ciOf, isMerged, type Shape, shapeKey, stepsOf } from './ge
  */
 export const REPORT_CACHE_SOURCES: readonly string[] = [
   'pnpm-lock.yaml',
-  '.github/otel-html-ci.yaml',
+  'test-support/legacy-ci.otel-html.yaml',
   'src/config/**',
   'src/format/**',
   'src/model/**',

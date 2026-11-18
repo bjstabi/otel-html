@@ -338,7 +338,7 @@ describe('the Traces widget names its indexed condition', () => {
 });
 
 describe('the CI Runs widget and the writer agree on the condition', () => {
-  const file = '.github/otel-html-ci.yaml';
+  const file = 'test-support/legacy-ci.otel-html.yaml';
   const { config } = resolveConfig({
     file: parse(readFileSync(file, 'utf8')),
     env: {},

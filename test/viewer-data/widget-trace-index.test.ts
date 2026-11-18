@@ -74,7 +74,7 @@ beforeAll(async () => {
   query = widget.query;
   const fs = createMemoryFileSystem();
   await fs.mkdirp('/c');
-  await fs.writeTextAtomic('/c/ci.yaml', await readFile('.github/otel-html-ci.yaml', 'utf8'));
+  await fs.writeTextAtomic('/c/ci.yaml', await readFile('test-support/legacy-ci.otel-html.yaml', 'utf8'));
   const input = (await loadConfigFile(fs, '/c/ci.yaml')) as ConfigInput;
   indexed = await buildFormat4Report(
     [

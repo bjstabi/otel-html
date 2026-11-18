@@ -14,7 +14,7 @@ import type { WriterDeps } from '../../../src/writer/session.js';
 import { span, traceRequest } from '../../../test-support/otlp-builders.js';
 import { fakeViewerAssets } from '../../../test-support/writer-deps.js';
 
-const CI_CONFIG = '.github/otel-html-ci.yaml';
+const CI_CONFIG = 'test-support/legacy-ci.otel-html.yaml';
 let dir: string;
 let deps: WriterDeps;
 beforeEach(async () => {
