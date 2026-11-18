@@ -323,6 +323,7 @@
     "test/writer/attribute-keys.test.ts": 0.1,
     "test/writer/background-checkpoint.test.ts": 0.8,
     "test/writer/bun-embedded-assets.test.ts": 0.1,
+    "test/writer/cicd-rows.test.ts": 0.3,
     "test/writer/compaction-widget-keys.test.ts": 1.2,
     "test/writer/compaction.test.ts": 6.3,
     "test/writer/crash.test.ts": 0.6,
