@@ -23,7 +23,7 @@ import { CONTROL, POPUP } from '../shell/controls.js';
 import { useGoTo } from '../shell/go-to.js';
 import { CopyButton, PageChrome } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
-import { absoluteTime, activePreset } from '../shell/time-range.js';
+import { activePreset, shortTime } from '../shell/time-range.js';
 import type { UrlPatch } from '../state/carry.js';
 import { type DashboardPageState, EMPTY_DASHBOARD_STATE, withoutStaleRun } from '../state/dashboard-state.js';
 import type { Page } from '../state/page-options.js';
@@ -161,7 +161,7 @@ function zoomText(z: readonly [number, number], anchor: bigint | null): string {
 }
 
 function windowText(w: TimeWindow | null, epoch: ReturnType<typeof parseUnixNanos>): string {
-  return w === null ? 'entire run' : `${absoluteTime(w.start, epoch)} – ${absoluteTime(w.end, epoch)}`;
+  return w === null ? 'entire run' : `${shortTime(w.start, epoch)} – ${shortTime(w.end, epoch)}`;
 }
 
 /**

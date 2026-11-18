@@ -366,6 +366,13 @@ describe('failures', () => {
     expect(state.run).toBeNull();
   });
 
+  it('shows the run time as a short local date and time on one line', async () => {
+    await show(widget('failures'), failing());
+    const when = q<HTMLElement>(`[data-failure="${TRACE(2)}"] span`);
+    expect(when.textContent).not.toMatch(/\d{4}-\d\d-\d\dT|\.\d{3}Z/);
+    expect(when.className).toContain('whitespace-nowrap');
+  });
+
   it('opens a keyboard-activated chip menu at the chip, not at the screen corner', async () => {
     await show(widget('failures'), failing());
     const chip = q<HTMLElement>(`[data-failure="${TRACE(2)}"] [data-job-chip="test"]`);

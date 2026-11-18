@@ -58,3 +58,26 @@ test('the chips clip inside their own group; the header actions never shrink', (
   expect(screen.getByRole('button', { name: /follows selection/ }).className).toContain('shrink-0');
   expect(screen.getByRole('button', { name: /Open in Logs/ }).className).toContain('shrink-0');
 });
+
+test('the follow toggle keeps its name and title and hides its words in a narrow header', () => {
+  if (widget === undefined) throw new Error('no widget');
+  render(
+    <WidgetFrame
+      resetKey="k"
+      widget={widget}
+      subtitle="s"
+      following={true}
+      onFollow={() => undefined}
+      openIn={null}
+      editing={false}
+    >
+      <div />
+    </WidgetFrame>,
+  );
+  const toggle = screen.getByRole('button', { name: /follows selection/ });
+  expect(toggle.getAttribute('title')).toBe('Follows the selection');
+  const words = [...toggle.querySelectorAll('span')].find((e) => e.textContent === 'follows selection');
+  expect(words?.className).toMatch(/\bhidden\b/);
+  expect(words?.className).toMatch(/@\[[^\]]+\]:inline/);
+  expect(toggle.closest('header')?.className).toMatch(/@container/);
+});

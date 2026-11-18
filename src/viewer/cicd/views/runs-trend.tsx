@@ -1,13 +1,12 @@
 import { type JSX, useMemo, useRef } from 'react';
-import { formatDuration } from '../../../semconv/formatters.js';
 import { Chart } from '../../components/chart.js';
 import { useContextMenu } from '../../components/context-menu.js';
 import type { WidgetRenderer } from '../../dashboards/dashboard-page.js';
 import { useEpoch } from '../../dashboards/widgets/layout.js';
 import { useSubtitle } from '../../dashboards/widgets/subtitle.js';
-import { absoluteTime } from '../../shell/time-range.js';
 import { useTheme } from '../../theme/theme-provider.js';
 import { bucketOf, trendBuckets } from '../derive.js';
+import { axisTime, durationText } from '../format.js';
 import { useRunActions } from '../run-actions.js';
 import { useCicd } from '../use-cicd.js';
 import { CicdBody, chartPx, indexOf, pointOf, resultColors, ringSeries } from './body.js';
@@ -85,11 +84,11 @@ export const RunsTrendView: WidgetRenderer = ({
       },
       xAxis: {
         type: 'category',
-        data: buckets.map((b) => absoluteTime(b.t, epoch)),
+        data: buckets.map((b) => axisTime(b.t, epoch, trend.step)),
         axisLabel: { hideOverlap: true },
       },
       yAxis: [
-        { type: 'value', axisLabel: { formatter: (v: number) => formatDuration(v) } },
+        { type: 'value', axisLabel: { formatter: (v: number) => durationText(v) } },
         { type: 'value', minInterval: 1, splitLine: { show: false } },
       ],
       series: [

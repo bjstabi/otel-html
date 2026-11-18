@@ -1,13 +1,12 @@
 import { type JSX, useMemo, useState } from 'react';
-import { formatDuration } from '../../../semconv/formatters.js';
 import { Chart } from '../../components/chart.js';
 import { menuTriggers } from '../../components/context-menu.js';
 import type { WidgetRenderer } from '../../dashboards/dashboard-page.js';
 import { useEpoch } from '../../dashboards/widgets/layout.js';
 import { useSubtitle } from '../../dashboards/widgets/subtitle.js';
-import { absoluteTime } from '../../shell/time-range.js';
 import { useTheme } from '../../theme/theme-provider.js';
 import { type JobRow, jobsTable } from '../derive.js';
+import { axisTime, durationText } from '../format.js';
 import { useRunActions } from '../run-actions.js';
 import { useCicd } from '../use-cicd.js';
 import {
@@ -85,7 +84,7 @@ function DeltaCell({ row }: { row: JobRow }): JSX.Element {
   return (
     <span
       className="flex items-center gap-1.5"
-      title={`median of the last 10 passed runs ${formatDuration(row.deltaB)}, the 20 before ${formatDuration(row.deltaA)}`}
+      title={`median of the last 10 passed runs ${durationText(row.deltaB)}, the 20 before ${durationText(row.deltaA)}`}
     >
       <span className="relative h-2 w-14 shrink-0">
         <span className="absolute inset-y-0 left-1/2 w-px bg-hairline" />
@@ -96,7 +95,7 @@ function DeltaCell({ row }: { row: JobRow }): JSX.Element {
       </span>
       <span className={`font-mono text-xs ${slower ? 'text-critical' : 'text-good-ink'}`}>
         {sign}
-        {formatDuration(Math.abs(row.delta))}
+        {durationText(Math.abs(row.delta))}
       </span>
     </span>
   );
@@ -145,15 +144,15 @@ export const JobsView: WidgetRenderer = ({
           const x = trend.points[p.dataIndex];
           return x === undefined
             ? ''
-            : `<b>${escapeHtml(x.run.title ?? `Run ${x.run.runId}`)}</b><br/>${x.status} · ${formatDuration(x.duration)}`;
+            : `<b>${escapeHtml(x.run.title ?? `Run ${x.run.runId}`)}</b><br/>${x.status} · ${durationText(x.duration)}`;
         },
       },
       xAxis: {
         type: 'category',
-        data: trend.points.map((p) => absoluteTime(p.run.start, epoch)),
+        data: trend.points.map((p) => axisTime(p.run.start, epoch, 0)),
         axisLabel: { hideOverlap: true },
       },
-      yAxis: { type: 'value', axisLabel: { formatter: (v: number) => formatDuration(v) } },
+      yAxis: { type: 'value', axisLabel: { formatter: (v: number) => durationText(v) } },
       series: [
         {
           type: 'line',
@@ -240,8 +239,8 @@ export const JobsView: WidgetRenderer = ({
                         {row.name}
                       </button>
                       <JobSpark row={row} />
-                      <span className="text-right font-mono text-xs">{formatDuration(row.latest)}</span>
-                      <span className="text-right font-mono text-xs">{formatDuration(row.median)}</span>
+                      <span className="text-right font-mono text-xs">{durationText(row.latest)}</span>
+                      <span className="text-right font-mono text-xs">{durationText(row.median)}</span>
                       <DeltaCell row={row} />
                       <span
                         className={`text-right font-mono text-xs ${row.failed[0] > 0 ? 'text-critical' : 'text-muted'}`}

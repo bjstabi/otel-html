@@ -106,7 +106,7 @@ export function WidgetFrame(props: WidgetFrameProps): JSX.Element {
       data-widget={widget.id}
       className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-card border border-hairline bg-surface"
     >
-      <header className="flex items-center gap-2 border-b border-hairline px-3 py-1.5">
+      <header className="@container flex items-center gap-2 border-b border-hairline px-3 py-1.5">
         {props.editing && (
           <button
             type="button"
@@ -125,12 +125,14 @@ export function WidgetFrame(props: WidgetFrameProps): JSX.Element {
           <button
             type="button"
             aria-pressed={following}
+            aria-label="follows selection"
             onClick={() => props.onFollow(!following)}
             title={following ? 'Follows the selection' : 'Ignores the selection'}
             className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs text-ink-2 hover:bg-hairline aria-pressed:bg-ink aria-pressed:text-page"
           >
             <Link2 size={12} aria-hidden />
-            follows selection
+            {/* a narrow header (a small tile) shows the icon only; the name and title carry the words */}
+            <span className="hidden @[22rem]:inline">follows selection</span>
           </button>
         )}
         {openIn !== null && (

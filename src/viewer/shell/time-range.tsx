@@ -53,6 +53,17 @@ export function absoluteTime(rel: number, epoch: UnixNanos): string {
   return formatTime(rel as RelNanos, epoch);
 }
 
+/** A local date and time on one line (`Nov 11, 22:10`), in the browser's locale; `timeZone` is for tests. */
+export function shortTime(rel: number, epoch: UnixNanos, timeZone?: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone,
+  }).format(Number(epoch / 1_000_000n) + rel / 1e6);
+}
+
 /** The preset window anchored at the run end; the whole run when the run is shorter than the preset. */
 function presetWindow(range: Range, widthNs: number | null): TimeWindow | null {
   if (widthNs === null || range.end - range.start <= widthNs) return null;

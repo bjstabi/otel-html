@@ -1,9 +1,9 @@
 import { type JSX, type RefObject, useEffect, useMemo, useRef, useState } from 'react';
 import { parseTraceId } from '../../../model/ids.js';
-import { formatDuration } from '../../../semconv/formatters.js';
 import type { WidgetRenderer } from '../../dashboards/dashboard-page.js';
 import { useSubtitle } from '../../dashboards/widgets/subtitle.js';
 import type { DataSource } from '../../data/data-source.js';
+import { durationText } from '../format.js';
 import { pointFromClick, useRunActions } from '../run-actions.js';
 import type { CiRun } from '../runs.js';
 import { type SuiteFile, type TestSuite, testSuites } from '../test-suites.js';
@@ -86,7 +86,7 @@ function FileRow(props: { file: SuiteFile; longest: number; open: boolean; toggl
             style={{ width: `${((file.ms / longest) * 100).toFixed(1)}%` }}
           />
         </span>
-        <span className="w-16 shrink-0 text-right font-mono text-xs">{formatDuration(file.ms * MS)}</span>
+        <span className="w-16 shrink-0 text-right font-mono text-xs">{durationText(file.ms * MS)}</span>
         <span className="w-16 shrink-0 text-right text-xs text-muted">
           {plural(file.tests.length, 'test')}
         </span>
@@ -107,7 +107,7 @@ function FileRow(props: { file: SuiteFile; longest: number; open: boolean; toggl
               </span>
               {t.project !== null && <span className="text-muted">{t.project}</span>}
               <span className="w-16 text-right font-mono">
-                {t.skipped ? 'skipped' : formatDuration(t.ms * MS)}
+                {t.skipped ? 'skipped' : durationText(t.ms * MS)}
               </span>
             </li>
           ))}

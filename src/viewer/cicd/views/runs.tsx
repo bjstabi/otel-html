@@ -1,8 +1,8 @@
 import { type JSX, useMemo } from 'react';
-import { formatDuration } from '../../../semconv/formatters.js';
 import { Chart } from '../../components/chart.js';
 import type { WidgetRenderer } from '../../dashboards/dashboard-page.js';
 import { useTheme } from '../../theme/theme-provider.js';
+import { durationText } from '../format.js';
 import { useRunActions } from '../run-actions.js';
 import type { CiRun } from '../runs.js';
 import { useCicd } from '../use-cicd.js';
@@ -48,7 +48,7 @@ export const RunsView: WidgetRenderer = ({ widget, scope, height }): JSX.Element
       yAxis: {
         type: 'value',
         max: maxDuration * 1.08,
-        axisLabel: { formatter: (v: number) => formatDuration(v) },
+        axisLabel: { formatter: (v: number) => durationText(v) },
       },
       series: [
         {
@@ -114,7 +114,7 @@ export const RunsView: WidgetRenderer = ({ widget, scope, height }): JSX.Element
 function tooltip(r: CiRun): string {
   const lines = [
     `<b>${escapeHtml(r.title ?? `Run ${r.runId}`)}</b>`,
-    `${r.result} · ${formatDuration(r.duration)}${r.attempt > 1 ? ` · attempt ${r.attempt}` : ''}`,
+    `${r.result} · ${durationText(r.duration)}${r.attempt > 1 ? ` · attempt ${r.attempt}` : ''}`,
     [r.trigger, r.branch]
       .filter((x): x is string => x !== null)
       .map(escapeHtml)

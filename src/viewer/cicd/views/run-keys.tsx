@@ -1,5 +1,5 @@
 import { type JSX, type KeyboardEvent, type MouseEvent, useCallback, useState } from 'react';
-import { formatDuration } from '../../../semconv/formatters.js';
+import { durationText } from '../format.js';
 import type { RunActions } from '../run-actions.js';
 import type { CiRun } from '../runs.js';
 
@@ -81,7 +81,7 @@ export function useRunKeys(
       <span aria-live="polite" className="sr-only">
         {!focused || run === undefined
           ? ''
-          : `${run.title ?? `Run ${run.runId}`} · ${run.result} · ${formatDuration(run.duration)}`}
+          : `${run.title ?? `Run ${run.runId}`} · ${run.result} · ${durationText(run.duration)}`}
       </span>
     ),
   };

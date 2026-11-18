@@ -89,6 +89,19 @@ test('the status grid is reachable by keyboard: Tab lands on a run dot, the arro
   await expect(page.getByTestId('run-pane')).toBeVisible();
 });
 
+test('the follow toggle of a narrow stat tile stays inside its header', async ({ page, reportUrl }) => {
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await openCi(page, reportUrl('ci'));
+  const tile = page
+    .locator('[data-widget]')
+    .filter({ has: page.getByRole('button', { name: /follows selection/ }) })
+    .first();
+  const header = await tile.locator('header').boundingBox();
+  const toggle = await tile.getByRole('button', { name: /follows selection/ }).boundingBox();
+  if (header === null || toggle === null) throw new Error('both are laid out');
+  expect(toggle.x + toggle.width).toBeLessThanOrEqual(header.x + header.width + 1);
+});
+
 test('Filter the page by job sets the chip; the runs view ignores it, the jobs view echoes it', async ({
   page,
   reportUrl,

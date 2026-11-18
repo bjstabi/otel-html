@@ -1,9 +1,9 @@
 import { type JSX, type KeyboardEvent, useMemo, useState } from 'react';
-import { formatDuration } from '../../../semconv/formatters.js';
 import { menuTriggers } from '../../components/context-menu.js';
 import type { WidgetRenderer } from '../../dashboards/dashboard-page.js';
 import { useSubtitle } from '../../dashboards/widgets/subtitle.js';
 import { statusGrid } from '../derive.js';
+import { durationText } from '../format.js';
 import { centreOf, pointFromClick, RunRing, useRunActions } from '../run-actions.js';
 import { useCicd } from '../use-cicd.js';
 import { CicdBody } from './body.js';
@@ -104,7 +104,7 @@ export const StatusGridView: WidgetRenderer = ({ widget, scope, actions: page })
                         }
                       }}
                     >
-                      <title>{`${r.title ?? `Run ${r.runId}`} · ${r.result} · ${formatDuration(r.duration)}`}</title>
+                      <title>{`${r.title ?? `Run ${r.runId}`} · ${r.result} · ${durationText(r.duration)}`}</title>
                     </circle>
                   );
                 })}

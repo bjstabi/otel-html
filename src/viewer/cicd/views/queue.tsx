@@ -1,8 +1,8 @@
 import { type JSX, useMemo } from 'react';
-import { formatDuration } from '../../../semconv/formatters.js';
 import type { WidgetRenderer } from '../../dashboards/dashboard-page.js';
 import { useSubtitle } from '../../dashboards/widgets/subtitle.js';
 import { queue } from '../derive.js';
+import { durationText } from '../format.js';
 import { useRunActions } from '../run-actions.js';
 import { useCicd } from '../use-cicd.js';
 import { CicdBody } from './body.js';
@@ -53,7 +53,7 @@ export const QueueView: WidgetRenderer = ({ widget, scope, actions: page }): JSX
                   </button>
                   <span
                     className="relative h-3 flex-1 rounded-sm bg-hairline/40"
-                    title={`p50 ${formatDuration(r.p50)}, p95 ${formatDuration(r.p95)}, longest ${formatDuration(r.max)}`}
+                    title={`p50 ${durationText(r.p50)}, p95 ${durationText(r.p95)}, longest ${durationText(r.max)}`}
                   >
                     <span
                       className="absolute inset-y-0.5 rounded-sm bg-accent"
@@ -65,7 +65,7 @@ export const QueueView: WidgetRenderer = ({ widget, scope, actions: page }): JSX
                     <span className="absolute inset-y-0 w-px bg-ink" style={{ left: pct(r.max) }} />
                   </span>
                   <span className="w-44 shrink-0 text-right font-mono text-xs text-muted">
-                    {formatDuration(r.p50)} – {formatDuration(r.p95)} · n {r.n}
+                    {durationText(r.p50)} – {durationText(r.p95)} · n {r.n}
                   </span>
                 </li>
               ))}

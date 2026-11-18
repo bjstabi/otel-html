@@ -228,6 +228,19 @@ describe('runs-trend', () => {
     expect(new Set(bars.map((x) => x.stack)).size).toBe(1);
   });
 
+  it('labels the x axis in local time without ISO text and shows a zero duration as 0 s', async () => {
+    await show(widget('runs-trend'), sevenDays());
+    const o = lastChart().option as unknown as {
+      xAxis: { data: string[] };
+      yAxis: { axisLabel: { formatter(v: number): string } }[];
+    };
+    expect(o.xAxis.data.length).toBeGreaterThan(0);
+    for (const l of o.xAxis.data) expect(l).not.toMatch(/\d{4}-\d\d-\d\dT|\.\d{3}Z/);
+    // two-day buckets: the date only
+    expect(o.xAxis.data[0]).not.toMatch(/\d:\d\d/);
+    expect(o.yAxis[0]?.axisLabel.formatter(0)).toBe('0 s');
+  });
+
   it('offers "Zoom the slider to this bucket", which writes whole nanoseconds', async () => {
     await show(widget('runs-trend'), sevenDays());
     const handler = on('contextmenu');

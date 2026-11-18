@@ -3,8 +3,8 @@ import { menuTriggers } from '../../components/context-menu.js';
 import type { WidgetRenderer } from '../../dashboards/dashboard-page.js';
 import { useEpoch } from '../../dashboards/widgets/layout.js';
 import { useSubtitle } from '../../dashboards/widgets/subtitle.js';
-import { absoluteTime } from '../../shell/time-range.js';
 import { failedRunCount, failures } from '../derive.js';
+import { shortTime } from '../format.js';
 import { pointFromClick, useRunActions } from '../run-actions.js';
 import { useCicd } from '../use-cicd.js';
 import { CicdBody } from './body.js';
@@ -54,8 +54,8 @@ export const FailuresView: WidgetRenderer = ({ widget, scope, dataSource, action
                     onClick={(e) => openRun(run, pointFromClick(e))}
                     {...menuTriggers((at) => runMenu(run, at))}
                   >
-                    <span className="w-28 shrink-0 font-mono text-xs text-muted">
-                      {absoluteTime(run.start, epoch)}
+                    <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted">
+                      {shortTime(run.start, epoch)}
                     </span>
                     <span className="min-w-0 flex-1">
                       <button type="button" className="block max-w-full truncate text-left text-ink">
