@@ -39,6 +39,25 @@ describe('parquet table schemas', () => {
     }
   });
 
+  test('cicd: times int64, counts int32, the rest utf8; kind, trigger, pipeline and result are dictionaries', () => {
+    const byName = new Map(TABLE_COLUMNS.cicd.map((c) => [c.name, c]));
+    for (const n of ['start_ns', 'end_ns', 'queued_ns']) expect(byName.get(n)?.type).toBe('int64');
+    for (const n of ['attempt', 'tasks_replayed', 'tasks_run']) expect(byName.get(n)?.type).toBe('int32');
+    for (const c of TABLE_COLUMNS.cicd) {
+      if (!['start_ns', 'end_ns', 'queued_ns', 'attempt', 'tasks_replayed', 'tasks_run'].includes(c.name))
+        expect(c.type, c.name).toBe('utf8');
+      expect(c.dictionary, c.name).toBe(
+        ['kind', 'trigger', 'pipeline', 'result', 'trace_id', 'span_id', 'name', 'condition'].includes(
+          c.name,
+        ),
+      );
+      expect(c.nullable, c.name).toBe(!['kind', 'trace_id', 'start_ns', 'end_ns'].includes(c.name));
+    }
+    expect(SORT_COLUMNS.cicd).toEqual(['trace_id', 'kind', 'start_ns']);
+    expect(TIME_COLUMN.cicd).toBe('start_ns');
+    expect(FIXED_STATISTICS_COLUMNS.cicd).toEqual([]);
+    expect(TABLES.at(-1)).toBe('cicd');
+  });
   test('logs may have no time and carry an event_name dictionary column', () => {
     const logs = TABLE_COLUMNS.logs;
     expect(logs.find((c) => c.name === 'time_unix_nano')).toMatchObject({ type: 'int64', nullable: true });

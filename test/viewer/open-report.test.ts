@@ -327,7 +327,7 @@ describe('openReport', () => {
   test('a format-3 manifest rejects with the D12 text and starts nothing', async () => {
     const { deps, parts } = setup();
     await expect(openReport(manifest3, deps, () => undefined)).rejects.toThrow(
-      'This report is format 3; this viewer reads formats 5 to 7. `otel-html merge <report> --out <new>` converts it.',
+      'This report is format 3; this viewer reads formats 5 to 8. `otel-html merge <report> --out <new>` converts it.',
     );
     expect(parts.startEngine).not.toHaveBeenCalled();
   });

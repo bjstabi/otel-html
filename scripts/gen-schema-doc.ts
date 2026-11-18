@@ -27,10 +27,11 @@ const TABLE_NOTES: Readonly<Record<Table, string>> = {
     'Log records counted per time grain and dimension combination (format 5; optional per partition).',
   widget_traces:
     'The traces each indexed dashboard traces widget matches, one row per distinct condition, trace and variable values (format 7; optional per partition).',
+  cicd: 'One row per CI run, job and per-trace tasks summary, derived from the partition spans (format 8; written only when the partition entry says `cicd: true` and there are rows).',
 };
 
 const MANIFEST_FIELDS = {
-  formatVersion: '`5`, `6` or `7` (this reader opens all three; the writer produces 7)',
+  formatVersion: '`5`, `6`, `7` or `8` (this reader opens all four; the writer produces 8)',
   otelHtmlVersion: 'the version of otel-html that wrote the report',
   title: 'the report title',
   epochUnixNano:
@@ -148,8 +149,8 @@ spans, so none of them is the trace's share; a reader must not use one as the wh
 - Readers combine patterns across partitions by template.`,
     `## The views
 
-The viewer reads the data only through seven views, one per table (\`spans\`, \`logs\`, \`points\`, \`traces\`,
-\`patterns\`, \`span_rollups\`, \`log_rollups\`; \`widget_traces\` has none, its columns differ per report). Each view has the name of its table and is the union of that table's file in every partition that lists
+The viewer reads the data only through eight views, one per table (\`spans\`, \`logs\`, \`points\`, \`traces\`,
+\`patterns\`, \`span_rollups\`, \`log_rollups\`, \`cicd\`; \`widget_traces\` has none, its columns differ per report). Each view has the name of its table and is the union of that table's file in every partition that lists
 one, in manifest order. It has the table's columns, in the order above, then two virtual columns:
 
 | column | type | meaning |
@@ -167,7 +168,7 @@ A table that no partition holds is an empty view with the same columns.
 - Attributes are JSON text columns, and an attribute is read by JSON Pointer (RFC 6901, \`~\` as \`~0\`, \`/\` as \`~1\`). An
   object with a \`$\`-prefixed or \`__proto__\` key is stored as \`{"$m": [[key, value], ...]}\`, so a reader looks a key up
   in the object first and then in those pairs.
-- A backend satisfies the contract by defining the same views with these columns: the seven names, the table columns
+- A backend satisfies the contract by defining the same views with these columns: the eight names, the table columns
   above and the two virtual columns.`,
     `## Manifest (\`data/manifest.js\`)
 
@@ -177,7 +178,7 @@ The manifest is a script that registers its JSON payload. Its fields:
 |---|---|
 ${fieldRows(MANIFEST_FIELDS)}
 
-Each \`partitions\` entry is \`{ n, source, files }\`. \`files\` has an entry per table the partition holds, with these fields:
+Each \`partitions\` entry is \`{ n, source, files }\`, and in format 8 may add \`cicd: true\` (a writer derived the \`cicd\` table from the partition's spans; the viewer reads \`files.cicd\` for such a partition, and scans the spans for one without the flag). \`files\` has an entry per table the partition holds, with these fields:
 
 | field | meaning |
 |---|---|

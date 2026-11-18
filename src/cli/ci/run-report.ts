@@ -36,13 +36,13 @@ export interface NewManifestOptions {
   version: string;
 }
 
-/** An empty, `complete: false` format-7 manifest (no stored epoch; the in-memory anchor is derived as a read derives it, and `withSharesFormat` upgrades a format-5 manifest an older build left on disk) in `site` format with `statisticsKeysFor` each table from `config`. */
+/** An empty, `complete: false` format-8 manifest (no stored epoch; the in-memory anchor is derived as a read derives it, and `withSharesFormat` upgrades a format-5 manifest an older build left on disk) in `site` format with `statisticsKeysFor` each table from `config`. */
 export function newRunManifest(o: NewManifestOptions): ManifestV4 {
   const statisticsKeys = Object.fromEntries(
     STATISTICS_TABLES.map((t) => [t, statisticsKeysFor(t, o.config)]),
   ) as StatisticsKeys;
   return {
-    formatVersion: 7,
+    formatVersion: 8,
     otelHtmlVersion: o.version,
     title: o.title,
     epochUnixNano: (BigInt(Date.parse(o.createdAt)) * 1_000_000n).toString(),
@@ -128,9 +128,9 @@ function entryFrom(
 }
 
 /**
- * The manifest as a format-7 report when it is older and an added partition uses a format-6 or format-7 feature: a
+ * The manifest as a format-8 report when it is older and an added partition uses a format-6, format-7 or format-8 feature: a
  * stored service share (format 6, no stored epoch: `manifestForWrite` drops it, and a read derives the anchor), a
- * `widget_traces` file, a rollup's `refused` keys or a spans or logs file's `attributeKeys` (format 7). Else as it is.
+ * `widget_traces` file, a rollup's `refused` keys or a spans or logs file's `attributeKeys` (format 7), or a `cicd` flag or file (format 8). Else as it is.
  */
 function withSharesFormat(manifest: ManifestV4, added: readonly PartitionEntry[]): ManifestV4 {
   const shares = manifest.formatVersion < 6 && added.some((e) => e.files.traces?.serviceShare === true);
@@ -142,8 +142,9 @@ function withSharesFormat(manifest: ManifestV4, added: readonly PartitionEntry[]
       e.files.span_rollups?.rollup?.refused !== undefined ||
       e.files.log_rollups?.rollup?.refused !== undefined,
   );
-  if (manifest.formatVersion >= 7 || !(shares || needs7)) return manifest;
-  return { ...manifest, formatVersion: 7 };
+  const needs8 = added.some((e) => e.cicd === true || e.files.cicd !== undefined);
+  if (manifest.formatVersion >= 8 || !(shares || needs7 || needs8)) return manifest;
+  return { ...manifest, formatVersion: 8 };
 }
 
 function totalsAndRange(partitions: readonly PartitionEntry[]): Pick<ManifestV4, 'totals' | 'range'> {

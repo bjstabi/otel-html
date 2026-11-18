@@ -199,7 +199,7 @@ describe('appending to an older report', () => {
       const raw = reviveDataJson(
         unwrapDataFile(readFileSync(join(dir, 'data/manifest.js'), 'utf8'), MANIFEST_KEY),
       );
-      expect((raw as { formatVersion: number }).formatVersion).toBe(7);
+      expect((raw as { formatVersion: number }).formatVersion).toBe(8);
       const m = parseAnyManifest(raw);
       if (!isPartitioned(m)) throw new Error('not a partition manifest');
       const withIndex = m.partitions.filter((p) => p.files.widget_traces !== undefined);

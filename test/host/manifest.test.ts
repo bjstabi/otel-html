@@ -51,17 +51,17 @@ describe('readHostManifest', () => {
     expect(e.message).toContain(`no report found at ${dir} (missing data/manifest.js)`);
   });
 
-  it('a format-8 report is refused as an unknown format, naming the version', async () => {
+  it('a format-9 report is refused as an unknown format, naming the version', async () => {
     const fixture = await buildFormat4Report([spansOnlyRequest(2)], { close: false });
     const report = await writeReportDir(fixture);
     cleanups.push(report.close);
     const path = join(report.dir, 'data/manifest.js');
     const text = await readFile(path, 'utf8');
-    await writeFile(path, text.replace('"formatVersion":5', '"formatVersion":8'));
+    await writeFile(path, text.replace('"formatVersion":5', '"formatVersion":9'));
     const e = await failure(readHostManifest(createNodeFileSystem(), report.dir));
     expect(e.code).toBe('invalid-report');
     expect(e.path).toBe('manifest.formatVersion');
-    expect(e.actual).toBe('8');
+    expect(e.actual).toBe('9');
   });
 
   it('a format-4 report is invalid-report with the old-format message', async () => {

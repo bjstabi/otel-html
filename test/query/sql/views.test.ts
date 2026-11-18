@@ -53,7 +53,7 @@ describe('format-4 views', () => {
   });
   test('viewStatements of an empty manifest creates seven empty views', async () => {
     const stmts = viewStatements(emptyManifest(), (p) => p);
-    expect(stmts).toHaveLength(7);
+    expect(stmts).toHaveLength(8);
     for (const s of stmts) expect(s).toMatch(/WHERE false$/);
     expect(stmts.some((s) => s.includes('widget_traces'))).toBe(false);
     const db = await openTestDb();
@@ -62,6 +62,31 @@ describe('format-4 views', () => {
       expect(first(db.rows(`SELECT count(*) AS n FROM ${table}`), 'n')).toBe(0n);
     }
     db.close();
+  });
+  test('a manifest with a cicd file creates the cicd view over it', () => {
+    const m = emptyManifest();
+    m.formatVersion = 8;
+    m.partitions = [
+      {
+        n: 0,
+        source: 'flush:0',
+        cicd: true,
+        files: {
+          cicd: {
+            path: 'data/partitions/000000/cicd.parquet',
+            bytes: 1,
+            rows: 1,
+            timeMin: '1',
+            timeMax: '1',
+            values: {},
+          },
+        },
+      },
+    ];
+    const cicd = viewStatements(m, (p) => `r/${p}`).filter((s) => s.includes('VIEW "cicd"'));
+    expect(cicd).toHaveLength(1);
+    expect(cicd[0]).toContain("read_parquet(['r/data/partitions/000000/cicd.parquet']");
+    expect(cicd[0]).not.toMatch(/WHERE false$/);
   });
   test('a manifest that lists widget_traces files still creates no widget_traces view', () => {
     const m = emptyManifest();
@@ -92,7 +117,7 @@ describe('format-4 views', () => {
     const f = await buildFormat4Report([spansOnlyRequest(3)]);
     const base = viewStatements(f.manifest, (p) => p, 'base');
     const rollups = viewStatements(f.manifest, (p) => p, 'rollups');
-    expect(base).toHaveLength(5);
+    expect(base).toHaveLength(6);
     expect(rollups).toHaveLength(2);
     expect([...base, ...rollups].sort()).toEqual(viewStatements(f.manifest, (p) => p).sort());
     for (const s of base) expect(s).not.toContain('_rollups');

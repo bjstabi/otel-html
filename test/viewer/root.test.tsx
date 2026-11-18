@@ -74,7 +74,7 @@ describe('the format gate (D12)', () => {
 
   test('a format-3 manifest fails with the merge hint', () => {
     expect(() => requireFormat4(v3)).toThrow(
-      'This report is format 3; this viewer reads formats 5 to 7. `otel-html merge <report> --out <new>` converts it.',
+      'This report is format 3; this viewer reads formats 5 to 8. `otel-html merge <report> --out <new>` converts it.',
     );
   });
 
@@ -89,7 +89,7 @@ describe('the format gate (D12)', () => {
     };
     render(<Root load={load} history={createHashHistory(window)} />);
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toContain('This report is format 3; this viewer reads formats 5 to 7.');
+    expect(alert.textContent).toContain('This report is format 3; this viewer reads formats 5 to 8.');
   });
 });
 
@@ -124,7 +124,7 @@ describe('a failed load', () => {
   });
 
   test('the moved-or-incomplete hint is not shown for the format refusal', async () => {
-    const refusal = new Error('This report is format 3; this viewer reads formats 5 to 7. Convert it.');
+    const refusal = new Error('This report is format 3; this viewer reads formats 5 to 8. Convert it.');
     render(<Root load={() => Promise.reject(refusal)} history={createHashHistory(window)} />);
     await screen.findByText('This report could not be loaded');
     expect(screen.getByRole('alert').textContent).not.toContain('incomplete or moved');

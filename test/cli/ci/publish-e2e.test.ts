@@ -106,7 +106,7 @@ test('the rolling merge skips a format-4 run report with a warning and writes th
   // Turn "four" into what a format-4 writer left: its manifest says format 4, which this otel-html no longer reads.
   const m = manifestOf(w, 'four');
   await w.fs.writeTextAtomic('four/data/manifest.js', wrapDataFile(MANIFEST_KEY, { ...m, formatVersion: 4 }));
-  expect(manifestOf(w, 'five').formatVersion).toBe(7);
+  expect(manifestOf(w, 'five').formatVersion).toBe(8);
 
   // The deployer's rolling merge: the format-4 run report is skipped with a warning, the format-6 one is written.
   const warnings: string[] = [];
@@ -123,7 +123,7 @@ test('the rolling merge skips a format-4 run report with a warning and writes th
   expect(warnings[0]).toContain('skipping four: ');
   expect(warnings[0]).toContain(oldFormatMessage(4));
   const merged = manifestOf(w, 'both');
-  expect(merged.formatVersion).toBe(7);
+  expect(merged.formatVersion).toBe(8);
   expect(merged.totals.spans).toBe(1);
   expect(tableRowsOf(w, 'both', 'spans')).toHaveLength(1);
 });

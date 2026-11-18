@@ -961,6 +961,8 @@ export async function compactPartitions(
     for (const table of TABLES) {
       // `widget_traces` is derived from a partition's spans, never merged from its inputs.
       if (table === 'widget_traces') continue;
+      // `cicd` is derived from spans and is not merged by compaction yet: a compacted partition carries no `cicd` flag and is read by span scan.
+      if (table === 'cicd') continue;
       const rollupTable = table === 'span_rollups' || table === 'log_rollups' ? table : null;
       const plan = rollupTable === null ? undefined : plans[rollupTable];
       if (rollupTable !== null && plan === undefined) continue;
