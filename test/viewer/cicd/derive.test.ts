@@ -20,6 +20,9 @@ import type { CicdRow } from '../../../src/viewer/data/cicd-query.js';
 const SEC = 1_000_000_000;
 const MIN = 60 * SEC;
 const DAY = 24 * 60 * MIN;
+const HOUR = 60 * MIN;
+// relative 0 is a local midnight
+const EPOCH = BigInt(new Date(2026, 0, 1).getTime()) * 1_000_000n;
 
 const job = (name: string, start: number, secs: number, over: Partial<CiJob> = {}): CiJob => ({
   name,
@@ -135,7 +138,7 @@ describe('stat', () => {
 
 describe('trendBuckets', () => {
   test('12 runs over 7 days: at most 6 buckets, so 2 d', () => {
-    const t = trendBuckets(twelve(), [0, 7 * DAY]);
+    const t = trendBuckets(twelve(), [0, 7 * DAY], EPOCH);
     expect(t.step).toBe(2 * DAY);
     expect(t.buckets).toHaveLength(4);
     expect(t.buckets.map((b) => b.runs.length)).toEqual([4, 4, 4, 0]);
@@ -146,11 +149,45 @@ describe('trendBuckets', () => {
 
   test('257 runs over 7 days: 6 h', () => {
     const runs = Array.from({ length: 257 }, (_, i) => run((i * 7 * DAY) / 257));
-    expect(trendBuckets(runs, [0, 7 * DAY]).step).toBe(6 * 60 * MIN);
+    expect(trendBuckets(runs, [0, 7 * DAY], EPOCH).step).toBe(6 * 60 * MIN);
   });
 
   test('no runs: empty buckets', () => {
-    expect(trendBuckets([], [0, 7 * DAY])).toEqual({ step: 2 * DAY, buckets: [] });
+    expect(trendBuckets([], [0, 7 * DAY], EPOCH)).toEqual({ step: 2 * DAY, buckets: [] });
+  });
+
+  // The relative time of a local wall-clock moment.
+  const at = (epoch: bigint, month: number, day: number, hour: number, minute = 0): number =>
+    Number(BigInt(new Date(2026, month, day, hour, minute).getTime()) * 1_000_000n - epoch);
+  // an epoch at local 2026-01-01 18:34
+  const EVENING = BigInt(new Date(2026, 0, 1, 18, 34).getTime()) * 1_000_000n;
+
+  test("day buckets start at local midnight, so a run before the window start's time of day keeps its date", () => {
+    // 21 runs over a week starting 18:34: floor(21/3) = 7 buckets allowed, 7 d / 1 d = 7, so the step is 1 d.
+    const runs = Array.from({ length: 21 }, (_, i) =>
+      run(at(EVENING, 0, 2 + Math.floor(i / 3), 3 + 7 * (i % 3))),
+    );
+    const late = run(at(EVENING, 0, 8, 17, 34)); // Jan 8 17:34, inside the window, before 18:34
+    const t = trendBuckets([...runs, late], [0, 7 * DAY], EVENING);
+    expect(t.step).toBe(DAY);
+    expect(t.buckets.map((b) => b.t)).toEqual([1, 2, 3, 4, 5, 6, 7, 8].map((d) => at(EVENING, 0, d, 0)));
+    expect(t.buckets.map((b) => b.end)).toEqual([2, 3, 4, 5, 6, 7, 8, 9].map((d) => at(EVENING, 0, d, 0)));
+    expect(t.buckets[7]?.runs).toContain(late);
+    expect(t.buckets.map((b) => b.runs.length)).toEqual([0, 3, 3, 3, 3, 3, 3, 4]);
+  });
+
+  test('sub-day buckets start on the step grid from local midnight', () => {
+    const t = trendBuckets([run(0), run(HOUR), run(5 * HOUR)], [0, 6 * HOUR], EVENING);
+    expect(t.step).toBe(HOUR);
+    expect(t.buckets[0]?.t).toBe(-34 * MIN);
+    expect(t.buckets).toHaveLength(7);
+    expect(t.buckets.at(-1)?.t).toBe(at(EVENING, 0, 2, 0));
+    expect(t.buckets.map((b) => b.runs.length)).toEqual([1, 1, 0, 0, 0, 1, 0]);
+  });
+
+  test('runs outside the span are left out of the partial buckets', () => {
+    const t = trendBuckets([run(-10 * MIN), run(6 * HOUR + MIN), run(MIN)], [0, 6 * HOUR], EVENING);
+    expect(t.buckets.reduce((s, b) => s + b.runs.length, 0)).toBe(1);
   });
 });
 
@@ -274,7 +311,7 @@ describe('bucketOf', () => {
   test('the index of the bucket that holds the run, else null', () => {
     const a = run(0);
     const b = run(2 * DAY);
-    const { buckets } = trendBuckets([a, b], [0, 4 * DAY]);
+    const { buckets } = trendBuckets([a, b], [0, 4 * DAY], EPOCH);
     const i = bucketOf(buckets, b.traceId);
     expect(i).not.toBeNull();
     expect(buckets[i ?? -1]?.runs).toContain(b);
@@ -388,8 +425,8 @@ describe('empty input', () => {
     const results = [
       stat('success-rate', [], []),
       stat('queue-p95', [], []),
-      trendBuckets([], [0, 0]),
-      trendBuckets([], [5, 1]),
+      trendBuckets([], [0, 0], 0n),
+      trendBuckets([], [5, 1], 0n),
       jobsTable([], []),
       statusGrid([], 60),
       failures([], 10),
@@ -399,7 +436,7 @@ describe('empty input', () => {
       rerunsAndCancelled([]),
     ];
     expect(stat('median-run', [], []).value).toBe('–');
-    expect(trendBuckets([], [0, DAY]).buckets).toEqual([]);
+    expect(trendBuckets([], [0, DAY], 0n).buckets).toEqual([]);
     expect(statusGrid([], 60).rows).toEqual([]);
     everyNumberFinite(results);
   });
@@ -413,7 +450,7 @@ describe('empty input', () => {
       ...(['success-rate', 'median-run', 'cache', 'minutes', 'queue-p95', 'reruns'] as const).map((k) =>
         stat(k, runs, runs),
       ),
-      trendBuckets(runs, [0, 0]),
+      trendBuckets(runs, [0, 0], EPOCH),
       jobsTable(runs, runs),
       statusGrid(runs, 60),
       triggers(runs),

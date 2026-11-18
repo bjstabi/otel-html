@@ -386,7 +386,7 @@ A `metric` widget with `runBy` is a run chart: one point per CI run instead of o
 | `view` | shows | follows the variables |
 | --- | --- | --- |
 | `stat` | one tile, by `stat`: `success-rate`, `median-run`, `cache` (median duration of runs that replayed no task over the median of the others; `–` when either side is empty), `minutes`, `queue-p95` or `reruns`. It shows the change against the same length of time before the range, coloured so that better is green, and a sparkline for `median-run`, `minutes` and `queue-p95` | trigger, branch |
-| `runs-trend` | p50 and p95 run duration over stacked passed, failed and cancelled counts per bucket (the subtitle names the bucket); a bucket's right-click menu zooms the slider to it | trigger, branch |
+| `runs-trend` | p50 and p95 run duration over stacked passed, failed and cancelled counts per bucket (buckets start on round local times: midnight for a step of a day or more, the step's multiples from midnight for a shorter one, so the first and the last bucket may be partial; the subtitle names the bucket); a bucket's right-click menu zooms the slider to it | trigger, branch |
 | `runs` | one bar per run: height is the duration, colour the result, hollow when no task was replayed | trigger, branch |
 | `jobs` | one row per job: a sparkline with the p25 to p75 band and the failures marked, the latest and median duration, the change of the last 10 successful runs against the 20 before (shown once each side has 3), failed `k / n`; a row click expands its trend | all |
 | `status-grid` | jobs by the last 60 runs in range: passed, failed, cancelled or did not run, failed `k / n` per job, a result dot per run on top | all |

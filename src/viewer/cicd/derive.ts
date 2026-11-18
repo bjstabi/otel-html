@@ -249,6 +249,8 @@ export function stat(kind: StatKind, runs: readonly CiRun[], previous: readonly 
 
 export interface TrendBucket {
   t: number;
+  /** The exclusive end, run-relative ns, unclipped like `t`. */
+  end: number;
   p50: number | null;
   p95: number | null;
   passed: number;
@@ -264,15 +266,46 @@ function bucketStep(runCount: number, span: readonly [number, number]): number {
   return STEPS.find((s) => Math.ceil(length / s) <= most) ?? STEPS[STEPS.length - 1] ?? DAY;
 }
 
+/**
+ * The bucket bounds over `span`, run-relative ns, closing bound included: local midnights stepped by whole days
+ * for a step of a day or more, else multiples of the step from the local midnight of the span's start.
+ */
+function bucketBounds(span: readonly [number, number], step: number, epochNs: bigint): number[] {
+  const epochMs = Number(epochNs / 1_000_000n);
+  const dateAt = (rel: number): Date => new Date(epochMs + rel / 1e6);
+  const rel = (d: Date): number => (d.getTime() - epochMs) * 1e6;
+  const from = dateAt(span[0]);
+  const bounds: number[] = [];
+  if (step >= DAY) {
+    const days = Math.round(step / DAY);
+    for (let k = 0; ; k++) {
+      const b = rel(new Date(from.getFullYear(), from.getMonth(), from.getDate() + k * days));
+      bounds.push(b);
+      if (b >= span[1]) break;
+    }
+  } else {
+    const midnight = rel(new Date(from.getFullYear(), from.getMonth(), from.getDate()));
+    const first = midnight + Math.floor((span[0] - midnight) / step) * step;
+    for (let i = 0; ; i++) {
+      const b = first + i * step;
+      bounds.push(b);
+      if (b >= span[1]) break;
+    }
+  }
+  return bounds;
+}
+
 export function trendBuckets(
   runs: readonly CiRun[],
   span: readonly [number, number],
+  epochNs: bigint,
 ): { step: number; buckets: TrendBucket[] } {
   const step = bucketStep(runs.length, span);
   if (runs.length === 0) return { step, buckets: [] };
-  const count = Math.max(1, Math.ceil((span[1] - span[0]) / step));
-  const buckets: TrendBucket[] = Array.from({ length: count }, (_, i) => ({
-    t: span[0] + i * step,
+  const bounds = bucketBounds(span, step, epochNs);
+  const buckets: TrendBucket[] = bounds.slice(0, -1).map((t, i) => ({
+    t,
+    end: bounds[i + 1] ?? t,
     p50: null,
     p95: null,
     passed: 0,
@@ -281,8 +314,9 @@ export function trendBuckets(
     runs: [],
   }));
   for (const r of runs) {
-    const b = buckets[Math.min(count - 1, Math.floor((r.start - span[0]) / step))];
-    if (b === undefined || r.start < span[0] || r.start > span[1]) continue;
+    if (r.start < span[0] || r.start > span[1]) continue;
+    const b = buckets.find((x) => x.t <= r.start && r.start < x.end) ?? buckets[buckets.length - 1];
+    if (b === undefined) continue;
     b.runs.push(r);
     if (r.result === 'success') b.passed++;
     else if (r.result === 'failure') b.failed++;

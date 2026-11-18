@@ -42,8 +42,8 @@ export const RunsTrendView: WidgetRenderer = ({
   // biome-ignore lint/correctness/useExhaustiveDependencies: `resolved` re-reads the colour tokens
   const colors = useMemo(resultColors, [resolved]);
   const trend = useMemo(
-    () => (data.span === null ? null : trendBuckets(data.runs, data.span)),
-    [data.runs, data.span],
+    () => (data.span === null ? null : trendBuckets(data.runs, data.span, epoch)),
+    [data.runs, data.span, epoch],
   );
   const { selectedTraceId, isSource } = actions;
   const select = useRef(page.selectWindow);
@@ -111,9 +111,9 @@ export const RunsTrendView: WidgetRenderer = ({
         const b = i === null ? undefined : trend?.buckets[i];
         if (b === undefined || trend === null || data.span === null) return;
         (p as { event?: { event?: { preventDefault?(): void } } }).event?.event?.preventDefault?.();
-        // whole nanoseconds, through the page's own zoom path; the last bucket stops at the span's end
-        const start = Math.round(b.t);
-        const end = Math.round(Math.min(b.t + trend.step, data.span[1]));
+        // whole nanoseconds, through the page's own zoom path; the partial buckets stop at the span's bounds
+        const start = Math.round(Math.max(b.t, data.span[0]));
+        const end = Math.round(Math.min(b.end, data.span[1]));
         openMenu(pointOf(p), `${b.runs.length} runs`, [
           { label: 'Zoom the slider to this bucket', run: () => select.current({ start, end }) },
         ]);
