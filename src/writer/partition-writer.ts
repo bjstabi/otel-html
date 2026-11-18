@@ -42,6 +42,11 @@ export interface Derived {
   /** The `rollup` description each listed rollup table's file carries. */
   rollups?: Partial<Record<RollupTable, RollupDescription>>;
   /**
+   * The `cicd` rows of the cut's spans. Present whenever the derivation ran (even with no rows): the partition
+   * entry then says `cicd: true`, and the file is written only when there are rows.
+   */
+  cicd?: readonly Row[];
+  /**
    * The rows of `widget_traces` for a cut that has spans (none for a cut without). The table is written even with
    * 0 rows, unless `allowed` (the guard, given the table's encoded bytes, an empty table's, and the spans file's) says no.
    */
@@ -167,7 +172,7 @@ export class PartitionWriter {
       for (const table of TABLES) {
         if (table === 'widget_traces') continue; // from `derived.widgetIndex`, below
         // Held rows were checked when the session accepted them; derived rows were not.
-        const derivedRows = derived?.rows[table] ?? [];
+        const derivedRows = (table === 'cicd' ? derived?.cicd : derived?.rows[table]) ?? [];
         for (const [i, row] of derivedRows.entries()) checkRow(table, row, i);
         const extra = batchFromRows(table, derivedRows);
         const batch = extra.length === 0 ? taken[table] : concatBatches(table, taken[table], extra);
@@ -224,7 +229,7 @@ export class PartitionWriter {
       }
       derived?.commit?.(); // before the number advances: a throw here leaves the cut retryable
       this.#next = n + 1;
-      return { n, source, files };
+      return { n, source, files, ...(derived?.cicd === undefined ? {} : { cicd: true as const }) };
     } catch (e) {
       for (const table of TABLES) this.#held[table] = concatBatches(table, taken[table], this.#held[table]);
       this.#keys.spans.addCounts(takenKeys.spans);

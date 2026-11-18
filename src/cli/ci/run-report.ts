@@ -124,7 +124,7 @@ function entryFrom(
     files[t] = { ...f, path: to, values };
     copies.push({ fromDir: dir, from: f.path, to });
   }
-  return { n, source: p.source, files };
+  return { n, source: p.source, files, ...(p.cicd === true ? { cicd: true as const } : {}) };
 }
 
 /**

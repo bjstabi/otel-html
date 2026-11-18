@@ -293,6 +293,9 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
     `cicd: true`; the file is written after `spans` only when it has rows.
   - `src/writer/compaction.ts`: `onRows('spans')` also feeds a `CicdRowSet`. The table is written after the TABLES
     loop when it has rows. The loop skips `cicd`.
+  - `src/cli/ci/update.ts`, `src/cli/ci/push-update.ts`, `src/cli/ci/deploy-apply.ts` (maintainer-approved
+    2026-11-18): the update schema accepts a `cicd` partition file and `cicd: true`; the push update and the run
+    report carry the flag, so the job update path keeps both.
 - Test: `test/writer/cicd-flush.test.ts`, `test/writer/merge-cicd.test.ts`
 
 **Interfaces:**

@@ -40,8 +40,11 @@ async function asFormat6(w: W, out: string): Promise<void> {
     partitions: { files: Record<string, Record<string, unknown>> }[];
   };
   raw.formatVersion = 6;
-  for (const p of raw.partitions)
+  for (const p of raw.partitions) {
+    Reflect.deleteProperty(p, 'cicd');
+    Reflect.deleteProperty(p.files, 'cicd');
     for (const f of Object.values(p.files)) Reflect.deleteProperty(f, 'attributeKeys');
+  }
   await w.fs.writeTextAtomic(key, wrapDataFile(MANIFEST_KEY, raw));
 }
 

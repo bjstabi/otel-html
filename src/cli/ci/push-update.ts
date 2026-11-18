@@ -90,6 +90,7 @@ export async function buildPushUpdate(
     partitions.push({
       source: `job:${key}#${entry.source}`,
       files: await listFiles(fs, i.report, entry.files, `partitions/${index}`, carried ? i.out : undefined),
+      ...(entry.cicd === true ? { cicd: true as const } : {}),
       carried,
     });
   }
@@ -103,6 +104,7 @@ export async function buildPushUpdate(
     ci = {
       source: `ci:${key}`,
       files: await listFiles(fs, i.ciReport, only.files, 'ci', i.out),
+      ...(only.cicd === true ? { cicd: true as const } : {}),
       carried: true,
     };
   }

@@ -25,6 +25,8 @@ type UpdateKind = 'push' | 'run' | 'remove-pr' | 'reopen-pr';
 export interface UpdatePartition {
   source: string;
   files: Partial<Record<Table, PartitionFile>>;
+  /** Format 8: the job derived the partition's `cicd` table (its file is among `files` when it had rows). */
+  cicd?: true;
   carried: boolean;
 }
 
@@ -63,7 +65,10 @@ const partitionShape = {
     span_rollups: z.exactOptional(RollupPartitionFileSchemaV7),
     log_rollups: z.exactOptional(RollupPartitionFileSchemaV7),
     widget_traces: z.exactOptional(WidgetTracesPartitionFileSchema),
+    // format 8: the derived CI table (an update of an older publisher never has one)
+    cicd: z.exactOptional(PartitionFileSchema),
   }),
+  cicd: z.exactOptional(z.literal(true)),
 };
 const UpdatePartitionSchema: z.ZodType<UpdatePartition> = z.strictObject({
   ...partitionShape,

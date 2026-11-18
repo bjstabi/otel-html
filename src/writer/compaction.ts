@@ -36,6 +36,7 @@ import { encodeServiceShare, type ShareSpan, serviceShareOf } from '../format/se
 import { OtelHtmlError } from '../model/errors.js';
 import { AttributeKeyCounts } from './attribute-keys.js';
 import { at } from './checkpoint.js';
+import { CicdRowSet, encodeCicd } from './cicd-rows.js';
 import type { FileSystem } from './ports.js';
 import {
   logRollupRows,
@@ -932,13 +933,15 @@ export async function compactPartitions(
   // Rollups recomputed from the rows the merge reads anyway, one chunk at a time.
   const recomputed: Partial<Record<RollupTable, RollupSum>> = {};
   const recomputedWide: Partial<Record<RollupTable, RollupSum>> = {};
+  const cicdSet = new CicdRowSet();
   const widgetSet = opts.widgetIndex === undefined ? undefined : new WidgetTraceSet(opts.widgetIndex);
   const onRows = (table: Table): ((chunk: ColumnBatch) => void) | undefined => {
     const rolled = rollupFeed(table);
-    if (table !== 'spans' || widgetSet === undefined) return rolled;
+    if (table !== 'spans') return rolled;
     return (chunk) => {
       rolled?.(chunk);
-      widgetSet.add(chunk);
+      widgetSet?.add(chunk);
+      cicdSet.add(chunk);
     };
   };
   const rollupFeed = (table: Table): ((chunk: ColumnBatch) => void) | undefined => {
@@ -961,7 +964,7 @@ export async function compactPartitions(
     for (const table of TABLES) {
       // `widget_traces` is derived from a partition's spans, never merged from its inputs.
       if (table === 'widget_traces') continue;
-      // `cicd` is derived from spans and is not merged by compaction yet: a compacted partition carries no `cicd` flag and is read by span scan.
+      // `cicd` is derived from the merged spans, below, never merged from its inputs.
       if (table === 'cicd') continue;
       const rollupTable = table === 'span_rollups' || table === 'log_rollups' ? table : null;
       const plan = rollupTable === null ? undefined : plans[rollupTable];
@@ -1135,6 +1138,29 @@ export async function compactPartitions(
         ...(recorded === undefined ? {} : { attributeKeys: recorded }),
       };
     }
+    if (cicdSet.size > 0) {
+      if (!created) {
+        await fs.mkdirp(dir);
+        created = true;
+      }
+      const rows = cicdSet.rows();
+      const bytes = encodeCicd(rows, opts.rowGroupRows);
+      const path = partitionFilePath(n, 'cicd');
+      await fs.writeBytes(at(out, path), bytes);
+      if (opts.format === 'local') {
+        await writeWrapperOfFile(
+          fs,
+          at(out, partitionWrapperPath(n, 'cicd')),
+          partitionKey(n, 'cicd'),
+          at(out, path),
+        );
+      }
+      files.cicd = {
+        path,
+        bytes: bytes.length,
+        ...fileStatistics('cicd', batchFromRows('cicd', rows), [], opts.facetValueCap),
+      };
+    }
     const spansFile = files.spans;
     const index = opts.widgetIndex;
     if (index !== undefined && widgetSet !== undefined && spansFile !== undefined) {
@@ -1177,5 +1203,5 @@ export async function compactPartitions(
   } finally {
     watch.stop();
   }
-  return { n, source: opts.source, files };
+  return { n, source: opts.source, files, cicd: true };
 }

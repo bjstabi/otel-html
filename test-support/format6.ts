@@ -123,7 +123,7 @@ export async function withServiceShare(
   const written = manifestForWrite({
     ...manifest,
     formatVersion: 6,
-    partitions: withoutAttributeKeys(partitions),
+    partitions: withoutCicd(withoutAttributeKeys(partitions)),
   });
   await writeFile(`${dir}/data/manifest.js`, wrapDataFile(MANIFEST_KEY, written));
   // What a reader gets: the format-6 parse fills the anchor (`range.start`, else `createdAt`), whatever epoch `manifest` had.
@@ -168,6 +168,14 @@ export function withoutServiceShare(bytes: Uint8Array): Uint8Array {
   return withoutColumn(bytes, SERVICE_SHARE_COLUMN.name);
 }
 
+/** `partitions` as a writer before format 8 listed them: no `cicd` flag and no `cicd` file. */
+export function withoutCicd(partitions: ManifestV4['partitions']): ManifestV4['partitions'] {
+  return partitions.map(({ cicd: _flag, files: { cicd: _file, ...files }, ...entry }) => ({
+    ...entry,
+    files,
+  }));
+}
+
 /** `partitions` as a writer before format 7 listed them: no `attributeKeys` on a spans or logs file. */
 export function withoutAttributeKeys(partitions: ManifestV4['partitions']): ManifestV4['partitions'] {
   return partitions.map((entry) => {
@@ -199,7 +207,7 @@ export function asFormat5Manifest(
     ...manifest,
     formatVersion: 5,
     epochUnixNano,
-    partitions: opts.keepAttributeKeys === true ? partitions : withoutAttributeKeys(partitions),
+    partitions: withoutCicd(opts.keepAttributeKeys === true ? partitions : withoutAttributeKeys(partitions)),
   };
 }
 
