@@ -39,6 +39,7 @@
     "test/cli/ci/trust.test.ts": 0.1,
     "test/cli/ci/update-main.test.ts": 2.7,
     "test/cli/ci/update.test.ts": 0.1,
+    "test/cli/ci/workflow-file.test.ts": 0.1,
     "test/cli/ci/workflow-trace.test.ts": 0.1,
     "test/cli/ci/zip.test.ts": 0.3,
     "test/cli/host.test.ts": 17.8,

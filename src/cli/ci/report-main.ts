@@ -22,6 +22,7 @@ import { ciMetricsRequest } from './metrics.js';
 import { approximateJobIds, jobIdFor, parseJobContext } from './publish.js';
 import { fetchJobLog, mergeSkippingBad, mergeWithConfig } from './publish-io.js';
 import { summaryTable } from './summary.js';
+import { fetchWorkflowFile, parseWorkflow, type WorkflowJob } from './workflow-file.js';
 import { ciResource, jobResource, workflowTraceRequest } from './workflow-trace.js';
 
 const ARTIFACT_POINTER = 'Report: see the `ci-run-report` artifact';
@@ -143,6 +144,22 @@ export async function runReport(
   const key = runKey({ repository: run.repository.full_name, runId: run.id, runAttempt: run.run_attempt });
   const resource = ciResource(run);
 
+  let workflowJobs: WorkflowJob[] = [];
+  try {
+    workflowJobs = parseWorkflow(
+      await fetchWorkflowFile({
+        fetch: fetchFn,
+        apiUrl: API,
+        repository: opts.repository,
+        path: run.path,
+        ref: run.head_sha,
+        token,
+      }),
+    );
+  } catch (e) {
+    warn(`workflow file not read: ${messageOf(e)}`);
+  }
+
   const logs = await mapLimited(jobs, LOG_CONCURRENCY, (job) =>
     fetchJobLog({ fetch: fetchFn, apiUrl: API, repository: opts.repository, job, token, warn }),
   );
@@ -159,7 +176,7 @@ export async function runReport(
       },
       deps,
     );
-    await trace.addSpans(workflowTraceRequest(key, run, jobs, approximate));
+    await trace.addSpans(workflowTraceRequest(key, run, jobs, approximate, workflowJobs));
     for (const [i, job] of jobs.entries()) {
       const text = logs[i];
       if (text === undefined) continue;
