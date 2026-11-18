@@ -81,3 +81,23 @@ test('the follow toggle keeps its name and title and hides its words in a narrow
   expect(words?.className).toMatch(/@\[[^\]]+\]:inline/);
   expect(toggle.closest('header')?.className).toMatch(/@container/);
 });
+
+test('the subtitle is visually hidden in a narrow header but stays in the document', () => {
+  if (widget === undefined) throw new Error('no widget');
+  render(
+    <WidgetFrame
+      resetKey="k"
+      widget={widget}
+      subtitle="Nov 11, 22:10 – Nov 12, 22:10"
+      following={null}
+      onFollow={() => undefined}
+      openIn={null}
+      editing={false}
+    >
+      <div />
+    </WidgetFrame>,
+  );
+  const sub = screen.getByText('Nov 11, 22:10 – Nov 12, 22:10');
+  expect(sub.className).toMatch(/\bsr-only\b/);
+  expect(sub.className).toMatch(/@\[22rem\]:not-sr-only/);
+});

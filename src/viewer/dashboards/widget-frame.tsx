@@ -119,7 +119,12 @@ export function WidgetFrame(props: WidgetFrameProps): JSX.Element {
         <h2 id={titleId} className="text-sm font-semibold">
           {title}
         </h2>
-        <span className="min-w-0 flex-1 truncate text-xs text-muted">{props.subtitle}</span>
+        <span className="min-w-0 flex-1 truncate text-xs text-muted">
+          {/* below the breakpoint the subtitle stays for assistive technology only (the page bar shows the window) */}
+          <span data-subtitle className="sr-only @[22rem]:not-sr-only">
+            {props.subtitle}
+          </span>
+        </span>
         {props.echo !== undefined && <EchoChips echo={props.echo} />}
         {following !== null && (
           <button
