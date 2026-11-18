@@ -192,15 +192,19 @@ export function ZoomRow(props: {
   preset: string | null;
   epoch: bigint;
   onZoom(zoom: Range | null): void;
+  /** False where the range dropdown beside it already says it (the filter bar). */
+  label?: boolean;
 }): JSX.Element {
   const frames = useFrameWriter(props.onZoom);
   const l = rangeLabel(props);
   return (
     <div className="flex items-center gap-3" data-testid="zoom-row">
-      <span className="shrink-0 text-sm text-ink-2" title={l.header || undefined}>
-        {l.label}
-        {l.of}
-      </span>
+      {props.label === false ? null : (
+        <span className="shrink-0 text-sm text-ink-2" title={l.header || undefined}>
+          {l.label}
+          {l.of}
+        </span>
+      )}
       <div className="min-w-0 flex-1">
         <RangeSlider
           extent={props.extent}

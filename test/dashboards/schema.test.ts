@@ -298,3 +298,21 @@ describe('ViewSchema', () => {
     expect(ViewListSchema.safeParse([v({ page: 'logs' })]).success).toBe(true);
   });
 });
+
+describe('quick filters', () => {
+  const base = dash([{ type: 'timeline', x: 0, y: 0, w: 12, h: 4 }], { variables: ['a', 'b'] });
+  it('accepts quick filters keyed to variables, defaulting to none', () => {
+    expect(DashboardSchema.parse(base).quick).toEqual([]);
+    const ok = DashboardSchema.parse({ ...base, quick: [{ label: 'x', set: { a: '1', b: null } }] });
+    expect(ok.quick).toEqual([{ label: 'x', set: { a: '1', b: null } }]);
+  });
+  it('rejects a key that is not a variable', () => {
+    const r = DashboardSchema.safeParse({ ...base, quick: [{ label: 'x', set: { zzz: '1' } }] });
+    expect(r.success).toBe(false);
+    expect(issuePaths(r)).toContain('quick.0.set.zzz');
+  });
+  it('allows at most six', () => {
+    const quick = Array.from({ length: 7 }, (_, i) => ({ label: `q${i}`, set: { a: null } }));
+    expect(DashboardSchema.safeParse({ ...base, quick }).success).toBe(false);
+  });
+});

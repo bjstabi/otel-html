@@ -1,4 +1,5 @@
-import { ChevronLeft, ChevronRight, ZoomOut } from 'lucide-react';
+import { Menu } from '@base-ui/react/menu';
+import { ChevronDown, ChevronLeft, ChevronRight, ZoomOut } from 'lucide-react';
 import { type JSX, useState } from 'react';
 import type { AnyManifest, Manifest } from '../../format/manifest.js';
 import { parseUnixNanos, type RelNanos, type UnixNanos } from '../../model/ids.js';
@@ -6,6 +7,7 @@ import { formatTime } from '../../semconv/formatters.js';
 import { manifestRange } from '../data/manifest-range.js';
 import { isLongWindow, presetMatches, type TimeWindow } from '../data/time-window.js';
 import { useSelection } from '../state/selection-context.js';
+import { POPUP } from './controls.js';
 import { Tip } from './tip.js';
 
 type Range = NonNullable<Manifest['range']>;
@@ -242,5 +244,70 @@ export function TimeRange({ manifest }: { manifest: AnyManifest }): JSX.Element 
         </span>
       )}
     </fieldset>
+  );
+}
+
+/**
+ * The page filter bar's range control: one dropdown with the presets and a custom range, in place of the shell's
+ * row of buttons. `label` is the words for the current range; `zoomed` rings it.
+ */
+export function RangeMenu({
+  manifest,
+  label,
+  zoomed,
+}: {
+  manifest: AnyManifest;
+  label: string;
+  zoomed: boolean;
+}): JSX.Element | null {
+  const [custom, setCustom] = useState(false);
+  const anchor = useSelection((s) => s.anchor);
+  const win = useSelection((s) => s.window);
+  const setWindow = useSelection((s) => s.setWindow);
+  const range = manifestRange(manifest);
+  if (range === null) return null;
+  const epoch = BigInt(manifest.epochUnixNano);
+  const item = 'rounded-md px-3 py-1.5 text-sm data-[highlighted]:bg-hairline';
+  return (
+    <span className="flex flex-wrap items-center gap-1">
+      <Menu.Root>
+        <Menu.Trigger
+          aria-label="Time range"
+          className={`flex items-center gap-1 rounded-full border bg-surface px-3 py-1 text-sm text-ink-2 hover:bg-hairline ${zoomed ? 'border-accent ring-1 ring-accent' : 'border-hairline'}`}
+        >
+          {label}
+          <ChevronDown size={14} aria-hidden />
+        </Menu.Trigger>
+        <Menu.Portal>
+          <Menu.Positioner sideOffset={6} align="start" className="z-20">
+            <Menu.Popup className={POPUP}>
+              {PRESETS.filter((p) => offered(p, range)).map((p) => (
+                <Menu.Item
+                  key={p.label}
+                  className={item}
+                  onClick={() => setWindow(presetWindow(range, p.widthNs))}
+                >
+                  {p.label}
+                </Menu.Item>
+              ))}
+              <Menu.Item className={item} onClick={() => setCustom(true)}>
+                custom…
+              </Menu.Item>
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
+      {custom && (
+        <CustomRange
+          initial={win ?? range}
+          epoch={epoch}
+          lowest={anchor === null ? 0 : -Number(anchor)}
+          onApply={(w) => {
+            setWindow(w);
+            setCustom(false);
+          }}
+        />
+      )}
+    </span>
   );
 }

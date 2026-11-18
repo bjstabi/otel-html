@@ -129,7 +129,7 @@ describe('variables', () => {
   test('a variable with no values is hidden and counted', async () => {
     renderShell('#/dashboards/fusion', dataSourceOf(baseManifest, VALUES));
     await screen.findByText('2 variables have no values in this report');
-    expect(screen.getByText('service.name')).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: 'service.name' })).toBeTruthy();
     expect(screen.queryByText('host.name')).toBeNull();
   });
 

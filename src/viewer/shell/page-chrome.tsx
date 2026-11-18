@@ -212,6 +212,8 @@ export function PageChrome(props: {
   exportItems?: readonly ExportItem[];
   /** Extra header controls (a page's own buttons), between the title and Copy link. */
   actions?: ReactNode;
+  /** False where the page carries its own range control (the dashboard's filter bar). */
+  timeRange?: boolean;
   children?: ReactNode;
 }): JSX.Element {
   const refresh = useRefreshControl();
@@ -227,7 +229,7 @@ export function PageChrome(props: {
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {props.signal === undefined ? null : <QueryBar signal={props.signal} />}
-          <TimeRange manifest={props.manifest} />
+          {props.timeRange === false ? null : <TimeRange manifest={props.manifest} />}
         </div>
       </header>
       <InProgress

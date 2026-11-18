@@ -21,8 +21,8 @@ import { type KeyedState, useKeyedAsync } from '../state/use-keyed-async.js';
 import { TracePanel } from '../traces/trace-panel.js';
 import { dashboardToYaml } from './copy-config.js';
 import { DashboardLink } from './dashboard-link.js';
+import { FilterBar } from './filter-bar.js';
 import { DashboardGrid, useStacked } from './grid.js';
-import { ZoomRow } from './range-slider.js';
 import { type DashboardEntry, dashboardsOf, findDashboard } from './registry.js';
 import { useRunSession } from './run-session.js';
 import {
@@ -36,7 +36,7 @@ import {
   type WidgetScope,
 } from './scope.js';
 import { SelectionChips } from './selection-chips.js';
-import { VariablesBar, withVariable } from './variables-bar.js';
+import { withVariable } from './variables-bar.js';
 import { WidgetFrame } from './widget-frame.js';
 import { FacetChartWidget } from './widgets/facet-chart.js';
 import { LogsWidget } from './widgets/logs.js';
@@ -435,7 +435,7 @@ function DashboardView(props: {
   );
 
   return (
-    <PageChrome title={d.title} manifest={manifest} actions={actions}>
+    <PageChrome title={d.title} manifest={manifest} actions={actions} timeRange={false}>
       <div className="flex flex-col gap-3">
         <PageOptionNotice
           message={
@@ -456,20 +456,13 @@ function DashboardView(props: {
           </p>
         )}
         {bound !== null && values.status === 'ready' && (
-          <VariablesBar
-            variables={d.variables}
+          <FilterBar
+            dashboard={d}
+            manifest={manifest}
             values={values.value}
             bound={bound}
             state={state}
-            onChange={(vars) => change((s) => ({ ...s, vars }))}
-          />
-        )}
-        {extent !== null && (
-          <ZoomRow
-            extent={[extent.start, extent.end]}
-            zoom={sel.t === null ? null : [sel.t.start, sel.t.end]}
-            preset={presetOf(page, manifest, !anchored)}
-            epoch={epoch}
+            onVars={(vars) => change((s) => ({ ...s, vars }))}
             onZoom={(z) =>
               change((s) => ({
                 ...s,
@@ -478,6 +471,16 @@ function DashboardView(props: {
                   t: z === null ? null : formatWindow({ start: z[0], end: z[1] }, anchor ?? undefined),
                 },
               }))
+            }
+            slider={
+              extent === null
+                ? null
+                : {
+                    extent: [extent.start, extent.end],
+                    zoom: sel.t === null ? null : [sel.t.start, sel.t.end],
+                    preset: presetOf(page, manifest, !anchored),
+                    epoch: BigInt(manifest.epochUnixNano),
+                  }
             }
           />
         )}
