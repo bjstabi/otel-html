@@ -355,7 +355,10 @@ test('Checkout: the pinned filter bar stays in view while scrolling, the unpinne
   expect(problems).toEqual([]);
 });
 
-test('at 390 px two small widgets share a row inside the viewport', async ({ page, reportUrl }) => {
+test('at 390 px nothing scrolls sideways, the menu opens the sidebar and two small widgets share a row', async ({
+  page,
+  reportUrl,
+}) => {
   const problems = watchProblems(page);
   await page.setViewportSize({ width: 390, height: 800 });
   await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/checkout`);
@@ -368,10 +371,26 @@ test('at 390 px two small widgets share a row inside the viewport', async ({ pag
   expect(boxB.y).toBeCloseTo(boxA.y, 0);
   expect(boxB.x).toBeGreaterThan(boxA.x + boxA.width - 1);
   expect(boxB.x + boxB.width).toBeLessThanOrEqual(390);
-  // The shell's own sidebar keeps its width on a phone, so the page can still scroll a few px sideways; the
-  // dashboard's content must sit inside the viewport.
+  const sideways = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(sideways).toBeLessThanOrEqual(0);
   const bar = await filterBar(page).boundingBox();
   if (bar === null) throw new Error('the filter bar is laid out');
   expect(bar.x + bar.width).toBeLessThanOrEqual(390);
+  const menu = page.getByRole('button', { name: 'Menu' });
+  await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
+  await menu.click();
+  await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
+  await expect(menu).toBeFocused();
+  // Another page does not scroll sideways either.
+  await page.goto(`${reportUrl('dashboards')}/index.html#/traces`);
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+  await page.waitForTimeout(500);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+  ).toBeLessThanOrEqual(0);
   expect(problems).toEqual([]);
 });

@@ -305,6 +305,7 @@
     "test/viewer/selection.test.ts": 0.8,
     "test/viewer/services-page.test.tsx": 2.1,
     "test/viewer/shell.test.tsx": 7.5,
+    "test/viewer/shell-drawer.test.tsx": 1.5,
     "test/viewer/shortcuts.test.ts": 0.4,
     "test/viewer/span-tabs.test.ts": 0.5,
     "test/viewer/tabs.test.ts": 0.5,
