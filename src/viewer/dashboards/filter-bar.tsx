@@ -1,6 +1,6 @@
 import { Select } from '@base-ui/react/select';
 import { Check, ChevronDown, Pin, PinOff, X } from 'lucide-react';
-import { type JSX, useEffect, useRef, useState } from 'react';
+import { type JSX, type ReactNode, useEffect, useRef, useState } from 'react';
 import type { Dashboard, QuickFilter, Variable } from '../../dashboards/schema.js';
 import type { AnyManifest } from '../../format/manifest.js';
 import type { ResourceValues } from '../data/data-source.js';
@@ -128,6 +128,10 @@ export interface FilterBarSlider {
   /** The page window as a preset text (`all`, `7d`); null for a custom window. */
   preset: string | null;
   epoch: bigint;
+  /** One mark per run along the track (empty until the CI widgets). */
+  ticks?: readonly { t: number; color: string }[];
+  /** The selected-runs count the slider's header shows (see `ZoomRow`). */
+  count?: ReactNode;
 }
 
 /**
@@ -138,12 +142,15 @@ export interface FilterBarSlider {
 export function FilterBar(props: {
   dashboard: Dashboard;
   manifest: AnyManifest;
-  values: Readonly<Record<string, ResourceValues>>;
-  bound: VariableBindings;
+  /** Null while the variables' values load or could not be read: the range control stays, the variable controls wait. */
+  values: Readonly<Record<string, ResourceValues>> | null;
+  bound: VariableBindings | null;
   state: DashboardPageState;
   onVars(vars: DashboardPageState['vars']): void;
   onZoom(zoom: [number, number] | null): void;
   slider: FilterBarSlider | null;
+  /** The run count shown at the bar's right edge (empty until the CI widgets). */
+  count?: ReactNode;
 }): JSX.Element {
   const { dashboard, state, bound, slider } = props;
   const [pinned, setPinned] = useState(readPinned);
@@ -163,8 +170,8 @@ export function FilterBar(props: {
     io.observe(el);
     return () => io.disconnect();
   }, [pinned]);
-  const shown = dashboard.variables.filter((v) => !bound.hidden.includes(v.key));
-  const hidden = bound.hidden.length;
+  const shown = bound === null ? [] : dashboard.variables.filter((v) => !bound.hidden.includes(v.key));
+  const hidden = bound?.hidden.length ?? 0;
   const l = slider === null ? null : rangeLabel(slider);
   const togglePin = (): void => {
     writePinned(!pinned);
@@ -182,7 +189,7 @@ export function FilterBar(props: {
           <span aria-hidden className="text-xs font-semibold uppercase tracking-wide text-muted">
             Page filters
           </span>
-          {dashboard.quick.length > 0 && (
+          {bound !== null && dashboard.quick.length > 0 && (
             <fieldset className="m-0 flex min-w-0 flex-wrap gap-1 border-0 p-0">
               <legend className="sr-only">Quick filters</legend>
               {dashboard.quick.map((q) => {
@@ -203,7 +210,12 @@ export function FilterBar(props: {
           )}
           {l !== null && (
             <>
-              <RangeMenu manifest={props.manifest} label={`${l.label}${l.of ?? ''}`} zoomed={l.zoomed} />
+              <RangeMenu
+                manifest={props.manifest}
+                label={`${l.label}${l.of ?? ''}`}
+                zoomed={l.zoomed}
+                onPicked={() => props.onZoom(null)}
+              />
               {l.zoomed && (
                 <button
                   type="button"
@@ -216,7 +228,7 @@ export function FilterBar(props: {
             </>
           )}
           {shown.map((v) => {
-            const known = props.values[v.key];
+            const known = props.values?.[v.key];
             return known === undefined ? null : (
               <VariableChip key={v.key} variable={v} known={known} state={state} onChange={props.onVars} />
             );
@@ -226,11 +238,11 @@ export function FilterBar(props: {
               {hidden === 1 ? '1 variable has' : `${hidden} variables have`} no values in this report
             </span>
           )}
-          <div data-testid="run-count-slot" className="ml-auto flex items-center" />
+          <div className="ml-auto flex items-center text-xs text-muted">{props.count}</div>
           <button
             type="button"
             aria-pressed={pinned}
-            aria-label={pinned ? 'Unpin filters' : 'Pin filters'}
+            aria-label="Pin filters"
             title={pinned ? 'Unpin filters' : 'Pin filters to the top'}
             onClick={togglePin}
             className="rounded-full p-1.5 text-ink-2 hover:bg-hairline"
@@ -238,7 +250,7 @@ export function FilterBar(props: {
             {pinned ? <Pin size={14} aria-hidden /> : <PinOff size={14} aria-hidden />}
           </button>
         </div>
-        {bound.unusable.map((u) => (
+        {(bound?.unusable ?? []).map((u) => (
           <p key={u.key} role="alert" className="font-mono text-xs text-critical">
             {u.key} = {u.value} can't be applied: {u.reason}
           </p>

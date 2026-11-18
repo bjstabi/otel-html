@@ -78,7 +78,9 @@ describe('the page filter bar', () => {
     show();
     const b = await bar();
     expect(screen.getByTestId('filter-bar').className).toContain('sticky');
-    await user.click(b.getByRole('button', { name: 'Unpin filters' }));
+    expect(b.getByRole('button', { name: 'Pin filters' }).getAttribute('aria-pressed')).toBe('true');
+    await user.click(b.getByRole('button', { name: 'Pin filters' }));
+    expect(b.getByRole('button', { name: 'Pin filters' }).getAttribute('aria-pressed')).toBe('false');
     expect(window.localStorage.getItem('otel-html.filters.pinned')).toBe('false');
     expect(screen.getByTestId('filter-bar').className).not.toContain('sticky');
   });
@@ -94,14 +96,67 @@ describe('the page filter bar', () => {
     show();
     const b = await bar();
     expect(screen.getByTestId('filter-bar').className).toContain('sticky');
-    await user.click(b.getByRole('button', { name: 'Unpin filters' }));
+    await user.click(b.getByRole('button', { name: 'Pin filters' }));
     expect(screen.getByTestId('filter-bar').className).not.toContain('sticky');
   });
 
-  test('it keeps an empty run count slot', async () => {
+  test('the range menu stays while the variables load or could not be read', async () => {
+    const ds = dataSourceOf(manifest, VALUES);
+    renderShell('#/dashboards/ci', {
+      ...ds,
+      resourceValues: () => new Promise(() => undefined),
+    });
+    const b = await bar();
+    expect(b.getByRole('button', { name: 'Time range' })).toBeTruthy();
+    expect(b.queryByRole('combobox', { name: REF })).toBeNull();
+    expect(b.queryByRole('button', { name: 'main' })).toBeNull();
+    cleanup();
+    renderShell('#/dashboards/ci', {
+      ...ds,
+      resourceValues: () => Promise.reject(new Error('no values')),
+    });
+    const failed = await bar();
+    await screen.findByText(/Could not read the variables' values/);
+    expect(failed.getByRole('button', { name: 'Time range' })).toBeTruthy();
+    expect(failed.queryByRole('combobox', { name: REF })).toBeNull();
+  });
+
+  test('a preset, a custom range and a step clear the zoom', async () => {
+    const user = userEvent.setup();
+    const zoom = JSON.stringify({ sel: { t: '5400000000000~7200000000000' } });
+    const zoomed = `#/dashboards/ci?t=3600000000000~10800000000000&d=${encodeURIComponent(zoom)}`;
+    for (const choose of [
+      async () => {
+        await user.click(screen.getByRole('button', { name: 'Time range' }));
+        await user.click(await screen.findByRole('menuitem', { name: '1h' }));
+      },
+      async () => {
+        await user.click(screen.getByRole('button', { name: 'Next window' }));
+      },
+    ]) {
+      renderShell(zoomed, dataSourceOf(manifest, VALUES));
+      await bar();
+      expect(currentD()?.sel?.t).toBe('5400000000000~7200000000000');
+      await choose();
+      expect(currentD()?.sel?.t ?? null).toBeNull();
+      cleanup();
+    }
+  });
+
+  test('Cancel and Escape close the custom range inputs, which open with focus', async () => {
+    const user = userEvent.setup();
     show();
-    await bar();
-    expect(screen.getByTestId('run-count-slot').textContent).toBe('');
+    const b = await bar();
+    await user.click(b.getByRole('button', { name: 'Time range' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'custom…' }));
+    const from = b.getByLabelText('Custom range from (UTC)');
+    await waitFor(() => expect(document.activeElement).toBe(from));
+    await user.click(b.getByRole('button', { name: 'Cancel' }));
+    expect(b.queryByLabelText('Custom range from (UTC)')).toBeNull();
+    await user.click(b.getByRole('button', { name: 'Time range' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'custom…' }));
+    await user.keyboard('{Escape}');
+    expect(b.queryByLabelText('Custom range from (UTC)')).toBeNull();
   });
 
   describe('stuck', () => {

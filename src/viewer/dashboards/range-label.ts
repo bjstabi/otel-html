@@ -23,7 +23,7 @@ function presetLabel(preset: string | null): string | null {
   return `last ${humanDur(Number(m[1]) * unit)}`;
 }
 
-function stamp(rel: number, epoch: bigint): string {
+export function stamp(rel: number, epoch: bigint): string {
   const ms = Number((BigInt(Math.round(rel)) + epoch) / 1_000_000n);
   return new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
 }

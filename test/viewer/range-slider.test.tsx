@@ -93,3 +93,82 @@ test('an unzoomed 7d page reads last 7 days', () => {
   render(<ZoomRow extent={[0, 1000]} zoom={null} preset="7d" epoch={0n} onZoom={() => {}} />);
   expect(screen.getByTestId('zoom-row').textContent).toContain('last 7 days');
 });
+
+test('handles state their time and are 24 px wide whatever the track', () => {
+  render(
+    <RangeSlider
+      extent={[0, 3_600_000_000_000]}
+      zoom={[0, 1_800_000_000_000]}
+      ticks={[]}
+      epoch={1_700_000_000_000_000_000n}
+      onZoom={() => {}}
+    />,
+  );
+  expect(screen.getByLabelText('Zoom start').getAttribute('aria-valuetext')).toBe('2023-11-14 22:13');
+  expect(screen.getByLabelText('Zoom end').getAttribute('aria-valuetext')).toBe('2023-11-14 22:43');
+  expect(screen.getByLabelText('Zoom end').className).toContain('w-6');
+  expect(screen.getByLabelText('Zoom end').className).toContain('focus-visible:ring');
+});
+
+test('a zoom outside the extent is drawn inside the track', () => {
+  mount(() => {}, [-500, 5000]);
+  expect(screen.getByLabelText('Zoom start').getAttribute('aria-valuenow')).toBe('0');
+  expect(screen.getByLabelText('Zoom end').getAttribute('aria-valuenow')).toBe('1000');
+  expect((screen.getByLabelText('Zoom start') as HTMLElement).style.left).toBe('0%');
+});
+
+test('dragging across the bare track draws a new range, either way, snapping at the edges', () => {
+  const onZoom = vi.fn();
+  const svg = mount(onZoom);
+  fireEvent.pointerDown(svg, { clientX: 200 });
+  fireEvent.pointerMove(svg, { clientX: 300 });
+  expect(onZoom).toHaveBeenLastCalledWith([500, 750]);
+  fireEvent.pointerMove(svg, { clientX: 100 });
+  expect(onZoom).toHaveBeenLastCalledWith([250, 500]);
+  fireEvent.pointerMove(svg, { clientX: 399 });
+  expect(onZoom).toHaveBeenLastCalledWith([500, 1000]);
+  fireEvent.pointerUp(svg);
+});
+
+test('a click on the bare track without a move changes nothing', () => {
+  const onZoom = vi.fn();
+  const svg = mount(onZoom);
+  fireEvent.pointerDown(svg, { clientX: 200 });
+  fireEvent.pointerUp(svg);
+  expect(onZoom).not.toHaveBeenCalled();
+});
+
+test('the header says the extent and what is selected, with the count where given', () => {
+  const epoch = 1_700_000_000_000_000_000n;
+  const { rerender } = render(
+    <ZoomRow extent={[0, 3_600_000_000_000]} zoom={null} preset="1h" epoch={epoch} onZoom={() => {}} />,
+  );
+  expect(screen.getByTestId('zoom-extent').textContent).toBe('2023-11-14 22:13 – 2023-11-14 23:13');
+  expect(screen.getByTestId('zoom-selection').textContent).toBe('all selected · drag to zoom');
+  rerender(
+    <ZoomRow
+      extent={[0, 3_600_000_000_000]}
+      zoom={null}
+      preset="1h"
+      epoch={epoch}
+      count="12 runs"
+      onZoom={() => {}}
+    />,
+  );
+  expect(screen.getByTestId('zoom-selection').textContent).toBe('all 12 runs selected · drag to zoom');
+  rerender(
+    <ZoomRow
+      extent={[0, 3_600_000_000_000]}
+      zoom={[0, 1_800_000_000_000]}
+      preset="1h"
+      epoch={epoch}
+      count="5 runs"
+      onZoom={() => {}}
+    />,
+  );
+  expect(screen.getByTestId('zoom-selection').textContent).toBe(
+    '2023-11-14 22:13 – 2023-11-14 22:43 · 30 minutes · 5 runs',
+  );
+  expect(screen.getByTestId('zoom-extent').className).toContain('hidden');
+  expect(screen.getByTestId('zoom-extent').className).toContain('sm:inline');
+});

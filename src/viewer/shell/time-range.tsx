@@ -1,6 +1,6 @@
 import { Menu } from '@base-ui/react/menu';
 import { ChevronDown, ChevronLeft, ChevronRight, ZoomOut } from 'lucide-react';
-import { type JSX, useState } from 'react';
+import { type JSX, useEffect, useRef, useState } from 'react';
 import type { AnyManifest, Manifest } from '../../format/manifest.js';
 import { parseUnixNanos, type RelNanos, type UnixNanos } from '../../model/ids.js';
 import { formatTime } from '../../semconv/formatters.js';
@@ -100,12 +100,15 @@ function CustomRange({
   epoch,
   lowest,
   onApply,
+  onCancel,
 }: {
   initial: TimeWindow;
   epoch: bigint;
   /** The earliest relative start the URL can state (0 unanchored). */
   lowest: number;
   onApply: (w: TimeWindow) => void;
+  /** Escape or Cancel: close the inputs without changing the range. */
+  onCancel?: () => void;
 }): JSX.Element {
   const initialFrom = toLocalInput(initial.start, epoch);
   const initialTo = toLocalInput(initial.end, epoch);
@@ -116,9 +119,24 @@ function CustomRange({
   const end = to === initialTo ? initial.end : fromLocalInput(to, epoch);
   const valid = start < end && end <= 9e18 + lowest;
   const INPUT = 'rounded border border-hairline bg-page px-1 py-0.5 text-xs font-mono text-ink-2';
+  const first = useRef<HTMLInputElement>(null);
+  const dismissable = onCancel !== undefined;
+  useEffect(() => {
+    if (dismissable) first.current?.focus();
+  }, [dismissable]);
   return (
-    <span className="flex flex-wrap items-center gap-1">
+    // biome-ignore lint/a11y/noStaticElementInteractions: Escape is a shortcut on the group; the controls inside are the interface
+    <span
+      className="flex flex-wrap items-center gap-1"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && onCancel !== undefined) {
+          e.stopPropagation();
+          onCancel();
+        }
+      }}
+    >
       <input
+        ref={first}
         type="datetime-local"
         step={1}
         aria-label="Custom range from (UTC)"
@@ -143,6 +161,15 @@ function CustomRange({
       >
         Apply
       </button>
+      {onCancel !== undefined && (
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-full px-3 py-1 text-sm text-ink-2 hover:bg-hairline"
+        >
+          Cancel
+        </button>
+      )}
     </span>
   );
 }
@@ -255,15 +282,22 @@ export function RangeMenu({
   manifest,
   label,
   zoomed,
+  onPicked,
 }: {
   manifest: AnyManifest;
   label: string;
   zoomed: boolean;
+  /** Called after a preset, a custom range or a step changed the page window (the caller clears its zoom). */
+  onPicked?: () => void;
 }): JSX.Element | null {
   const [custom, setCustom] = useState(false);
   const anchor = useSelection((s) => s.anchor);
   const win = useSelection((s) => s.window);
-  const setWindow = useSelection((s) => s.setWindow);
+  const setPageWindow = useSelection((s) => s.setWindow);
+  const setWindow = (w: TimeWindow | null): void => {
+    setPageWindow(w);
+    onPicked?.();
+  };
   const range = manifestRange(manifest);
   if (range === null) return null;
   const epoch = BigInt(manifest.epochUnixNano);
@@ -309,6 +343,7 @@ export function RangeMenu({
             setWindow(w);
             setCustom(false);
           }}
+          onCancel={() => setCustom(false)}
         />
       )}
       <Tip label="Previous window">

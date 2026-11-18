@@ -480,35 +480,33 @@ function DashboardView(props: {
             Loading variables…
           </p>
         )}
-        {bound !== null && values.status === 'ready' && (
-          <FilterBar
-            dashboard={d}
-            manifest={manifest}
-            values={values.value}
-            bound={bound}
-            state={state}
-            onVars={(vars) => change((s) => ({ ...s, vars }))}
-            onZoom={(z) =>
-              change((s) => ({
-                ...s,
-                sel: {
-                  ...s.sel,
-                  t: z === null ? null : zoomText(z, anchor),
-                },
-              }))
-            }
-            slider={
-              extent === null
-                ? null
-                : {
-                    extent: [extent.start, extent.end],
-                    zoom: sel.t === null ? null : [sel.t.start, sel.t.end],
-                    preset: presetOf(page, manifest, !anchored),
-                    epoch: BigInt(manifest.epochUnixNano),
-                  }
-            }
-          />
-        )}
+        <FilterBar
+          dashboard={d}
+          manifest={manifest}
+          values={values.status === 'ready' ? values.value : null}
+          bound={bound}
+          state={state}
+          onVars={(vars) => change((s) => ({ ...s, vars }))}
+          onZoom={(z) =>
+            change((s) => ({
+              ...s,
+              sel: {
+                ...s.sel,
+                t: z === null ? null : zoomText(z, anchor),
+              },
+            }))
+          }
+          slider={
+            extent === null
+              ? null
+              : {
+                  extent: [extent.start, extent.end],
+                  zoom: sel.t === null ? null : [sel.t.start, sel.t.end],
+                  preset: presetOf(page, manifest, !anchored),
+                  epoch: BigInt(manifest.epochUnixNano),
+                }
+          }
+        />
         <SelectionChips
           state={state}
           epoch={epoch}
