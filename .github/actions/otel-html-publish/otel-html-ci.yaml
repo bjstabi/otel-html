@@ -7,82 +7,134 @@ dashboards:
   - id: ci
     title: CI
     variables:
-      - key: cicd.pipeline.name
-        label: workflow
-      - key: cicd.pipeline.run.id
-        label: run
+      - key: vcs.ref.head.name
+        label: branch
+      - key: cicd.pipeline.trigger
+        label: trigger
       - key: cicd.pipeline.task.name
         label: job
+      - key: cicd.worker.labels
+        label: runner
+    quick:
+      - label: main
+        set:
+          vcs.ref.head.name: main
+      - label: pull requests
+        set:
+          cicd.pipeline.trigger: pull_request
+      - label: all
+        set:
+          vcs.ref.head.name: null
+          cicd.pipeline.trigger: null
     widgets:
-      - type: timeline
+      - type: cicd
+        title: Success rate
+        view: stat
+        stat: success-rate
         x: 0
         y: 0
-        w: 12
+        w: 2
         h: 6
-      - type: metric
-        title: Job duration
+      - type: cicd
+        title: Median run
+        view: stat
+        stat: median-run
+        x: 2
+        y: 0
+        w: 2
+        h: 6
+      - type: cicd
+        title: Cache
+        view: stat
+        stat: cache
+        x: 4
+        y: 0
+        w: 2
+        h: 6
+      - type: cicd
+        title: CI minutes
+        view: stat
+        stat: minutes
+        x: 6
+        y: 0
+        w: 2
+        h: 6
+      - type: cicd
+        title: Queue p95
+        view: stat
+        stat: queue-p95
+        x: 8
+        y: 0
+        w: 2
+        h: 6
+      - type: cicd
+        title: Reruns
+        view: stat
+        stat: reruns
+        x: 10
+        y: 0
+        w: 2
+        h: 6
+      - type: cicd
+        title: Runs over time
+        view: runs-trend
         x: 0
         y: 6
-        w: 12
-        h: 20
-        runBy: resource.attributes["cicd.pipeline.run.id"]
-        failedWhen: attributes["cicd.pipeline.task.run.result"] == "failure" or attributes["cicd.pipeline.task.run.result"] == "timeout" or attributes["cicd.pipeline.task.run.result"] == "error"
-        queries:
-          - id: a
-            metric: cicd.pipeline.task.run.duration
-            show: avg
-            by: ['attributes["cicd.pipeline.task.name"]']
-        display: lines
-      - type: metric
-        title: Queue time
-        x: 0
-        y: 38
-        w: 12
-        h: 12
-        runBy: resource.attributes["cicd.pipeline.run.id"]
-        controls:
-          split: false
-        queries:
-          - id: a
-            metric: cicd.pipeline.task.run.queue.duration
-            show: avg
-            by: ['attributes["cicd.pipeline.task.name"]']
-      - type: toplist
-        # Steps counts the publisher's step spans by name; the query keeps it to them.
-        title: Steps
-        x: 0
-        y: 26
-        w: 6
-        h: 12
-        signal: spans
-        query: instrumentation_scope.name == "otel-html-ci" and attributes["github.job.step.number"] != nil
-        groupBy: span.name
-      - type: toplist
-        # Slowest steps ranks the same spans by their longest duration.
-        title: Slowest steps
-        x: 6
-        y: 26
-        w: 6
-        h: 12
-        signal: spans
-        query: instrumentation_scope.name == "otel-html-ci" and attributes["github.job.step.number"] != nil
-        groupBy: span.name
-        measure: duration.max
-      - type: traces
+        w: 7
+        h: 11
+      - type: cicd
         title: Runs
+        view: runs
+        x: 7
+        y: 6
+        w: 5
+        h: 11
+      - type: cicd
+        title: Jobs
+        view: jobs
         x: 0
-        y: 50
-        w: 6
+        y: 17
+        w: 12
+        h: 14
+      - type: cicd
+        title: Status grid
+        view: status-grid
+        x: 0
+        y: 31
+        w: 12
+        h: 12
+      - type: cicd
+        title: Failures
+        view: failures
+        x: 0
+        y: 43
+        w: 7
         h: 10
-        mode: traces
-        # The run span sits on the run's resource, so with `job` set the job span (unless skipped) is what lists the run.
-        # The scope term lets the scan skip the row groups that hold only test spans, and keeps the root spans of other
-        # instrumentation out of the list (#270).
-        query: instrumentation_scope.name == "otel-html-ci" and (IsRootSpan() or (attributes["cicd.pipeline.task.run.id"] != nil and attributes["cicd.pipeline.task.run.result"] != "skip"))
-      - type: logs
-        title: Warnings and errors
-        x: 6
-        y: 50
-        w: 6
+      - type: cicd
+        title: Triggers
+        view: triggers
+        x: 7
+        y: 43
+        w: 5
         h: 10
-        query: severity_number >= 13
+      - type: cicd
+        title: Queue
+        view: queue
+        x: 0
+        y: 53
+        w: 5
+        h: 9
+      - type: cicd
+        title: CI minutes by day
+        view: minutes
+        x: 5
+        y: 53
+        w: 7
+        h: 9
+      - type: cicd
+        title: Tests
+        view: tests
+        x: 0
+        y: 62
+        w: 12
+        h: 16
