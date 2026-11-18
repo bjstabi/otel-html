@@ -51,6 +51,11 @@ function jobStatus(j: CiJob): CiStatus | null {
   return 'failure';
 }
 
+/** The jobs that ran (skipped ones did not). */
+const ranJobs = (r: CiRun): CiJob[] => r.jobs.filter((j) => jobStatus(j) !== null);
+/** CI minutes of the jobs that ran. */
+const minutesOf = (jobs: readonly CiJob[]): number =>
+  jobs.reduce((s, j) => s + (jobStatus(j) === null ? 0 : jobDuration(j)), 0) / MIN;
 const jobDuration = (j: CiJob): number => Math.max(0, j.end - j.start);
 const notCancelled = (runs: readonly CiRun[]): CiRun[] => runs.filter((r) => r.result !== 'cancelled');
 
@@ -89,7 +94,7 @@ export function narrowJobs(runs: readonly CiRun[], job: string | null, runner: s
     const jobs = r.jobs.filter(
       (j) => (job === null || j.name === job) && (runner === null || j.labels === runner),
     );
-    if (jobs.length > 0) out.push({ ...r, jobs });
+    if (jobs.length > 0) out.push({ ...r, jobs, minutes: minutesOf(jobs) });
   }
   return out;
 }
@@ -108,11 +113,11 @@ export interface StatResult {
 
 const EMPTY_STAT: StatResult = { value: '–', delta: null, spark: null, note: null };
 
-const rerunsOf = (runs: readonly CiRun[]): number =>
-  runs.reduce((n, r) => n + Math.max(0, r.attempts - 1), 0);
+/** Runs whose latest attempt is above 1. */
+const rerunsOf = (runs: readonly CiRun[]): number => runs.filter((r) => r.attempt > 1).length;
 
 function jobQueues(runs: readonly CiRun[]): number[] {
-  return runs.flatMap((r) => r.jobs.flatMap((j) => (j.queuedNs === null ? [] : [j.queuedNs])));
+  return runs.flatMap((r) => ranJobs(r).flatMap((j) => (j.queuedNs === null ? [] : [j.queuedNs])));
 }
 
 function cacheRatio(runs: readonly CiRun[]): number | null {
@@ -134,7 +139,7 @@ function scalar(kind: StatKind, runs: readonly CiRun[]): number | null {
     case 'cache':
       return cacheRatio(runs);
     case 'minutes':
-      return runs.length === 0 ? null : runs.reduce((s, r) => s + r.minutes, 0);
+      return runs.length === 0 ? null : runs.reduce((s, r) => s + minutesOf(r.jobs), 0);
     case 'queue-p95':
       return quantile(jobQueues(runs), 0.95);
     case 'reruns':
@@ -199,10 +204,13 @@ function sparkOf(kind: StatKind, runs: readonly CiRun[]): number[] | null {
   if (!(width > 0)) return null;
   const slices: CiRun[][] = Array.from({ length: SPARK_POINTS }, () => []);
   for (const r of runs) slices[Math.min(SPARK_POINTS - 1, Math.floor((r.start - first) / width))]?.push(r);
-  const points = slices.flatMap((s) => {
-    const v = s.length === 0 ? null : scalar(kind, s);
-    return v === null || !Number.isFinite(v) ? [] : [v];
-  });
+  // an empty slice repeats the value before it (the time spacing stays); a slice before any value stays out
+  const points: number[] = [];
+  for (const sl of slices) {
+    const v = sl.length === 0 ? null : scalar(kind, sl);
+    if (v !== null && Number.isFinite(v)) points.push(v);
+    else if (points.length > 0) points.push(points[points.length - 1] ?? 0);
+  }
   return points.length < 2 ? null : points;
 }
 
@@ -215,7 +223,7 @@ function noteOf(kind: StatKind, runs: readonly CiRun[]): string | null {
     const dropped = runs.length - ok.length;
     return `${passed} of ${ok.length} runs${dropped > 0 ? `, ${dropped} cancelled left out` : ''}`;
   }
-  if (kind === 'reruns') return `${runs.filter((r) => r.attempts > 1).length} of ${runs.length} runs`;
+  if (kind === 'reruns') return `${runs.filter((r) => r.result === 'cancelled').length} cancelled`;
   return null;
 }
 
@@ -404,7 +412,11 @@ export function statusGrid(runs: readonly CiRun[], last: number): { runs: CiRun[
 function jobsOrder(runs: readonly CiRun[]): string[] {
   const offsets = new Map<string, number[]>();
   for (const r of runs)
-    for (const j of r.jobs) offsets.set(j.name, [...(offsets.get(j.name) ?? []), j.start - r.start]);
+    for (const j of ranJobs(r)) {
+      const list = offsets.get(j.name) ?? [];
+      offsets.set(j.name, list);
+      list.push(j.start - r.start);
+    }
   return [...offsets]
     .map(([name, o]) => ({ name, at: median(o) ?? 0 }))
     .sort((a, b) => a.at - b.at || (a.name < b.name ? -1 : 1))
@@ -442,11 +454,17 @@ export interface TriggerRow {
 
 export function triggers(runs: readonly CiRun[]): TriggerRow[] {
   const groups = new Map<string, CiRun[]>();
-  for (const r of runs) groups.set(r.trigger ?? '(none)', [...(groups.get(r.trigger ?? '(none)') ?? []), r]);
+  for (const r of runs) {
+    const k = r.trigger ?? '(none)';
+    const list = groups.get(k) ?? [];
+    groups.set(k, list);
+    list.push(r);
+  }
   const rows: TriggerRow[] = [];
   for (const [trigger, rs] of groups) {
     const ran = new Map<string, number>();
-    for (const r of rs) for (const n of new Set(r.jobs.map((j) => j.name))) ran.set(n, (ran.get(n) ?? 0) + 1);
+    for (const r of rs)
+      for (const n of new Set(ranJobs(r).map((j) => j.name))) ran.set(n, (ran.get(n) ?? 0) + 1);
     const ok = notCancelled(rs);
     const byCount = new Map<number, string[]>();
     let always = 0;
@@ -483,10 +501,12 @@ export interface QueueRow {
 export function queue(runs: readonly CiRun[]): QueueRow[] {
   const byLabel = new Map<string, number[]>();
   for (const r of runs) {
-    for (const j of r.jobs) {
+    for (const j of ranJobs(r)) {
       if (j.queuedNs === null || !Number.isFinite(j.queuedNs)) continue;
       const k = j.labels ?? '(no label)';
-      byLabel.set(k, [...(byLabel.get(k) ?? []), j.queuedNs]);
+      const list = byLabel.get(k) ?? [];
+      byLabel.set(k, list);
+      list.push(j.queuedNs);
     }
   }
   const rows: QueueRow[] = [];
@@ -528,8 +548,8 @@ export function minutesPerDay(
   };
   const parts = (r: CiRun): [string, number][] =>
     by === 'trigger'
-      ? [[r.trigger ?? '(none)', r.minutes]]
-      : r.jobs.map((j): [string, number] => [j.name, jobDuration(j) / MIN]);
+      ? [[r.trigger ?? '(none)', minutesOf(r.jobs)]]
+      : ranJobs(r).map((j): [string, number] => [j.name, jobDuration(j) / MIN]);
   const totals = new Map<string, number>();
   for (const r of runs) for (const [k, m] of parts(r)) totals.set(k, (totals.get(k) ?? 0) + m);
   let keys = [...totals].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([k]) => k);

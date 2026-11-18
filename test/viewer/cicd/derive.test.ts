@@ -112,9 +112,16 @@ describe('stat', () => {
     const runs = twelve();
     expect(stat('minutes', runs, []).value).toBe('12 min');
     expect(stat('queue-p95', runs, []).value).toBe('11.4 s');
-    const again = [run(0, { attempts: 2, attempt: 2 }), run(1)];
-    expect(stat('reruns', again, [run(0)]).value).toBe('1');
-    expect(stat('reruns', again, [run(0)]).delta).toEqual({ text: '+1', better: false });
+    const again = [run(0, { attempts: 3, attempt: 3 }), run(1), run(2, { result: 'cancelled' })];
+    const s = stat('reruns', again, [run(0)]);
+    expect(s.value).toBe('1');
+    expect(s.note).toBe('1 cancelled');
+    expect(s.delta).toEqual({ text: '+1', better: false });
+  });
+
+  test('the sparkline carries the value over an empty slice', () => {
+    const runs = [run(0, { duration: 10 * SEC }), run(12 * DAY, { duration: 30 * SEC })];
+    expect(stat('median-run', runs, []).spark).toEqual([10 * SEC, ...Array(10).fill(10 * SEC), 30 * SEC]);
   });
 
   test('an empty period gives a dash and nothing else', () => {
@@ -186,9 +193,39 @@ describe('jobsTable', () => {
     const b = run(1, { duration: 30 * SEC, jobs: [job('lint', 1, 5)] });
     const narrowed = narrowJobs([a, b], 'check', null);
     expect(narrowed).toHaveLength(1);
+    expect(jobsTable(narrowed, narrowed)).toEqual([]);
+    const five = [0, 1, 2].map((i) => run(i, { jobs: [job('check', i, 5), job('lint', i, 5)] }));
+    const lone = [...five, run(9, { jobs: [job('lint', 9, 5)] })];
+    expect(jobsTable(narrowJobs(lone, 'check', null), lone).map((r) => [r.name, r.points.length])).toEqual([
+      ['check', 3],
+    ]);
+    expect(jobsTable(lone, lone).find((r) => r.name === 'lint')?.points).toHaveLength(4);
     expect(stat('median-run', [a, b], []).value).toBe('20 s');
     expect(narrowJobs([a, b], null, null)).toHaveLength(2);
     expect(narrowJobs([a, b], null, 'x')).toHaveLength(0);
+  });
+});
+
+describe('narrowing and skipped jobs', () => {
+  const epoch = BigInt(new Date(2026, 0, 1).getTime()) * 1_000_000n;
+  test('narrowed minutes follow the kept jobs: by trigger equals by job', () => {
+    const r = run(0, { jobs: [job('a', 0, 60), job('b', 0, 120)] });
+    const [n] = narrowJobs([r], 'b', null);
+    expect(n?.minutes).toBe(2);
+    expect(minutesPerDay([r], 'trigger', epoch).days[0]?.total).toBe(3);
+    expect(minutesPerDay([n as CiRun], 'trigger', epoch).days[0]?.total).toBe(2);
+    expect(minutesPerDay([n as CiRun], 'job', epoch).days[0]?.total).toBe(2);
+  });
+
+  test('a skipped job did not run: not in triggers, minutes or queue', () => {
+    const skipped = job('x', 0, 600, { result: 'skipped', queuedNs: SEC });
+    const rs = Array.from({ length: 5 }, (_, i) =>
+      run(i, { jobs: [job('a', 0, 60, { queuedNs: SEC }), skipped] }),
+    );
+    expect(triggers(rs)[0]).toMatchObject({ jobs: 1, always: 1, chips: [] });
+    expect(minutesPerDay(rs, 'trigger', epoch).days[0]?.total).toBe(5);
+    expect(stat('minutes', rs, []).value).toBe('5 min');
+    expect(queue(rs)[0]?.n).toBe(5);
   });
 });
 
@@ -216,6 +253,8 @@ describe('statusGrid', () => {
     expect(runs).toHaveLength(1);
     expect(statusGrid(runs, 60).runs).toHaveLength(1);
     expect(rerunsAndCancelled(runs).reruns).toBe(1);
+    const prev = splitPeriods(rows, [20 * SEC, 100 * SEC]);
+    expect(stat('reruns', prev.runs, prev.previous).value).toBe('1');
   });
 });
 
