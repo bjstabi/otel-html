@@ -37,7 +37,24 @@ export const DEFAULT_RUN_CONTROLS: RunControls = {
 // The output is what the viewer reads; the input also accepts the output, so a resolved dashboard
 // in the report manifest re-validates with the same schema (idempotence).
 
-export type WidgetType = 'timeline' | 'traces' | 'logs' | 'metric' | 'toplist' | 'table';
+export type WidgetType = 'timeline' | 'traces' | 'logs' | 'metric' | 'toplist' | 'table' | 'cicd';
+
+const CICD_VIEWS = [
+  'stat',
+  'runs-trend',
+  'runs',
+  'jobs',
+  'status-grid',
+  'failures',
+  'triggers',
+  'queue',
+  'minutes',
+  'tests',
+] as const;
+type CicdView = (typeof CICD_VIEWS)[number];
+
+const CICD_STATS = ['success-rate', 'median-run', 'cache', 'minutes', 'queue-p95', 'reruns'] as const;
+type CicdStat = (typeof CICD_STATS)[number];
 
 export interface WidgetLayout {
   x: number;
@@ -95,6 +112,13 @@ export type Widget =
       text: string;
       groupBy: string;
       measure: Measure;
+    })
+  | (Followable & {
+      type: 'cicd';
+      view: CicdView;
+      stat: CicdStat | null;
+      by: 'trigger' | 'job';
+      pipeline: string | null;
     });
 
 export interface Variable {
@@ -183,6 +207,13 @@ export type WidgetInput =
       text?: string | undefined;
       groupBy: string;
       measure?: Measure | undefined;
+    })
+  | (FollowableInput & {
+      type: 'cicd';
+      view: CicdView;
+      stat?: CicdStat | null | undefined;
+      by?: 'trigger' | 'job' | undefined;
+      pipeline?: string | null | undefined;
     });
 
 type VariableInput =
@@ -331,6 +362,19 @@ const buildWidgetSchema = (compiled: boolean) =>
         groupBy: z.string().min(1),
         measure,
       }),
+      z.strictObject({
+        type: z.literal('cicd'),
+        ...layout,
+        ...follow,
+        view: z.enum(CICD_VIEWS),
+        stat: z.enum(CICD_STATS).nullable().default(null).meta({
+          description: 'The tile of view: stat; required there and refused for any other view.',
+        }),
+        by: z.enum(['trigger', 'job']).default('trigger').meta({
+          description: 'What view: minutes stacks by; job is for that view only.',
+        }),
+        pipeline: nullableString,
+      }),
     ])
     .superRefine((w, ctx) => {
       if (w.x + w.w > GRID_COLUMNS) {
@@ -357,6 +401,17 @@ const buildWidgetSchema = (compiled: boolean) =>
           path: ['measure'],
           message: `${name}: a duration measure needs signal: spans`,
         });
+      }
+      if (w.type === 'cicd') {
+        if (w.view === 'stat' && w.stat === null) {
+          ctx.addIssue({ code: 'custom', path: ['stat'], message: 'a stat for view: stat' });
+        }
+        if (w.view !== 'stat' && w.stat !== null) {
+          ctx.addIssue({ code: 'custom', path: ['stat'], message: 'stat only with view: stat' });
+        }
+        if (w.view !== 'minutes' && w.by !== 'trigger') {
+          ctx.addIssue({ code: 'custom', path: ['by'], message: 'by only with view: minutes' });
+        }
       }
       if (w.type !== 'metric') return;
       if (w.runBy === null) {

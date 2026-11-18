@@ -32,6 +32,20 @@ const TRACE = 'c'.repeat(32) as TraceId;
 const PAGE = { start: 100, end: 200 };
 
 const WIDGETS: Record<WidgetType, Widget> = {
+  cicd: {
+    type: 'cicd',
+    id: 'w7',
+    title: null,
+    x: 0,
+    y: 0,
+    w: 6,
+    h: 6,
+    follow: true,
+    view: 'runs',
+    stat: null,
+    by: 'trigger',
+    pipeline: null,
+  },
   timeline: { type: 'timeline', id: 'w1', title: null, x: 0, y: 0, w: 12, h: 6 },
   traces: {
     type: 'traces',
@@ -396,7 +410,7 @@ describe('resourcesMatching', () => {
 describe('honours and fixedScope', () => {
   const variable = (key: string) => ({ key, label: key, default: null });
   test('every generic widget honours every variable and has no fixed scope', () => {
-    for (const w of Object.values(WIDGETS)) {
+    for (const w of Object.values(WIDGETS).filter((x) => x.type !== 'cicd')) {
       expect(honours(w, variable('service.name'))).toBe(true);
       expect(fixedScope(w)).toBeNull();
     }
@@ -409,5 +423,28 @@ describe('honours and fixedScope', () => {
     } as Widget;
     expect(honours(run, variable('run'))).toBe(false);
     expect(honours(run, variable('service.name'))).toBe(true);
+  });
+
+  test('a cicd view honours the variables of the CI keys per the spec table', () => {
+    const cicd = (view: string): Widget => ({ ...WIDGETS.timeline, type: 'cicd', view }) as unknown as Widget;
+    const job = variable('cicd.pipeline.task.name');
+    const runner = variable('cicd.worker.labels');
+    const branch = variable('vcs.ref.head.name');
+    const trigger = variable('cicd.pipeline.trigger');
+    expect(honours(cicd('runs'), job)).toBe(false);
+    expect(honours(cicd('runs'), runner)).toBe(false);
+    expect(honours(cicd('runs'), branch)).toBe(true);
+    expect(honours(cicd('triggers'), trigger)).toBe(true);
+    expect(honours(cicd('jobs'), job)).toBe(true);
+    expect(honours(cicd('failures'), job)).toBe(true);
+    expect(honours(cicd('failures'), runner)).toBe(false);
+    expect(honours(cicd('queue'), runner)).toBe(true);
+    expect(honours(cicd('runs'), variable('service.name'))).toBe(false);
+  });
+
+  test('the tests view has the fixed scope latest run; others none', () => {
+    const cicd = (view: string): Widget => ({ ...WIDGETS.timeline, type: 'cicd', view }) as unknown as Widget;
+    expect(fixedScope(cicd('tests'))).toBe('latest run');
+    expect(fixedScope(cicd('runs'))).toBeNull();
   });
 });

@@ -11,7 +11,7 @@ interface CopyableView {
   page: Exclude<ExplorerPage, 'metrics'>;
   mode: string | null;
   view: string;
-  type: Exclude<WidgetType, 'timeline' | 'metric'>;
+  type: Exclude<WidgetType, 'timeline' | 'metric' | 'cicd'>;
 }
 
 /** Which (page, mode, view) becomes which widget type; anything not listed cannot. */

@@ -11,6 +11,7 @@ const TYPE_TITLES: Record<WidgetType, string> = {
   metric: 'Metrics',
   toplist: 'Top list',
   table: 'Table',
+  cicd: 'CI',
 };
 
 /** The widget's own title, else its type's. */

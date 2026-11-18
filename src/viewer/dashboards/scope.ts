@@ -122,23 +122,42 @@ export const WIDGET_SCOPE: Record<
   metric: { window: 'page', band: true, trace: 'resources' },
   toplist: { window: 'selection', band: false, trace: 'filter' },
   table: { window: 'selection', band: false, trace: 'filter' },
+  cicd: { window: 'selection', band: false, trace: 'none' },
 };
 
 /**
  * Whether the widget's data is narrowed by the variable. Table-driven by widget type so a type that ignores some
  * variables (or all, see `fixedScope`) adds a row; every generic type honours every variable.
  */
+const CICD_BRANCH = 'vcs.ref.head.name';
+const CICD_TRIGGER = 'cicd.pipeline.trigger';
+const CICD_JOB = 'cicd.pipeline.task.name';
+const CICD_RUNNER = 'cicd.worker.labels';
+const CICD_RUN_LEVEL = new Set(['stat', 'runs-trend', 'runs', 'triggers']);
+
+/** Spec §6: run-level views honour branch and trigger, `failures` all but runner, the rest all four. */
+function honoursCicd(widget: Widget, variable: Variable): boolean {
+  if (widget.type !== 'cicd') return true;
+  if (variable.key === CICD_BRANCH || variable.key === CICD_TRIGGER) return true;
+  if (CICD_RUN_LEVEL.has(widget.view)) return false;
+  if (variable.key === CICD_JOB) return true;
+  return variable.key === CICD_RUNNER && widget.view !== 'failures';
+}
+
 const HONOURS: Partial<Record<WidgetType, (widget: Widget, variable: Variable) => boolean>> = {
   // A run chart groups by its `runBy` key, so a variable on that very key is not applied to its query.
   metric: (widget, variable) =>
     widget.type !== 'metric' || widget.runBy === null || runByKey(widget.runBy) !== variable.key,
+  cicd: honoursCicd,
 };
 
 export function honours(widget: Widget, variable: Variable): boolean {
   return HONOURS[widget.type]?.(widget, variable) ?? true;
 }
 
-const FIXED_SCOPE: Partial<Record<WidgetType, (widget: Widget) => string | null>> = {};
+const FIXED_SCOPE: Partial<Record<WidgetType, (widget: Widget) => string | null>> = {
+  cicd: (widget) => (widget.type === 'cicd' && widget.view === 'tests' ? 'latest run' : null),
+};
 
 /** A text for a widget whose scope the page filters do not change (shown as a dashed chip); null when none. */
 export function fixedScope(widget: Widget): string | null {
@@ -225,6 +244,8 @@ function signalOf(widget: Widget): FacetSignal | 'datapoint' {
     case 'toplist':
     case 'table':
       return widget.signal === 'logs' ? 'log' : 'span';
+    case 'cicd':
+      return 'span';
   }
 }
 
@@ -237,6 +258,7 @@ function ownQuery(widget: Widget): string | null {
       return widget.query;
     case 'timeline':
     case 'metric':
+    case 'cicd':
       return null;
   }
 }

@@ -3,6 +3,7 @@ import { ChevronDown, Copy, LayoutDashboard, Pencil } from 'lucide-react';
 import { type JSX, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { RunControls, Variable, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
+import { CicdWidget } from '../cicd/widget.js';
 import type { DataSource } from '../data/data-source.js';
 import { manifestRange } from '../data/manifest-range.js';
 import type { TimeWindow } from '../data/time-window.js';
@@ -84,6 +85,7 @@ export const WIDGETS: Record<WidgetType, WidgetRenderer> = {
   metric: MetricWidget,
   toplist: FacetChartWidget,
   table: FacetChartWidget,
+  cicd: CicdWidget,
 };
 
 const CARD = 'max-w-xl rounded-card border border-hairline bg-surface p-6';
@@ -162,6 +164,7 @@ function openInOf(
 ): { page: 'traces' | 'logs' | 'metrics'; label: string; patch: UrlPatch } | null {
   switch (widget.type) {
     case 'timeline':
+    case 'cicd':
       return null;
     case 'metric': {
       if (widget.queries === null) return null;
