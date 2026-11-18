@@ -10,11 +10,22 @@ import { useTheme } from '../../theme/theme-provider.js';
 import { type JobRow, jobsTable } from '../derive.js';
 import { useRunActions } from '../run-actions.js';
 import { useCicd } from '../use-cicd.js';
-import { CicdBody, chartPx, escapeHtml, indexOf, pointOf, resultColors, ringSeries } from './body.js';
+import {
+  CicdBody,
+  chartPx,
+  currentSeries,
+  escapeHtml,
+  indexOf,
+  pointOf,
+  resultColors,
+  ringSeries,
+} from './body.js';
+import { useRunKeys } from './run-keys.js';
 
 const COLUMNS = 'grid-cols-[minmax(8rem,1fr)_120px_4.5rem_4.5rem_9rem_4.5rem_1.75rem]';
 const SPARK_W = 120;
 const SPARK_H = 24;
+const PLOT = { left: 52, right: 12 };
 
 /** A job's durations as a line with its p25–p75 band, a diamond for each failure and a hollow point for each cancel. */
 function JobSpark({ row }: { row: JobRow }): JSX.Element {
@@ -110,7 +121,7 @@ export const JobsView: WidgetRenderer = ({
     () => jobsTable(data.runs, [...data.previous, ...data.runs]),
     [data.runs, data.previous],
   );
-  const { openRun, jobMenu, selectedTraceId, isSource } = actions;
+  const { openRun, runMenu, jobMenu, selectedTraceId, isSource } = actions;
   useSubtitle(
     page,
     data.status === 'ready' && rows.length > 0
@@ -119,13 +130,15 @@ export const JobsView: WidgetRenderer = ({
   );
 
   const trend = rows.find((r) => r.name === expanded);
+  const trendRuns = useMemo(() => trend?.points.map((p) => p.run) ?? [], [trend]);
+  const keys = useRunKeys(trendRuns, actions, PLOT);
   const option = useMemo(() => {
     if (trend === undefined) return null;
     const open = trend.points.findIndex((p) => p.run.traceId === selectedTraceId);
     const pt = trend.points[open];
     return {
       animation: false,
-      grid: { left: 52, right: 12, top: 12, bottom: 24 },
+      grid: { left: PLOT.left, right: PLOT.right, top: 12, bottom: 24 },
       tooltip: {
         trigger: 'item',
         formatter: (p: { dataIndex: number }) => {
@@ -160,9 +173,12 @@ export const JobsView: WidgetRenderer = ({
           })),
         },
         ...(pt === undefined ? [] : [ringSeries([open, pt.duration], isSource, colors.ink)]),
+        ...(keys.current === null
+          ? []
+          : [currentSeries([keys.current, trend.points[keys.current]?.duration ?? 0], colors.ink)]),
       ],
     };
-  }, [trend, colors, epoch, selectedTraceId, isSource]);
+  }, [trend, colors, epoch, selectedTraceId, isSource, keys.current]);
   const onEvents = useMemo(
     () => ({
       click: (p: unknown) => {
@@ -175,10 +191,10 @@ export const JobsView: WidgetRenderer = ({
         const x = i === null ? undefined : trend?.points[i];
         if (x === undefined) return;
         (p as { event?: { event?: { preventDefault?(): void } } }).event?.event?.preventDefault?.();
-        actions.runMenu(x.run, pointOf(p));
+        runMenu(x.run, pointOf(p));
       },
     }),
-    [trend, openRun, actions],
+    [trend, openRun, runMenu],
   );
 
   return (
@@ -246,13 +262,20 @@ export const JobsView: WidgetRenderer = ({
                       </button>
                     </div>
                     {isOpen && option !== null && (
-                      <div data-job-trend className="px-3 pb-2">
+                      <div
+                        data-job-trend
+                        role="application"
+                        {...keys.props}
+                        aria-label={`${row.name} duration over the runs: Left and Right choose a run, Enter opens it`}
+                        className="px-3 pb-2 focus-visible:outline focus-visible:outline-2"
+                      >
                         <Chart
                           option={option}
                           onEvents={onEvents}
                           height={chartPx(height, 80)}
                           ariaLabel={`${row.name} duration over the runs`}
                         />
+                        {keys.live}
                       </div>
                     )}
                   </div>

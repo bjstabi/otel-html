@@ -1,4 +1,4 @@
-import { type JSX, useMemo } from 'react';
+import { type JSX, type KeyboardEvent, useMemo, useState } from 'react';
 import { formatDuration } from '../../../semconv/formatters.js';
 import { menuTriggers } from '../../components/context-menu.js';
 import type { WidgetRenderer } from '../../dashboards/dashboard-page.js';
@@ -38,6 +38,27 @@ export const StatusGridView: WidgetRenderer = ({ widget, scope, actions: page })
       : null,
   );
   const open = grid.runs.findIndex((r) => r.traceId === selectedTraceId);
+  // roving tabindex: one run dot is in the tab order, the arrows move it
+  const [rove, setRove] = useState(0);
+  const tabbable = Math.min(rove, Math.max(0, grid.runs.length - 1));
+  const moveDot = (e: KeyboardEvent<SVGElement>, i: number): void => {
+    const last = grid.runs.length - 1;
+    const to =
+      e.key === 'ArrowRight'
+        ? i + 1
+        : e.key === 'ArrowLeft'
+          ? i - 1
+          : e.key === 'Home'
+            ? 0
+            : e.key === 'End'
+              ? last
+              : null;
+    if (to === null) return;
+    e.preventDefault();
+    const next = Math.max(0, Math.min(last, to));
+    setRove(next);
+    e.currentTarget.parentElement?.querySelectorAll<SVGElement>('[data-run-dot]')[next]?.focus();
+  };
   return (
     <>
       <CicdBody data={data}>
@@ -47,35 +68,46 @@ export const StatusGridView: WidgetRenderer = ({ widget, scope, actions: page })
           const colX = (i: number): number => LABEL_W + i * PITCH;
           return (
             <div>
+              {/* biome-ignore lint/a11y/useSemanticElements: an SVG group cannot be a <fieldset> */}
               <svg
-                role="img"
-                aria-label="Job results over the last runs"
+                role="group"
+                aria-label="Job results over the last runs; the dots are the runs, Left and Right move between them"
                 width={width}
                 height={height}
                 viewBox={`0 0 ${width} ${height}`}
                 className="max-w-none text-ink"
               >
-                {grid.runs.map((r, i) => (
-                  // biome-ignore lint/a11y/useSemanticElements: an SVG mark cannot be a <button>
-                  <circle
-                    key={r.traceId}
-                    data-run-dot={r.result}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`${r.title ?? `Run ${r.runId}`}, ${r.result}`}
-                    cx={colX(i) + CELL / 2}
-                    cy={DOTS_H / 2}
-                    r={3.5}
-                    className={`cursor-pointer ${DOT[r.result]}`}
-                    onClick={(e) => openRun(r, pointFromClick(e))}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') openRun(r, centreOf(e.currentTarget));
-                    }}
-                    {...menuTriggers((at) => runMenu(r, at))}
-                  >
-                    <title>{`${r.title ?? `Run ${r.runId}`} · ${r.result} · ${formatDuration(r.duration)}`}</title>
-                  </circle>
-                ))}
+                {grid.runs.map((r, i) => {
+                  const dotMenu = menuTriggers((at) => runMenu(r, at));
+                  return (
+                    // biome-ignore lint/a11y/useSemanticElements: an SVG mark cannot be a <button>
+                    <circle
+                      key={r.traceId}
+                      data-run-dot={r.result}
+                      role="button"
+                      tabIndex={i === tabbable ? 0 : -1}
+                      aria-label={`${r.title ?? `Run ${r.runId}`}, ${r.result}`}
+                      cx={colX(i) + CELL / 2}
+                      cy={DOTS_H / 2}
+                      r={3.5}
+                      className={`cursor-pointer ${DOT[r.result]}`}
+                      onClick={(e) => openRun(r, pointFromClick(e))}
+                      onFocus={() => setRove(i)}
+                      {...dotMenu}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          openRun(r, centreOf(e.currentTarget));
+                        } else {
+                          moveDot(e, i);
+                          dotMenu.onKeyDown(e);
+                        }
+                      }}
+                    >
+                      <title>{`${r.title ?? `Run ${r.runId}`} · ${r.result} · ${formatDuration(r.duration)}`}</title>
+                    </circle>
+                  );
+                })}
                 {grid.rows.map((row, y) => {
                   const top = DOTS_H + y * ROW;
                   return (
@@ -106,7 +138,7 @@ export const StatusGridView: WidgetRenderer = ({ widget, scope, actions: page })
                             className="stroke-hairline"
                           />
                         ) : (
-                          // biome-ignore lint/a11y/noStaticElementInteractions: a mark of the grid, the run dot above is its keyboard target
+                          // biome-ignore lint/a11y/noStaticElementInteractions: a mark of the grid; the run dot above is the keyboard target
                           <rect
                             key={run.traceId}
                             data-cell={cell}
@@ -115,12 +147,8 @@ export const StatusGridView: WidgetRenderer = ({ widget, scope, actions: page })
                             width={CELL}
                             height={CELL}
                             rx={1.5}
-                            tabIndex={0}
                             className={`cursor-pointer ${FILL[cell]}`}
                             onClick={(e) => openRun(run, pointFromClick(e))}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') openRun(run, centreOf(e.currentTarget));
-                            }}
                             {...menuTriggers((at) => runMenu(run, at))}
                           >
                             <title>{`${row.job} · ${cell} · ${run.title ?? `Run ${run.runId}`}`}</title>

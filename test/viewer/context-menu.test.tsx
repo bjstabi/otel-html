@@ -50,6 +50,39 @@ const key = (k: string): void => {
   });
 };
 
+describe('context menu keyboard trigger', () => {
+  it.each([
+    ['ContextMenu', { key: 'ContextMenu' }],
+    ['Shift+F10', { key: 'F10', shiftKey: true }],
+  ])('%s on a trigger opens the menu at its centre', (_n, init) => {
+    const target = host.querySelector<HTMLElement>('[data-testid="target"]');
+    vi.spyOn(target as HTMLElement, 'getBoundingClientRect').mockReturnValue({
+      left: 100,
+      top: 50,
+      width: 20,
+      height: 10,
+      right: 120,
+      bottom: 60,
+      x: 100,
+      y: 50,
+      toJSON: () => ({}),
+    });
+    act(() => {
+      target?.dispatchEvent(new KeyboardEvent('keydown', { ...init, bubbles: true }));
+    });
+    expect(menu()).not.toBeNull();
+    expect(menu()?.style.left).toBe('110px');
+  });
+
+  it('a plain F10 does nothing', () => {
+    const target = host.querySelector<HTMLElement>('[data-testid="target"]');
+    act(() => {
+      target?.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', bubbles: true }));
+    });
+    expect(menu()).toBeNull();
+  });
+});
+
 describe('context menu', () => {
   it('focuses the first item; ArrowDown then Enter runs the second and closes', () => {
     act(() => api.open({ x: 10, y: 10 }, null, items));

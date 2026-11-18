@@ -106,11 +106,24 @@ function sevenDays(): CicdRow[] {
   ]);
 }
 
+const change = (fn: (s: DashboardPageState) => DashboardPageState): void => {
+  state = fn(state);
+};
+const sources = new WeakMap<CicdRow[], DataSource>();
+const sourceOf = (rows: CicdRow[]): DataSource => {
+  let ds = sources.get(rows);
+  if (ds === undefined) {
+    ds = {
+      cicdRows: () => Promise.resolve(rows),
+      manifest: { epochUnixNano: '1700000000000000000' },
+    } as unknown as DataSource;
+    sources.set(rows, ds);
+  }
+  return ds;
+};
+
 async function show(w: Widget, rows: CicdRow[], extent = { start: 0, end: 14 * DAY }): Promise<void> {
-  const dataSource = {
-    cicdRows: () => Promise.resolve(rows),
-    manifest: { epochUnixNano: '1700000000000000000' },
-  } as unknown as DataSource;
+  const dataSource = sourceOf(rows);
   const subtitles: (string | null)[] = [];
   const actions = {
     selectWindow: (win: unknown) => selected.push(win),
@@ -120,14 +133,7 @@ async function show(w: Widget, rows: CicdRow[], extent = { start: 0, end: 14 * D
     root.render(
       <ThemeProvider>
         <CicdProvider dataSource={dataSource} extent={extent}>
-          <RunActionsProvider
-            dashboard={dashboard}
-            state={state}
-            change={(fn) => {
-              state = fn(state);
-            }}
-            dataSource={dataSource}
-          >
+          <RunActionsProvider dashboard={dashboard} state={state} change={change} dataSource={dataSource}>
             <CicdWidget
               widget={w}
               scope={
@@ -312,5 +318,77 @@ describe('runs', () => {
   it('says so with no run', async () => {
     await show(widget('runs'), []);
     expect(host.textContent).toContain('No run in this range.');
+  });
+});
+
+describe('runs chart keyboard access', () => {
+  const box = (): HTMLElement => {
+    const el = q<HTMLElement>('[role="application"]');
+    el.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 452, height: 120, right: 452, bottom: 120, x: 0, y: 0 }) as DOMRect;
+    return el;
+  };
+  const key = async (el: HTMLElement, k: string, init: KeyboardEventInit = {}): Promise<void> => {
+    await act(async () => {
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, ...init }));
+    });
+  };
+  const q = <T extends Element>(sel: string): T => {
+    const e = host.querySelector<T>(sel);
+    if (e === null) throw new Error(`nothing matches ${sel}`);
+    return e;
+  };
+  const rows = (): CicdRow[] => sevenDays();
+
+  it('makes the chart one labelled, focusable element', async () => {
+    await show(widget('runs'), rows());
+    const el = q<HTMLElement>('[role="application"]');
+    expect(el.tabIndex).toBe(0);
+    expect(el.getAttribute('aria-label')).toMatch(/Run durations/);
+  });
+
+  it('ArrowRight then Enter opens the second run, and the live region names it', async () => {
+    await show(widget('runs'), rows());
+    const el = box();
+    await key(el, 'ArrowRight');
+    await key(el, 'ArrowRight');
+    expect(el.querySelector('[aria-live]')?.textContent).toMatch(/commit 2 · failure/);
+    await key(el, 'Enter');
+    expect(state.sel.trace).toBe(TRACE(2));
+    expect(state.run?.from).toBe('w1');
+  });
+
+  it('draws a current-run ring while focused, on the run the arrows chose', async () => {
+    await show(widget('runs'), rows());
+    const el = box();
+    await act(async () => el.dispatchEvent(new FocusEvent('focusin', { bubbles: true })));
+    await key(el, 'End');
+    const ringOf = (): { data: number[][] } | undefined =>
+      (series() as unknown as { id?: string; data: number[][] }[]).find((x) => x.id === 'current-run');
+    expect(ringOf()?.data[0]?.[0]).toBe(11);
+  });
+
+  it('ContextMenu and Shift+F10 open the run menu at the mark', async () => {
+    await show(widget('runs'), rows());
+    const el = box();
+    await key(el, 'ArrowRight');
+    await key(el, 'ContextMenu');
+    expect(menuLabels()).toContain('Open the run here');
+    await act(async () => document.dispatchEvent(new Event('pointerdown', { bubbles: true })));
+    await key(el, 'F10', { shiftKey: true });
+    expect(menuLabels()).toContain('Open the run here');
+  });
+});
+
+describe('re-render with unchanged data', () => {
+  it('hands the chart the same option and handlers, so it does not setOption again', async () => {
+    const w = widget('runs');
+    const rows = sevenDays();
+    await show(w, rows);
+    const first = lastChart();
+    await show(w, rows);
+    const again = lastChart();
+    expect(again.onEvents).toBe(first.onEvents);
+    expect(again.option).toBe(first.option);
   });
 });

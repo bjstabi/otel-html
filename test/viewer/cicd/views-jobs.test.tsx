@@ -264,12 +264,54 @@ describe('status-grid', () => {
     expect(state.run?.from).toBe('w1');
   });
 
-  it('opens the run of a failed cell on Enter', async () => {
+  it('exposes the run dots to assistive technology as buttons inside a labelled group', async () => {
     await show(widget('status-grid'), runs(12, ['build', 'test']));
-    const cell = q<SVGElement>('[data-job-row="test"] [data-cell="failure"]');
-    expect(cell.getAttribute('tabindex')).toBe('0');
-    await act(async () => cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    const group = q<SVGElement>('[role="group"]');
+    expect(group.getAttribute('aria-label')).toMatch(/Job results/);
+    expect(host.querySelector('[role="img"]')).toBeNull();
+    expect(group.querySelectorAll('[role="button"]')).toHaveLength(12);
+  });
+
+  it('puts one run dot in the tab order and no cell', async () => {
+    await show(widget('status-grid'), runs(12, ['build', 'test']));
+    const dots = [...host.querySelectorAll('[data-run-dot]')];
+    expect(dots.filter((d) => d.getAttribute('tabindex') === '0')).toHaveLength(1);
+    expect(dots.filter((d) => d.getAttribute('tabindex') === '-1')).toHaveLength(11);
+    for (const cell of host.querySelectorAll('[data-cell]'))
+      expect(cell.hasAttribute('tabindex')).toBe(false);
+  });
+
+  it('moves the tab stop with the arrows, Home and End', async () => {
+    await show(widget('status-grid'), runs(12, ['build']));
+    const dots = (): Element[] => [...host.querySelectorAll('[data-run-dot]')];
+    const press = async (el: Element, key: string): Promise<void> => {
+      await act(async () => el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })));
+    };
+    await press(dots()[0] as Element, 'ArrowRight');
+    expect(dots()[1]?.getAttribute('tabindex')).toBe('0');
+    await press(dots()[1] as Element, 'End');
+    expect(dots()[11]?.getAttribute('tabindex')).toBe('0');
+    await press(dots()[11] as Element, 'ArrowLeft');
+    expect(dots()[10]?.getAttribute('tabindex')).toBe('0');
+    await press(dots()[10] as Element, 'Home');
+    expect(dots()[0]?.getAttribute('tabindex')).toBe('0');
+  });
+
+  it.each(['Enter', ' '])('opens the run of a dot on %j', async (key) => {
+    await show(widget('status-grid'), runs(12, ['build', 'test']));
+    const dot = q<SVGElement>(`[data-run-dot]:nth-of-type(2)`);
+    await act(async () => dot.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })));
     expect(state.sel.trace).toBe(TRACE(2));
+    expect(state.run?.from).toBe('w1');
+  });
+
+  it('opens the run menu of a dot on Shift+F10', async () => {
+    await show(widget('status-grid'), runs(12, ['build', 'test']));
+    const dot = q<SVGElement>('[data-run-dot]');
+    await act(async () =>
+      dot.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true })),
+    );
+    expect(menuLabels()).toContain('Open the run here');
   });
 
   it('truncates a long label with … and keeps the full name in a <title>', async () => {
@@ -322,6 +364,17 @@ describe('failures', () => {
     await act(async () => chip.click());
     expect(menuLabels()).toContain('Filter the page by job');
     expect(state.run).toBeNull();
+  });
+
+  it('opens a keyboard-activated chip menu at the chip, not at the screen corner', async () => {
+    await show(widget('failures'), failing());
+    const chip = q<HTMLElement>(`[data-failure="${TRACE(2)}"] [data-job-chip="test"]`);
+    chip.getBoundingClientRect = () =>
+      ({ left: 200, top: 100, width: 40, height: 20, right: 240, bottom: 120, x: 200, y: 100 }) as DOMRect;
+    await act(async () => chip.click());
+    const menu = document.querySelector<HTMLElement>('[role="menu"]');
+    expect(menu?.style.left).toBe('220px');
+    expect(menu?.style.top).toBe('110px');
   });
 
   it('opens a run on a row click and rings it in the row', async () => {
@@ -381,5 +434,22 @@ describe('triggers', () => {
     await show(widget('triggers'), mixed());
     await act(async () => q<HTMLElement>('[data-trigger="push"] button[data-trigger-name]').click());
     expect(menuLabels()[0]).toMatch(/^Filter the page by trigger/);
+  });
+});
+
+describe('keyboard access to an expanded job trend', () => {
+  it('ArrowRight then Enter on the trend opens the first run of the job', async () => {
+    await show(widget('jobs'), runs(12, ['build', 'test']));
+    await act(async () => q<HTMLElement>('[data-job="test"]').click());
+    const el = q<HTMLElement>('[data-job-trend]');
+    expect(el.getAttribute('role')).toBe('application');
+    el.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 400, height: 100, right: 400, bottom: 100, x: 0, y: 0 }) as DOMRect;
+    await act(async () =>
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })),
+    );
+    await act(async () => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    expect(state.sel.trace).toBe(TRACE(1));
+    expect(state.run?.from).toBe('w1');
   });
 });

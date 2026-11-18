@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -80,7 +81,12 @@ export function RunActionsProvider(props: RunActionsContext & { children: ReactN
   const { children, ...value } = props;
   const mode = useRef<'attached' | 'panel'>('attached');
   const [point, setPoint] = useState<RunPoint | null>(null);
-  return <Ctx.Provider value={{ ...value, mode, point, setPoint }}>{children}</Ctx.Provider>;
+  const { dashboard, state, change, dataSource } = value;
+  const shared = useMemo(
+    () => ({ dashboard, state, change, dataSource, mode, point, setPoint }),
+    [dashboard, state, change, dataSource, point],
+  );
+  return <Ctx.Provider value={shared}>{children}</Ctx.Provider>;
 }
 
 /** The quick filter that moves away from the run's own kind: main for a pull request, else pull requests. */
@@ -155,11 +161,14 @@ export function useRunActions(widgetId: string): RunActions {
     },
     [dashboard, change],
   );
-  const has = (key: string): boolean => dashboard.variables.some((v) => v.key === key);
-  const current = (key: string): string | null => {
-    if (Object.hasOwn(state.vars, key)) return state.vars[key] ?? null;
-    return dashboard.variables.find((v) => v.key === key)?.default ?? null;
-  };
+  const has = useCallback((key: string) => dashboard.variables.some((v) => v.key === key), [dashboard]);
+  const current = useCallback(
+    (key: string): string | null => {
+      if (Object.hasOwn(state.vars, key)) return state.vars[key] ?? null;
+      return dashboard.variables.find((v) => v.key === key)?.default ?? null;
+    },
+    [dashboard, state.vars],
+  );
 
   const openRun = useCallback(
     (run: CiRun, at?: At): void => {
@@ -180,50 +189,80 @@ export function useRunActions(widgetId: string): RunActions {
     [change, mode],
   );
 
-  const openOnGithub = (run: CiRun): void => {
-    const none = (): void => setNotice('This run has no GitHub link.');
-    runUrl(dataSource, run.traceId).then((url) => {
-      if (url === null || !/^https?:\/\//.test(url)) none();
-      else window.open(url, '_blank', 'noopener');
-    }, none);
-  };
+  // The tab opens inside the click (a popup blocker drops a `window.open` made after an await) and goes to the url
+  // once it is known; with none (or a blocked tab) the url is opened afterwards, or the notice is shown.
+  const openOnGithub = useCallback(
+    (run: CiRun): void => {
+      const tab = window.open('', '_blank') ?? null;
+      if (tab !== null) tab.opener = null;
+      const none = (): void => {
+        tab?.close();
+        setNotice('This run has no GitHub link.');
+      };
+      runUrl(dataSource, run.traceId).then((url) => {
+        if (url === null || !/^https?:\/\//.test(url)) none();
+        else if (tab === null) window.open(url, '_blank', 'noopener');
+        else tab.location.href = url;
+      }, none);
+    },
+    [dataSource],
+  );
 
-  const filterItem = (label: string, key: string, value: string): MenuItem[] =>
-    has(key) ? [{ label, code: value, run: () => setVar(key, value) }] : [];
+  const filterItem = useCallback(
+    (label: string, key: string, value: string): MenuItem[] =>
+      has(key) ? [{ label, code: value, run: () => setVar(key, value) }] : [],
+    [has, setVar],
+  );
 
-  const runMenu = (run: CiRun, at: At): void => {
-    const quick = quickFor(dashboard, run);
-    const failed = run.jobs.filter((j) => jobStatus(j) === 'failure').slice(0, MAX_JOB_ITEMS);
-    menu.open(at, run.title ?? `Run ${run.runId}`, [
-      { label: 'Open the run here', run: () => openRun(run) },
-      { label: 'Open on GitHub ↗', run: () => openOnGithub(run) },
-      'separator',
-      ...(run.trigger === null ? [] : filterItem('Filter the page by trigger', TRIGGER, run.trigger)),
-      ...(quick === null
-        ? []
-        : [
-            {
-              label: quick.label,
-              run: () => change((s) => ({ ...s, vars: withQuick(s.vars, dashboard.variables, quick.quick) })),
-            },
-          ]),
-      ...failed.flatMap((j) => filterItem('Filter the page by job', JOB, j.name)),
-    ]);
-  };
+  const runMenu = useCallback(
+    (run: CiRun, at: At): void => {
+      const quick = quickFor(dashboard, run);
+      const failed = run.jobs.filter((j) => jobStatus(j) === 'failure').slice(0, MAX_JOB_ITEMS);
+      menu.open(at, run.title ?? `Run ${run.runId}`, [
+        { label: 'Open the run here', run: () => openRun(run) },
+        { label: 'Open on GitHub ↗', run: () => openOnGithub(run) },
+        'separator',
+        ...(run.trigger === null ? [] : filterItem('Filter the page by trigger', TRIGGER, run.trigger)),
+        ...(quick === null
+          ? []
+          : [
+              {
+                label: quick.label,
+                run: () =>
+                  change((s) => ({ ...s, vars: withQuick(s.vars, dashboard.variables, quick.quick) })),
+              },
+            ]),
+        ...failed.flatMap((j) => filterItem('Filter the page by job', JOB, j.name)),
+      ]);
+    },
+    [dashboard, change, menu.open, openRun, openOnGithub, filterItem],
+  );
 
-  const jobMenu = (job: string, at: At, openTrend?: () => void): void => {
-    const on = current(JOB) === job;
-    menu.open(at, job, [
-      ...(has(JOB)
-        ? [
-            on
-              ? { label: 'Clear the job filter', run: () => setVar(JOB, null) }
-              : { label: 'Filter the page by job', run: () => setVar(JOB, job) },
-          ]
-        : []),
-      ...(openTrend === undefined ? [] : [{ label: 'Open its trend', run: openTrend }]),
-    ]);
-  };
+  const jobMenu = useCallback(
+    (job: string, at: At, openTrend?: () => void): void => {
+      const on = current(JOB) === job;
+      menu.open(at, job, [
+        ...(has(JOB)
+          ? [
+              on
+                ? { label: 'Clear the job filter', run: () => setVar(JOB, null) }
+                : { label: 'Filter the page by job', run: () => setVar(JOB, job) },
+            ]
+          : []),
+        ...(openTrend === undefined ? [] : [{ label: 'Open its trend', run: openTrend }]),
+      ]);
+    },
+    [has, current, setVar, menu.open],
+  );
+  const triggerMenu = useCallback(
+    (trigger: string, at: At) =>
+      menu.open(at, trigger, filterItem('Filter the page by trigger', TRIGGER, trigger)),
+    [menu.open, filterItem],
+  );
+  const runnerMenu = useCallback(
+    (label: string, at: At) => menu.open(at, label, filterItem('Filter the page by runner', RUNNER, label)),
+    [menu.open, filterItem],
+  );
 
   return {
     openRun,
@@ -231,9 +270,8 @@ export function useRunActions(widgetId: string): RunActions {
     runMenu,
     openOnGithub,
     jobMenu,
-    triggerMenu: (trigger, at) =>
-      menu.open(at, trigger, filterItem('Filter the page by trigger', TRIGGER, trigger)),
-    runnerMenu: (label, at) => menu.open(at, label, filterItem('Filter the page by runner', RUNNER, label)),
+    triggerMenu,
+    runnerMenu,
     selectedTraceId: state.sel.trace,
     isSource: state.run?.from === widgetId,
     runPoint: point,

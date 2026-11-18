@@ -73,7 +73,7 @@ export const FailuresView: WidgetRenderer = ({ widget, scope, dataSource, action
                               className="rounded-full border border-critical px-2 py-0.5 text-xs text-critical"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                jobMenu(j.name, { x: e.clientX, y: e.clientY });
+                                jobMenu(j.name, pointFromClick(e));
                               }}
                             >
                               {j.name}

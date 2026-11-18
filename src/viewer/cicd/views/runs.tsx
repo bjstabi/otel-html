@@ -6,7 +6,19 @@ import { useTheme } from '../../theme/theme-provider.js';
 import { useRunActions } from '../run-actions.js';
 import type { CiRun } from '../runs.js';
 import { useCicd } from '../use-cicd.js';
-import { CicdBody, chartPx, escapeHtml, indexOf, pointOf, resultColors, ringSeries } from './body.js';
+import {
+  CicdBody,
+  chartPx,
+  currentSeries,
+  escapeHtml,
+  indexOf,
+  pointOf,
+  resultColors,
+  ringSeries,
+} from './body.js';
+import { useRunKeys } from './run-keys.js';
+
+const PLOT = { left: 44, right: 8 };
 
 /** One bar per run, oldest first: height is the duration, colour the result, hollow when no task was replayed. */
 export const RunsView: WidgetRenderer = ({ widget, scope, height }): JSX.Element => {
@@ -18,12 +30,13 @@ export const RunsView: WidgetRenderer = ({ widget, scope, height }): JSX.Element
   const colors = useMemo(resultColors, [resolved]);
   const { openRun, runMenu, selectedTraceId, isSource } = actions;
   const open = runs.findIndex((r) => r.traceId === selectedTraceId);
+  const keys = useRunKeys(runs, actions, PLOT);
   const maxDuration = Math.max(1, ...runs.map((r) => r.duration));
 
   const option = useMemo(
     () => ({
       animation: false,
-      grid: { left: 44, right: 8, top: 8, bottom: 8 },
+      grid: { left: PLOT.left, right: PLOT.right, top: 8, bottom: 8 },
       tooltip: {
         trigger: 'item',
         formatter: (p: { dataIndex: number }) => {
@@ -53,9 +66,12 @@ export const RunsView: WidgetRenderer = ({ widget, scope, height }): JSX.Element
           }),
         },
         ...(open < 0 ? [] : [ringSeries([open, runs[open]?.duration ?? 0], isSource, colors.ink)]),
+        ...(keys.current === null
+          ? []
+          : [currentSeries([keys.current, runs[keys.current]?.duration ?? 0], colors.ink)]),
       ],
     }),
-    [runs, colors, open, isSource, maxDuration],
+    [runs, colors, open, isSource, maxDuration, keys.current],
   );
   const onEvents = useMemo(
     () => ({
@@ -79,7 +95,15 @@ export const RunsView: WidgetRenderer = ({ widget, scope, height }): JSX.Element
     <>
       <CicdBody data={data}>
         {() => (
-          <Chart option={option} onEvents={onEvents} height={chartPx(height)} ariaLabel="Run durations" />
+          <div
+            role="application"
+            {...keys.props}
+            aria-label="Run durations: Left and Right choose a run, Enter opens it"
+            className="rounded focus-visible:outline focus-visible:outline-2"
+          >
+            <Chart option={option} onEvents={onEvents} height={chartPx(height)} ariaLabel="Run durations" />
+            {keys.live}
+          </div>
         )}
       </CicdBody>
       {actions.element}

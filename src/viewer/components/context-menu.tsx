@@ -1,6 +1,7 @@
 import {
   type CSSProperties,
   type JSX,
+  type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
   useCallback,
@@ -173,6 +174,8 @@ function suppressFollowUp(target: EventTarget): void {
 
 export function menuTriggers(open: (at: At) => void): {
   onContextMenu(e: MouseEvent): void;
+  /** ContextMenu and Shift+F10 open the menu at the element's centre; a consumer with its own handler calls this first. */
+  onKeyDown(e: KeyboardEvent): void;
   onPointerDown(e: PointerEvent): void;
   onPointerMove(e: PointerEvent): void;
   onPointerUp(e: PointerEvent): void;
@@ -186,6 +189,12 @@ export function menuTriggers(open: (at: At) => void): {
       e.preventDefault();
       if (presses.get(e.currentTarget)?.fired === true) return;
       open({ x: e.clientX, y: e.clientY });
+    },
+    onKeyDown: (e) => {
+      if (e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return;
+      e.preventDefault();
+      const b = e.currentTarget.getBoundingClientRect();
+      open({ x: b.left + b.width / 2, y: b.top + b.height / 2 });
     },
     onPointerDown: (e) => {
       if (e.pointerType !== 'touch') return;

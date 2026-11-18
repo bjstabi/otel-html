@@ -74,3 +74,18 @@ export function ringSeries(at: [number, number], source: boolean, ink: string, y
     data: [at],
   };
 }
+
+/** The keyboard-highlighted run as a dashed ring (the open run's ring is solid), drawn while the chart has focus. */
+export function currentSeries(at: [number, number], ink: string, yAxisIndex = 0) {
+  return {
+    id: 'current-run',
+    type: 'scatter',
+    silent: true,
+    symbol: 'circle',
+    symbolSize: 22,
+    yAxisIndex,
+    z: 11,
+    itemStyle: { color: 'transparent', borderColor: ink, borderWidth: 2, borderType: 'dashed' },
+    data: [at],
+  };
+}

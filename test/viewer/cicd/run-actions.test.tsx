@@ -235,45 +235,72 @@ describe('withoutStaleRun', () => {
 });
 
 describe('Open on GitHub', () => {
-  it('refuses a url that is not http(s)', async () => {
-    const open = vi.spyOn(window, 'open').mockReturnValue(null);
-    getTrace.mockResolvedValue(detail('javascript:alert(1)'));
+  const fakeTab = (): { opener: unknown; location: { href: string }; close: ReturnType<typeof vi.fn> } => ({
+    opener: 'parent',
+    location: { href: '' },
+    close: vi.fn(),
+  });
+  const click = async (): Promise<void> => {
     act(() => api.runMenu(run(), { x: 1, y: 1 }));
     await act(async () => item('Open on GitHub').click());
-    expect(open).not.toHaveBeenCalled();
+  };
+
+  it('opens the tab inside the click, before the url is known, and sends it there afterwards', async () => {
+    const tab = fakeTab();
+    const open = vi.spyOn(window, 'open').mockReturnValue(tab as never);
+    let resolve: (d: unknown) => void = () => {};
+    getTrace.mockReturnValue(new Promise((r) => (resolve = r)));
+    act(() => api.runMenu(run(), { x: 1, y: 1 }));
+    await act(async () => item('Open on GitHub').click());
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith('', '_blank');
+    expect(tab.opener).toBeNull();
+    expect(tab.location.href).toBe('');
+    await act(async () => resolve(detail('https://github.com/o/r/actions/runs/7')));
+    expect(getTrace).toHaveBeenCalledWith(TRACE);
+    expect(tab.location.href).toBe('https://github.com/o/r/actions/runs/7');
+  });
+
+  it('refuses a url that is not http(s): the tab is closed and the notice shown', async () => {
+    const tab = fakeTab();
+    vi.spyOn(window, 'open').mockReturnValue(tab as never);
+    getTrace.mockResolvedValue(detail('javascript:alert(1)'));
+    await click();
+    expect(tab.location.href).toBe('');
+    expect(tab.close).toHaveBeenCalled();
     expect(document.querySelector('[role="status"]')?.textContent).toMatch(/no GitHub link/);
   });
 
   it('portals the notice to the body', async () => {
+    vi.spyOn(window, 'open').mockReturnValue(fakeTab() as never);
     getTrace.mockResolvedValue(detail(null));
-    act(() => api.runMenu(run(), { x: 1, y: 1 }));
-    await act(async () => item('Open on GitHub').click());
+    await click();
     expect(host.querySelector('[role="status"]')).toBeNull();
     expect(document.body.querySelector(':scope > [role="status"]')).not.toBeNull();
   });
 
-  it('resolves the run url from the root span resource and opens it', async () => {
+  it('opens the url itself when the browser refused the early tab', async () => {
     const open = vi.spyOn(window, 'open').mockReturnValue(null);
     getTrace.mockResolvedValue(detail('https://github.com/o/r/actions/runs/7'));
-    act(() => api.runMenu(run(), { x: 1, y: 1 }));
-    await act(async () => item('Open on GitHub').click());
-    expect(getTrace).toHaveBeenCalledWith(TRACE);
-    expect(open).toHaveBeenCalledWith('https://github.com/o/r/actions/runs/7', '_blank', 'noopener');
+    await click();
+    expect(open).toHaveBeenLastCalledWith('https://github.com/o/r/actions/runs/7', '_blank', 'noopener');
   });
 
-  it('shows a notice when the trace has no url', async () => {
-    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+  it('shows a notice and closes the tab when the trace has no url', async () => {
+    const tab = fakeTab();
+    vi.spyOn(window, 'open').mockReturnValue(tab as never);
     getTrace.mockResolvedValue(detail(null));
-    act(() => api.runMenu(run(), { x: 1, y: 1 }));
-    await act(async () => item('Open on GitHub').click());
-    expect(open).not.toHaveBeenCalled();
+    await click();
+    expect(tab.close).toHaveBeenCalled();
     expect(document.querySelector('[role="status"]')?.textContent).toMatch(/no GitHub link/);
   });
 
   it('shows the notice when the trace fails to load', async () => {
+    const tab = fakeTab();
+    vi.spyOn(window, 'open').mockReturnValue(tab as never);
     getTrace.mockRejectedValue(new Error('boom'));
-    act(() => api.runMenu(run(), { x: 1, y: 1 }));
-    await act(async () => item('Open on GitHub').click());
+    await click();
+    expect(tab.close).toHaveBeenCalled();
     expect(document.querySelector('[role="status"]')?.textContent).toMatch(/no GitHub link/);
   });
 });
