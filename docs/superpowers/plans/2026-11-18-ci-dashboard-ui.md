@@ -880,3 +880,24 @@ What PR 3 builds on, changed from the task text by the branch review:
 - **`honours`** is false for a metric widget's `runBy` variable (the run chart ignores it); PR 3 adds the `cicd` rows.
 - **The shell sidebar** folds into a drawer under 768 px (every page scrolled sideways at 390 px before).
 - The 30 fps drag figure is still measured in Task 25 (ruling R14).
+
+### PR 3 amendments (2026-11-18)
+
+- **Task 26 (added).** The first live measurement missed spec §2 goal 4: 207 requests, 3.2 s, and a 10.4 fps drag. About
+  139 of the requests were the four variables' value lists, read with `resourceValues` across every signal and
+  partition. The maintainer chose to fix it in PR 3. The fix:
+  - A generic values-source table (`registerValuesSource` in `scope.ts`). `src/viewer/cicd` registers the four CI keys,
+    which answer from the widgets' shared cicd fetch.
+  - The tests view reads its traces only once visible.
+  - A scaling pin for the shipped config: `{cicdRows: 1}`, at most 5 requests.
+
+  Result: 62 requests, 1.31 s, 60.8 fps.
+- **No coupling.** Honours, the fixed scope and the "opens runs" flag are registered from `src/viewer/cicd`
+  (`registerHonours`, `registerFixedScope`, `registerOpensRuns`). The generic page names no CI key.
+- **Keyboard.** `menuTriggers` opens on Shift+F10 / ContextMenu. The status grid's run dots have a roving
+  tabindex and respond to Enter and Space. The canvas views (runs, job trend) are one focusable element with
+  Left/Right over runs.
+- **The Jobs tab is dashboard-only.** It needs a `CiRun` from the cicd table, so the Traces explorer does not offer
+  it. This is a known gap.
+- **`measure:live` reports more.** It now reports the `cicd` byte share and the slider's frame rate. The Record
+  (Task 25 Step 6) reads all three targets from one run.
