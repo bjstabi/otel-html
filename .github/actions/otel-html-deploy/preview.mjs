@@ -14,7 +14,8 @@
 // missing preview must not fail a publish.
 //
 // Environment: PLAYWRIGHT_FROM, the path of a package.json (or any file) in the directory `@playwright/test` is
-// installed under. Nothing but Node built-ins is imported here.
+// installed under. PLAYWRIGHT_CHANNEL, optional: a Playwright browser channel such as `chrome`, the machine's
+// Google Chrome; empty launches Playwright's own Chromium. Nothing but Node built-ins is imported here.
 
 import { createReadStream, existsSync, renameSync, rmSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -130,6 +131,7 @@ async function main() {
   const dir = join(root, channel);
   const from = process.env.PLAYWRIGHT_FROM;
   if (!from) throw new Error('PLAYWRIGHT_FROM is not set');
+  const browserChannel = process.env.PLAYWRIGHT_CHANNEL;
   const index = join(dir, 'index.html');
   if (!existsSync(index)) throw new Error(`${index} does not exist`);
 
@@ -138,7 +140,7 @@ async function main() {
   let browser;
   const taken = [];
   try {
-    browser = await chromium.launch();
+    browser = await chromium.launch(browserChannel ? { channel: browserChannel } : {});
     for (const colorScheme of SCHEMES) {
       const context = await browser.newContext({
         viewport: { width: 1280, height: 720 },

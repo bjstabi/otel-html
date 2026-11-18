@@ -44,9 +44,9 @@ function siteOf(site: string, name: Parameters<typeof reportDir>[0]): string {
   return channel;
 }
 
-function runPreview(site: string) {
+function runPreview(site: string, env: Record<string, string> = {}) {
   return spawnSync('node', [SCRIPT, site, CHANNEL], {
-    env: { ...process.env, PLAYWRIGHT_FROM: PACKAGE_JSON },
+    env: { ...process.env, PLAYWRIGHT_FROM: PACKAGE_JSON, ...env },
     encoding: 'utf8',
     timeout: 120_000,
   });
@@ -101,6 +101,19 @@ test.describe('preview.mjs', () => {
     expect(result.stdout).toContain('::warning::otel-html preview:');
     expect(existsSync(join(dir, 'preview-light.png'))).toBe(false);
     expect(existsSync(join(dir, 'preview-dark.png'))).toBe(false);
+  });
+
+  test('warns and keeps the previous images when the browser channel does not exist', () => {
+    siteOf(site, 'dashboards');
+    for (const scheme of ['light', 'dark'])
+      writeFileSync(join(dir, `preview-${scheme}.png`), `previous ${scheme}`);
+    const result = runPreview(site, { PLAYWRIGHT_CHANNEL: 'no-such-browser' });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('::warning::otel-html preview:');
+    for (const scheme of ['light', 'dark']) {
+      expect(readFileSync(join(dir, `preview-${scheme}.png`), 'utf8')).toBe(`previous ${scheme}`);
+      expect(existsSync(join(dir, `preview-${scheme}.png.tmp`))).toBe(false);
+    }
   });
 
   test('warns and keeps the previous images when the report failed to load', () => {

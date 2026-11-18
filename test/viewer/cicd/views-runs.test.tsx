@@ -299,7 +299,17 @@ describe('the open run ring', () => {
     open('other');
     await show(widget('runs-trend'), sevenDays());
     expect(ring()?.itemStyle).toMatchObject({ opacity: 0.35, borderWidth: 1.5 });
-    expect(ring()?.data[0]?.[0]).toBe(0);
+    // the open run is the third of twelve in time: the bucket where the running count first reaches 3
+    // (the first bucket may be a partial one, so the index is not fixed)
+    const counts = series()
+      .filter((x) => x.type === 'bar')
+      .map((x) => x.data as unknown as number[]);
+    let seen = 0;
+    const third = (counts[0] ?? []).findIndex((_, i) => {
+      seen += counts.reduce((n, c) => n + (c[i] ?? 0), 0);
+      return seen >= 3;
+    });
+    expect(ring()?.data[0]?.[0]).toBe(third);
     open('w1');
     await show(widget('runs-trend'), sevenDays());
     expect(ring()?.itemStyle).toMatchObject({ opacity: 1, borderWidth: 2 });
