@@ -240,6 +240,7 @@
     "test/viewer/copy-widget.test.ts": 0.6,
     "test/viewer/dashboard-facets.test.tsx": 2.3,
     "test/viewer/dashboard-grid-edit.test.tsx": 0.6,
+    "test/viewer/dashboard-grid-stacked.test.tsx": 1,
     "test/viewer/dashboard-grid.test.ts": 0.5,
     "test/viewer/dashboard-logs.test.tsx": 3.2,
     "test/viewer/dashboard-metric.test.tsx": 3.9,
