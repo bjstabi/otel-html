@@ -204,3 +204,31 @@ describe('context menu', () => {
     expect(menu()).not.toBeNull();
   });
 });
+
+describe('the menu element', () => {
+  const open = (): void => act(() => api.open({ x: 5, y: 5 }, 'Title', items));
+
+  it('is a child of body, outside the page content that opened it', () => {
+    open();
+    expect(menu()?.parentElement).toBe(document.body);
+    expect(host.contains(menu())).toBe(false);
+  });
+
+  it('has one tab stop, which follows the focus', () => {
+    open();
+    const tabs = (): (string | null)[] =>
+      [...document.querySelectorAll('[role="menuitem"]')].map((b) => b.getAttribute('tabindex'));
+    expect(tabs()).toEqual(['0', '-1', '-1']);
+    key('ArrowDown');
+    expect(tabs()).toEqual(['-1', '0', '-1']);
+  });
+
+  it('closes when the window is resized', () => {
+    open();
+    expect(menu()).not.toBeNull();
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    expect(menu()).toBeNull();
+  });
+});

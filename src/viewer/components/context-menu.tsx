@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 
 export type MenuItem = { label: string; code?: string; run(): void } | 'separator';
 
@@ -44,6 +45,7 @@ function Menu(props: Open & { onClose(): void }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<At>(props.at);
   const { onClose } = props;
+  const [active, setActive] = useState(() => props.items.findIndex((i) => i !== 'separator'));
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -62,9 +64,11 @@ function Menu(props: Open & { onClose(): void }): JSX.Element {
     };
     document.addEventListener('pointerdown', outside);
     window.addEventListener('scroll', onClose, true);
+    window.addEventListener('resize', onClose);
     return () => {
       document.removeEventListener('pointerdown', outside);
       window.removeEventListener('scroll', onClose, true);
+      window.removeEventListener('resize', onClose);
     };
   }, [onClose]);
 
@@ -89,12 +93,19 @@ function Menu(props: Open & { onClose(): void }): JSX.Element {
     }
   };
 
-  return (
+  // the menu is a child of <body>: a transformed or overflow-hidden ancestor (the grid's items) cannot move or clip it
+  return createPortal(
     <div
       ref={ref}
       role="menu"
       aria-label={props.title ?? 'Actions'}
       onKeyDown={onKeyDown}
+      // React bubbles a portal's events to its parent: keep them from the widget's own triggers
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
       style={{ position: 'fixed', left: pos.x, top: pos.y }}
       className="z-50 min-w-48 max-w-80 rounded-card border border-hairline bg-surface py-1 text-sm text-ink shadow-lg"
     >
@@ -107,6 +118,8 @@ function Menu(props: Open & { onClose(): void }): JSX.Element {
             key={id}
             type="button"
             role="menuitem"
+            tabIndex={id === active ? 0 : -1}
+            onFocus={() => setActive(id)}
             onClick={() => {
               onClose();
               item.run();
@@ -120,7 +133,8 @@ function Menu(props: Open & { onClose(): void }): JSX.Element {
           </button>
         ),
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
 

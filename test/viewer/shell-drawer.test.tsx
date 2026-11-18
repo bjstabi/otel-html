@@ -52,9 +52,37 @@ describe('the sidebar drawer on phones', () => {
     renderShell(true);
     const button = screen.getByRole('button', { name: 'Menu' });
     fireEvent.click(button);
-    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.keyDown(screen.getByLabelText('Navigation'), { key: 'Escape' });
     expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
     await waitFor(() => expect(document.activeElement).toBe(button));
+  });
+
+  test('it is a modal dialog the button controls; Tab cycles inside it', () => {
+    renderShell(true);
+    const button = screen.getByRole('button', { name: 'Menu' });
+    fireEvent.click(button);
+    const dialog = screen.getByRole('dialog', { name: 'Navigation' });
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(button.getAttribute('aria-controls')).toBe(dialog.id);
+    const focusable = [...dialog.querySelectorAll<HTMLElement>('a[href], button:not([disabled])')];
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (first === undefined || last === undefined) throw new Error('focusable controls');
+    last.focus();
+    fireEvent.keyDown(last, { key: 'Tab' });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(last);
+    dialog.focus();
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
+
+  test('Escape elsewhere on the page does not close it', () => {
+    renderShell(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Menu' }));
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.getByRole('navigation', { name: 'Primary' })).toBeTruthy();
   });
 
   test('a click outside closes it', () => {

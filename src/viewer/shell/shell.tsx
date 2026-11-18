@@ -1,6 +1,6 @@
 import { Tooltip } from '@base-ui/react/tooltip';
 import { Menu, X } from 'lucide-react';
-import { type JSX, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type JSX, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Redirect, Route, Router, Switch } from 'wouter';
 import type { AnyManifest } from '../../format/manifest.js';
 import { SELECTION_MODES } from '../../query/pages.js';
@@ -251,6 +251,7 @@ function ShellNav({ manifest, phone }: { manifest: AnyManifest; phone: boolean }
   const [route] = useRoute();
   const button = useRef<HTMLButtonElement>(null);
   const wasOpen = useRef(false);
+  const drawerId = useId();
   // biome-ignore lint/correctness/useExhaustiveDependencies: a navigation closes the drawer
   useEffect(() => setOpen(false), [route, phone]);
   useEffect(() => {
@@ -266,13 +267,14 @@ function ShellNav({ manifest, phone }: { manifest: AnyManifest; phone: boolean }
           type="button"
           aria-label="Menu"
           aria-expanded={open}
+          aria-controls={open ? drawerId : undefined}
           onClick={() => setOpen((o) => !o)}
           className="rounded-full border border-hairline bg-surface p-2 text-ink-2"
         >
           <Menu size={16} aria-hidden />
         </button>
       </div>
-      {open && <Sidebar manifest={manifest} drawer={{ onClose: () => setOpen(false) }} />}
+      {open && <Sidebar manifest={manifest} drawer={{ onClose: () => setOpen(false), id: drawerId }} />}
     </>
   );
 }

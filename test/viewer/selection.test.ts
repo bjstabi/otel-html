@@ -8,6 +8,7 @@ import {
   tokensToOttl,
 } from '../../src/viewer/components/filter-tokens.js';
 import { parseLogRef } from '../../src/viewer/data/log-query.js';
+import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
 import {
   bindUrl,
   createSelectionStore,
@@ -203,9 +204,9 @@ describe('bindUrl', () => {
       const d = store.getState().dashboard;
       store.getState().setDashboard(
         markLive({
-          ...(d ?? { vars: {}, follow: {}, logView: {}, sel: { t: null, trace: null } }),
+          ...(d ?? EMPTY_DASHBOARD_STATE),
           sel: { t, trace: null },
-        } as never),
+        }),
       );
     };
 

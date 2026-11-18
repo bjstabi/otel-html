@@ -172,14 +172,14 @@ function ThemeToggle(): JSX.Element {
 
 /**
  * The primary navigation. `drawer` is the phone form: an overlay panel the shell opens from its menu button; it
- * takes focus when it opens, and Escape, a click outside it or following a link closes it.
+ * is a modal dialog: it takes focus when it opens and keeps it (Tab cycles inside), and Escape on it, a click outside it or following a link closes it.
  */
 export function Sidebar({
   manifest,
   drawer,
 }: {
   manifest: AnyManifest;
-  drawer?: { onClose(): void };
+  drawer?: { onClose(): void; id?: string };
 }): JSX.Element {
   const [current] = useRoute();
   const sections = [dashboardsSection(manifest), ...STATIC_SECTIONS];
@@ -188,23 +188,46 @@ export function Sidebar({
   useEffect(() => {
     if (close === undefined) return;
     panel.current?.focus();
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') close();
-    };
     const onClick = (e: MouseEvent): void => {
       if (e.target instanceof Element && e.target.closest('a') !== null) close();
     };
     const el = panel.current;
-    document.addEventListener('keydown', onKey);
     el?.addEventListener('click', onClick);
     return () => {
-      document.removeEventListener('keydown', onKey);
       el?.removeEventListener('click', onClick);
     };
   }, [close]);
+  // Escape closes the drawer; Tab cycles inside it (the page behind is inert while it is open)
+  const onKeyDown = (e: React.KeyboardEvent<HTMLElement>): void => {
+    if (close === undefined) return;
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      close();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    const focusable = [
+      ...(panel.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), [tabindex="0"]') ??
+        []),
+    ];
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (first === undefined || last === undefined) return;
+    const at = document.activeElement;
+    if (e.shiftKey && (at === first || at === panel.current)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && at === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
   const aside = (
     <aside
       ref={panel}
+      id={drawer?.id}
+      {...(drawer === undefined ? {} : ({ role: 'dialog', 'aria-modal': true } as const))}
+      onKeyDown={onKeyDown}
       tabIndex={drawer === undefined ? undefined : -1}
       aria-label={drawer === undefined ? undefined : 'Navigation'}
       className={
