@@ -86,6 +86,8 @@ export interface RunActions {
   /** Sets the pane mode for the open run and for the runs opened after it. */
   setMode(mode: 'attached' | 'panel'): void;
   runMenu(run: CiRun, at: At): void;
+  /** Opens the run's GitHub page in a tab (http(s) only), or says it has none; the run menu's item does the same. */
+  openOnGithub(run: CiRun): void;
   /** `openTrend` adds the "Open its trend" item (the jobs table passes it). */
   jobMenu(job: string, at: At, openTrend?: () => void): void;
   triggerMenu(trigger: string, at: At): void;
@@ -189,6 +191,7 @@ export function useRunActions(widgetId: string): RunActions {
     openRun,
     setMode,
     runMenu,
+    openOnGithub,
     jobMenu,
     triggerMenu: (trigger, at) =>
       menu.open(at, trigger, filterItem('Filter the page by trigger', TRIGGER, trigger)),

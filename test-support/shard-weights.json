@@ -238,6 +238,7 @@
     "test/viewer/cicd/derive.test.ts": 0.3,
     "test/viewer/cicd/run-actions.test.tsx": 0.4,
     "test/viewer/cicd/views-runs.test.tsx": 0.4,
+    "test/viewer/cicd/views-jobs.test.tsx": 0.4,
     "test/viewer/context-menu.test.tsx": 0.4,
     "test/viewer/copy-config.test.ts": 0.6,
     "test/viewer/copy-widget.test.ts": 0.6,

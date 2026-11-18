@@ -1,9 +1,10 @@
-import { type JSX, useEffect, useMemo, useRef } from 'react';
+import { type JSX, useMemo, useRef } from 'react';
 import { formatDuration } from '../../../semconv/formatters.js';
 import { Chart } from '../../components/chart.js';
 import { useContextMenu } from '../../components/context-menu.js';
 import type { WidgetRenderer } from '../../dashboards/dashboard-page.js';
 import { useEpoch } from '../../dashboards/widgets/layout.js';
+import { useSubtitle } from '../../dashboards/widgets/subtitle.js';
 import { absoluteTime } from '../../shell/time-range.js';
 import { useTheme } from '../../theme/theme-provider.js';
 import { bucketOf, trendBuckets } from '../derive.js';
@@ -45,19 +46,12 @@ export const RunsTrendView: WidgetRenderer = ({
     () => (data.span === null ? null : trendBuckets(data.runs, data.span)),
     [data.runs, data.span],
   );
-  const { setSubtitle } = page;
   const { selectedTraceId, isSource } = actions;
   const select = useRef(page.selectWindow);
   select.current = page.selectWindow;
   const openMenu = menu.open;
   const subtitle = trend === null || trend.buckets.length === 0 ? null : `${stepText(trend.step)} buckets`;
-  // the page hands every render a new `setSubtitle`; going through a ref keeps the effect to a change of the text
-  const subtitleRef = useRef(setSubtitle);
-  subtitleRef.current = setSubtitle;
-  useEffect(() => {
-    subtitleRef.current(subtitle);
-    return () => subtitleRef.current(null);
-  }, [subtitle]);
+  useSubtitle(page, subtitle);
 
   const option = useMemo(() => {
     if (trend === null) return null;
