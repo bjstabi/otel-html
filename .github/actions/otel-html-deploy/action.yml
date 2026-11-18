@@ -32,8 +32,9 @@ inputs:
   preview:
     description: >-
       Screenshot each default-branch rolling report this pass rebuilt (light and dark, `preview-light.png` and
-      `preview-dark.png` in its folder) for the README. Installs Playwright's Chromium (about 1 minute); needs Node and
-      passwordless sudo on the runner. A failed install or screenshot is a warning.
+      `preview-dark.png` in its folder) for the README. Drives the runner's Google Chrome (GitHub's Ubuntu images ship
+      it) through `@playwright/test`, installed in a few seconds; needs Node on the runner. A failed install, a missing
+      Chrome or a failed screenshot is a warning.
     default: "false"
   ci-workflows:
     description: Comma-separated workflow file names whose runs publish `push` updates.
@@ -223,8 +224,9 @@ runs:
         $CMD ci deploy apply --site "$DIR/base" --updates "$DIR/updates" --pending "$DIR/pending.json" \
           --pass-run-id "$GITHUB_RUN_ID" --retention "$RETENTION" --pr-retention "$PR_RETENTION" "${args[@]}"
     # The default branch's rolling report is screenshotted after `apply` rebuilt it. A failed install only skips the
-    # screenshots: the pass goes on.
-    - name: Install the preview browser
+    # screenshots: the pass goes on. The browser is the runner's own Google Chrome (`PLAYWRIGHT_CHANNEL`): nothing to
+    # download but the driver.
+    - name: Install the preview driver
       id: browser
       if: steps.gate.outputs.go == 'true' && inputs.preview == 'true' && steps.apply.outputs.previews != ''
       continue-on-error: true
@@ -234,7 +236,6 @@ runs:
       run: |
         dir=$DIR/playwright
         npm install --prefix "$dir" --no-audit --no-fund @playwright/test@1.64.1
-        "$dir/node_modules/.bin/playwright" install --with-deps chromium
     - name: Screenshot the rolling reports
       if: steps.gate.outputs.go == 'true' && inputs.preview == 'true' && steps.apply.outputs.previews != ''
       shell: bash
@@ -243,9 +244,10 @@ runs:
         PREVIEWS: ${{ steps.apply.outputs.previews }}
         BROWSER: ${{ steps.browser.outcome }}
         PLAYWRIGHT_FROM: ${{ steps.resolve.outputs.dir }}/playwright/package.json
+        PLAYWRIGHT_CHANNEL: chrome
       run: |
         if [ "$BROWSER" != success ]; then
-          echo "::warning::otel-html preview: the browser install failed; no screenshot"
+          echo "::warning::otel-html preview: the driver install failed; no screenshot"
           exit 0
         fi
         IFS=',' read -r -a channels <<<"$PREVIEWS"
