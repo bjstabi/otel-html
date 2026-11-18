@@ -3,6 +3,7 @@ import { ChevronDown, Copy, LayoutDashboard, Pencil } from 'lucide-react';
 import { type JSX, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { RunControls, Variable, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
+import { RunActionsProvider } from '../cicd/run-actions.js';
 import { CicdProvider } from '../cicd/use-cicd.js';
 import { CicdWidget } from '../cicd/widget.js';
 import type { DataSource } from '../data/data-source.js';
@@ -516,13 +517,15 @@ function DashboardView(props: {
         />
         {bound !== null && (
           <CicdProvider dataSource={dataSource} extent={extent}>
-            <DashboardGrid
-              widgets={d.widgets}
-              layout={layout}
-              editing={editing}
-              onLayout={props.onLayout}
-              render={renderWidget}
-            />
+            <RunActionsProvider dashboard={d} state={state} change={change} dataSource={dataSource}>
+              <DashboardGrid
+                widgets={d.widgets}
+                layout={layout}
+                editing={editing}
+                onLayout={props.onLayout}
+                render={renderWidget}
+              />
+            </RunActionsProvider>
           </CicdProvider>
         )}
       </div>

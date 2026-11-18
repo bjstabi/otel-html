@@ -43,7 +43,7 @@ function quantile(xs: readonly number[], q: number): number | null {
 const median = (xs: readonly number[]): number | null => quantile(xs, 0.5);
 
 /** A job's status; null when it did not run (skipped). */
-function jobStatus(j: CiJob): CiStatus | null {
+export function jobStatus(j: CiJob): CiStatus | null {
   const r = j.result.toLowerCase();
   if (r === 'success') return 'success';
   if (r === 'cancellation' || r === 'cancelled' || r === 'canceled') return 'cancelled';

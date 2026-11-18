@@ -21,6 +21,7 @@ describe('parseDashboardParam', () => {
       sel: { t: '1~2', trace: TRACE },
       follow: { w1: false },
       logView: { w2: 'context' },
+      run: { from: 'w3', mode: 'panel' },
     };
     expect(parseDashboardParam(JSON.stringify(state))).toEqual({ ok: true, state });
   });
@@ -48,6 +49,13 @@ describe('parseDashboardParam', () => {
     if (r.ok) return;
     if (typeof expected === 'string') expect(r.error).toBe(expected);
     else expect(r.error).toMatch(expected);
+  });
+
+  test('a d without run parses as run: null, and a run keeps it out of the pristine state', () => {
+    const r = parseDashboardParam('{"vars":{}}');
+    expect(r.ok && r.state.run).toBeNull();
+    expect(isPristine({ ...EMPTY_DASHBOARD_STATE, run: { from: 'w1', mode: 'attached' } })).toBe(false);
+    expect(parseDashboardParam('{"run":{"from":"w1","mode":"x"}}').ok).toBe(false);
   });
 
   test('text that is not JSON is reported', () => {

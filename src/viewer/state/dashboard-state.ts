@@ -15,6 +15,8 @@ export interface DashboardPageState {
   follow: Record<string, boolean>;
   /** Per-widget overrides of the Logs widget's view. */
   logView: Record<string, LogViewMode>;
+  /** The open CI run: the widget it was opened from and how the pane shows (null when none is open). */
+  run: { from: string; mode: 'attached' | 'panel' } | null;
 }
 
 export const EMPTY_DASHBOARD_STATE: DashboardPageState = {
@@ -22,6 +24,7 @@ export const EMPTY_DASHBOARD_STATE: DashboardPageState = {
   sel: { t: null, trace: null },
   follow: {},
   logView: {},
+  run: null,
 };
 
 export const DashboardPageStateSchema: z.ZodType<DashboardPageState> = z.strictObject({
@@ -34,6 +37,10 @@ export const DashboardPageStateSchema: z.ZodType<DashboardPageState> = z.strictO
     .default({ t: null, trace: null }),
   follow: z.record(z.string(), z.boolean()).default({}),
   logView: z.record(z.string(), z.enum(['matches', 'context'], 'one of matches, context')).default({}),
+  run: z
+    .strictObject({ from: z.string(), mode: z.enum(['attached', 'panel'], 'one of attached, panel') })
+    .nullable()
+    .default(null),
 });
 
 /** The URL key `d`: JSON text to a state, or one error line naming the offending path (`d.sel.t`). */
@@ -58,6 +65,7 @@ export function isPristine(s: DashboardPageState): boolean {
     s.sel.t === null &&
     s.sel.trace === null &&
     Object.keys(s.follow).length === 0 &&
-    Object.keys(s.logView).length === 0
+    Object.keys(s.logView).length === 0 &&
+    s.run === null
   );
 }
