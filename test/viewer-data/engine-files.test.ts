@@ -77,7 +77,7 @@ test('site registers each file by URL with range reads and creates the views', a
   ]);
   expect(loader.calls).toEqual([]);
   // the five base views are bound at open; the rollup views are forgotten and bound by the first statement that needs them
-  expect(engine.calls.exec.filter((s) => s.startsWith('CREATE OR REPLACE VIEW'))).toHaveLength(5);
+  expect(engine.calls.exec.filter((s) => s.startsWith('CREATE OR REPLACE VIEW'))).toHaveLength(6);
   expect(engine.calls.exec.filter((s) => s.includes('_rollups'))).toEqual([
     'DROP VIEW IF EXISTS "span_rollups"',
     'DROP VIEW IF EXISTS "log_rollups"',
@@ -105,7 +105,7 @@ test('local loads each wrapper under its partition key and registers the bytes, 
     'data/partitions/000001/spans.parquet',
   ]);
   expect(engine.calls.registerFileBuffer[0]?.[1]).toEqual(PARQUET_BYTES);
-  expect(engine.calls.exec).toHaveLength(7);
+  expect(engine.calls.exec).toHaveLength(8);
 });
 
 test('local keeps at most four loads in flight', async () => {
@@ -185,7 +185,7 @@ test.each(['site', 'local'] as const)(
       (p) => progress.push(p),
     );
     expect(progress).toEqual([{ done: 0, total: 0 }]);
-    expect(engine.calls.exec).toHaveLength(7);
+    expect(engine.calls.exec).toHaveLength(8);
   },
 );
 

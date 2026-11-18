@@ -90,7 +90,7 @@ describe('PartitionSession', () => {
     await s.add(logs(2), 'b.json');
     await s.flush();
     const m = manifest(w);
-    expect(m.formatVersion).toBe(7);
+    expect(m.formatVersion).toBe(8);
     expect(m.partitions).toHaveLength(1);
     expect(m.partitions[0]?.source).toBe('flush:0');
     expect(m.partitions[0]?.files.spans?.rows).toBe(3);
@@ -543,7 +543,7 @@ describe('format mismatches', () => {
     await s.close();
     const path = `${OUT}/data/manifest.js`;
     const text = w.fs.snapshot().get(path) ?? '';
-    await w.fs.writeTextAtomic(path, text.replace('"formatVersion":7', '"formatVersion":4'));
+    await w.fs.writeTextAtomic(path, text.replace('"formatVersion":8', '"formatVersion":4'));
     for (const mode of ['open', 'append'] as const) {
       const e = await failure(open(w, cfg(), mode));
       expect(e.code).toBe('version-mismatch');
@@ -607,7 +607,7 @@ describe('format mismatches', () => {
     const s = await open(w);
     await s.add(spans(1, 0, 2), 'a.json');
     await s.close();
-    expect(manifest(w).formatVersion).toBe(7);
+    expect(manifest(w).formatVersion).toBe(8);
     expect([...w.fs.snapshot().keys()].some((k) => k.includes('data/chunks/spans/0'))).toBe(false);
   });
 });
@@ -647,7 +647,7 @@ describe('trace summaries per partition', () => {
     await s.add(otlp(logsRequest([logRecord({ traceId: traceIdOf(9) })])), 'l.json');
     await s.flush();
     const m = manifest(w);
-    expect(m.formatVersion).toBe(7);
+    expect(m.formatVersion).toBe(8);
     expect(m.partitions[0]?.files.traces?.serviceShare).toBe(true);
     const dir = `${OUT}/data/partitions/000000`;
     const spanRows = decodeTable('spans', await w.fs.readBytes(`${dir}/spans.parquet`));

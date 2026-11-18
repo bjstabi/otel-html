@@ -238,6 +238,40 @@ The traces each indexed dashboard traces widget matches, one row per distinct co
 | `condition` | Dictionary<Int32, Utf8> | utf8 | no |
 | `trace_id` | Dictionary<Int32, Utf8> | utf8 | no |
 
+## Table `cicd`
+
+One row per CI run, job and per-trace tasks summary, derived from the partition spans (format 8; written only when the partition entry says `cicd: true` and there are rows).
+
+- Sorted by: `trace_id`, `kind`, `start_ns`
+- Time column (for the partition's `timeMin` and `timeMax`): `start_ns`
+- Fixed statistics columns: none
+
+| column | Arrow type | logical type | nullable |
+|---|---|---|---|
+| `kind` | Dictionary<Int32, Utf8> | utf8 | no |
+| `trace_id` | Dictionary<Int32, Utf8> | utf8 | no |
+| `span_id` | Dictionary<Int32, Utf8> | utf8 | yes |
+| `start_ns` | Int64 | int64 | no |
+| `end_ns` | Int64 | int64 | no |
+| `name` | Dictionary<Int32, Utf8> | utf8 | yes |
+| `result` | Dictionary<Int32, Utf8> | utf8 | yes |
+| `pipeline` | Dictionary<Int32, Utf8> | utf8 | yes |
+| `run_id` | Utf8 | utf8 | yes |
+| `attempt` | Int32 | int32 | yes |
+| `trigger` | Dictionary<Int32, Utf8> | utf8 | yes |
+| `branch` | Utf8 | utf8 | yes |
+| `revision` | Utf8 | utf8 | yes |
+| `title` | Utf8 | utf8 | yes |
+| `task` | Utf8 | utf8 | yes |
+| `task_id` | Utf8 | utf8 | yes |
+| `labels` | Utf8 | utf8 | yes |
+| `queued_ns` | Int64 | int64 | yes |
+| `needs` | Utf8 | utf8 | yes |
+| `condition` | Dictionary<Int32, Utf8> | utf8 | yes |
+| `failed_step` | Utf8 | utf8 | yes |
+| `tasks_replayed` | Int32 | int32 | yes |
+| `tasks_run` | Int32 | int32 | yes |
+
 ## Points: delta columns and series identity
 
 `delta_value` and `delta_count` hold the normalized increase of a series since its previous point. They are filled for
@@ -273,8 +307,8 @@ spans, so none of them is the trace's share; a reader must not use one as the wh
 
 ## The views
 
-The viewer reads the data only through seven views, one per table (`spans`, `logs`, `points`, `traces`,
-`patterns`, `span_rollups`, `log_rollups`; `widget_traces` has none, its columns differ per report). Each view has the name of its table and is the union of that table's file in every partition that lists
+The viewer reads the data only through eight views, one per table (`spans`, `logs`, `points`, `traces`,
+`patterns`, `span_rollups`, `log_rollups`, `cicd`; `widget_traces` has none, its columns differ per report). Each view has the name of its table and is the union of that table's file in every partition that lists
 one, in manifest order. It has the table's columns, in the order above, then two virtual columns:
 
 | column | type | meaning |
@@ -292,7 +326,7 @@ A table that no partition holds is an empty view with the same columns.
 - Attributes are JSON text columns, and an attribute is read by JSON Pointer (RFC 6901, `~` as `~0`, `/` as `~1`). An
   object with a `$`-prefixed or `__proto__` key is stored as `{"$m": [[key, value], ...]}`, so a reader looks a key up
   in the object first and then in those pairs.
-- A backend satisfies the contract by defining the same views with these columns: the seven names, the table columns
+- A backend satisfies the contract by defining the same views with these columns: the eight names, the table columns
   above and the two virtual columns.
 
 ## Manifest (`data/manifest.js`)
@@ -301,7 +335,7 @@ The manifest is a script that registers its JSON payload. Its fields:
 
 | field | meaning |
 |---|---|
-| `formatVersion` | `5`, `6` or `7` (this reader opens all three; the writer produces 7) |
+| `formatVersion` | `5`, `6`, `7` or `8` (this reader opens all four; the writer produces 8) |
 | `otelHtmlVersion` | the version of otel-html that wrote the report |
 | `title` | the report title |
 | `epochUnixNano` | format 5 only: decimal nanoseconds of the report's epoch. A format-6 manifest stores none; a reader anchors on `range.start` (or `createdAt` when the report holds no data) and every stored time is absolute |
@@ -315,7 +349,7 @@ The manifest is a script that registers its JSON payload. Its fields:
 | `engine` | `{ format, version, assetsBase }`: `format` is `local` or `site`, `version` the DuckDB engine version, `assetsBase` where the viewer and engine files load from |
 | `config` | the viewer settings, dashboards and views |
 
-Each `partitions` entry is `{ n, source, files }`. `files` has an entry per table the partition holds, with these fields:
+Each `partitions` entry is `{ n, source, files }`, and in format 8 may add `cicd: true` (a writer derived the `cicd` table from the partition's spans; the viewer reads `files.cicd` for such a partition, and scans the spans for one without the flag). `files` has an entry per table the partition holds, with these fields:
 
 | field | meaning |
 |---|---|

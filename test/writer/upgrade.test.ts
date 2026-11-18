@@ -88,7 +88,7 @@ describe('upgradeReport', () => {
     writeFileSync(join(dir, 'index.html'), '<html>old</html>');
     const before = hashTree(dir, 'data');
     const r = await upgradeReport(deps(), dir);
-    expect(r.formatVersion).toBe(7);
+    expect(r.formatVersion).toBe(8);
     expect(hashTree(dir, 'data')).toEqual(before);
     expect(readFileSync(join(dir, 'index.html'), 'utf8')).toContain('assets/viewer.abc123.js');
     expect(readdirSync(join(dir, 'assets'))).toContain('viewer.abc123.js');
@@ -159,7 +159,7 @@ describe('upgradeReport', () => {
       const base = 'assets/0.0.0/';
       const w = createTestWriter();
       const r = await upgradeReport({ ...w.deps, fs: createNodeFileSystem() }, dir, { assetsBase: base });
-      expect(r).toMatchObject({ formatVersion: 7 });
+      expect(r).toMatchObject({ formatVersion: 8 });
       expect(w.logs.filter((l) => l.level === 'warn')).toEqual([]);
       expect(hashTree(outside)).toEqual(targetBefore);
       expect(readlinkSync(join(dir, 'assets'))).toBe(outside);
@@ -263,11 +263,11 @@ describe('upgrade of the frozen format-5 report', () => {
     const before = parseAnyManifest(readManifest(dir));
     if (!isPartitioned(before)) throw new Error('not a partition manifest');
     const r = await upgradeReport(deps(), dir);
-    expect(r.formatVersion).toBe(7);
+    expect(r.formatVersion).toBe(8);
     expect(hashTree(dir, 'data/partitions')).toEqual(partitions);
     expect(hashTree(dir, 'data/state')).toEqual(state);
     const raw = readManifest(dir);
-    expect(raw).toMatchObject({ formatVersion: 7 });
+    expect(raw).toMatchObject({ formatVersion: 8 });
     expect(raw).not.toHaveProperty('epochUnixNano');
     const after = parseAnyManifest(raw);
     if (!isPartitioned(after)) throw new Error('not a partition manifest');
@@ -283,6 +283,29 @@ describe('upgrade of the frozen format-5 report', () => {
   });
 });
 
+describe('upgrade of the frozen format-7 report', () => {
+  const FORMAT7 = join(import.meta.dirname, '../../fixtures/reports/format-7');
+
+  test('7 to 8 rewrites the manifest version only: no partition byte changes and no cicd flag is set', async () => {
+    const dir = copyReport(FORMAT7);
+    const partitions = hashTree(dir, 'data/partitions');
+    const before = parseAnyManifest(readManifest(dir));
+    if (!isPartitioned(before)) throw new Error('not a partition manifest');
+    expect(before.formatVersion).toBe(7);
+    const r = await upgradeReport(deps(), dir);
+    expect(r.formatVersion).toBe(8);
+    expect(hashTree(dir, 'data/partitions')).toEqual(partitions);
+    const after = parseAnyManifest(readManifest(dir));
+    if (!isPartitioned(after)) throw new Error('not a partition manifest');
+    expect(after.formatVersion).toBe(8);
+    expect(after.partitions).toEqual(before.partitions);
+    for (const p of after.partitions) {
+      expect(p.cicd).toBeUndefined();
+      expect(p.files.cicd).toBeUndefined();
+    }
+  });
+});
+
 describe('upgrade of the frozen format-6 report', () => {
   const FORMAT6 = join(import.meta.dirname, '../../fixtures/reports/format-6');
 
@@ -293,10 +316,10 @@ describe('upgrade of the frozen format-6 report', () => {
     if (!isPartitioned(before)) throw new Error('not a partition manifest');
     expect(before.formatVersion).toBe(6);
     const r = await upgradeReport(deps(), dir);
-    expect(r.formatVersion).toBe(7);
+    expect(r.formatVersion).toBe(8);
     expect(hashTree(dir, 'data/partitions')).toEqual(partitions);
     const raw = readManifest(dir);
-    expect(raw).toMatchObject({ formatVersion: 7 });
+    expect(raw).toMatchObject({ formatVersion: 8 });
     expect(raw).not.toHaveProperty('epochUnixNano');
     const after = parseAnyManifest(raw);
     if (!isPartitioned(after)) throw new Error('not a partition manifest');
@@ -337,7 +360,7 @@ describe('otel-html upgrade', () => {
     const dir = await formatFourReport();
     const r = await run(['upgrade', '$dir'], dir);
     expect(r.code).toBe(0);
-    expect(r.stdout).toMatch(/^upgraded .+: viewer \d+\.\d+\.\d+\S*, format 7\n$/);
+    expect(r.stdout).toMatch(/^upgraded .+: viewer \d+\.\d+\.\d+\S*, format 8\n$/);
   });
 
   test('a format 3 report exits 2 and leaves it alone', async () => {

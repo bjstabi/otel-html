@@ -161,9 +161,9 @@ export function timeEndMaxOf(batch: ColumnBatch): string | null {
   return max === null ? null : max.toString();
 }
 
-/** The recorded statistics keys of `table`; `widget_traces` has none. */
+/** The recorded statistics keys of `table`; `widget_traces` and `cicd` have none. */
 export const statisticsKeysOf = (keys: Record<StatisticsTable, string[]>, table: Table): string[] =>
-  table === 'widget_traces' ? [] : keys[table];
+  table === 'widget_traces' || table === 'cicd' ? [] : keys[table];
 
 /** The keys the writer is told to keep for `table`: dashboard variables and `writer.statisticsKeys`. */
 function explicitKeysFor(

@@ -110,13 +110,13 @@ const jobEntry = (plan: { state: RunReportState }) => {
 };
 
 describe('newRunManifest', () => {
-  test('is a format-6 manifest that stores no epoch', async () => {
+  test('is a format-8 manifest that stores no epoch', async () => {
     const m = await newManifest();
-    expect(m.formatVersion).toBe(7);
+    expect(m.formatVersion).toBe(8);
     const w = createTestWriter();
     await writeRunReport(w.deps, 'site/run', m);
     expect(w.fs.snapshot().get('site/run/data/manifest.js')).not.toContain('epochUnixNano');
-    expect((await readRunManifest(w.fs, 'site/run'))?.formatVersion).toBe(7);
+    expect((await readRunManifest(w.fs, 'site/run'))?.formatVersion).toBe(8);
   });
   test('is an empty incomplete v4 site manifest with the CI statistics keys', async () => {
     const m = await newManifest();
@@ -495,19 +495,19 @@ describe('format 6 in a run report', () => {
       { source: 'job:7#flush:0', files: traces('partitions/0/traces.parquet', shares), carried: true },
     ]);
 
-  test('an added traces file with serviceShare makes the report format 7, the entry keeps it', async () => {
+  test('an added traces file with serviceShare makes the report format 8, the entry keeps it', async () => {
     const plan = sync(await legacyManifest(), emptyRunState(1), [ju(upd(true))]);
-    expect(plan.manifest.formatVersion).toBe(7);
+    expect(plan.manifest.formatVersion).toBe(8);
     expect(plan.manifest.partitions[0]?.files.traces?.serviceShare).toBe(true);
     // the manifest as written (no epoch) is valid, and parses back to the same partitions
     const w = createTestWriter();
     await writeRunReport(w.deps, 'site/run', plan.manifest);
     expect(w.fs.snapshot().get('site/run/data/manifest.js')).not.toContain('epochUnixNano');
     const back = await readRunManifest(w.fs, 'site/run');
-    expect(back?.formatVersion).toBe(7);
+    expect(back?.formatVersion).toBe(8);
     expect(back?.partitions).toEqual(plan.manifest.partitions);
   });
-  test('a format-7 job update lifts a format-5 or format-6 run report to format 7', async () => {
+  test('a format-7 job update lifts a format-5 or format-6 run report to format 8', async () => {
     const widgetPartition = (): UpdatePartition => ({
       source: 'job:7#flush:0',
       files: {
@@ -526,11 +526,11 @@ describe('format 6 in a run report', () => {
     for (const formatVersion of [5, 6] as const) {
       const m = { ...(await legacyManifest()), formatVersion };
       const plan = sync(m, emptyRunState(1), [ju(push(1, [widgetPartition()]))]);
-      expect(plan.manifest.formatVersion).toBe(7);
+      expect(plan.manifest.formatVersion).toBe(8);
       expect(plan.manifest.partitions[0]?.files.widget_traces).toBeDefined();
     }
   });
-  test('a partition whose spans or logs file records attribute keys lifts a format-5 or format-6 report to format 7', async () => {
+  test('a partition whose spans or logs file records attribute keys lifts a format-5 or format-6 report to format 8', async () => {
     for (const formatVersion of [5, 6] as const) {
       for (const table of ['spans', 'logs'] as const) {
         const partition: UpdatePartition = {
@@ -542,23 +542,38 @@ describe('format 6 in a run report', () => {
         };
         const m = { ...(await legacyManifest()), formatVersion };
         const plan = sync(m, emptyRunState(1), [ju(push(1, [partition]))]);
-        expect(plan.manifest.formatVersion).toBe(7);
+        expect(plan.manifest.formatVersion).toBe(8);
         expect(plan.manifest.partitions[0]?.files[table]?.attributeKeys).toEqual({ k: 3 });
         const w = createTestWriter();
         await writeRunReport(w.deps, 'site/run', plan.manifest);
-        expect((await readRunManifest(w.fs, 'site/run'))?.formatVersion).toBe(7);
+        expect((await readRunManifest(w.fs, 'site/run'))?.formatVersion).toBe(8);
       }
     }
   });
-  test('without shares or an index a format-5 report stays format 5, and a format-7 report stays format 7', async () => {
+  test('without shares or an index a format-5 report stays format 5, and a lifted report stays format 8', async () => {
     const m = await legacyManifest();
     const six = sync(m, emptyRunState(1), [ju(upd(true))]);
     const later = sync(six.manifest, six.state, [ju({ ...upd(false), sequence: 2 })]);
-    expect(later.manifest.formatVersion).toBe(7);
+    expect(later.manifest.formatVersion).toBe(8);
     // neither shares nor an index: a format-5 run report stays format 5
     const five = sync(m, emptyRunState(1), [ju(upd(false))]);
     expect(m.formatVersion).toBe(5);
     expect(five.manifest.formatVersion).toBe(5);
+  });
+  test('a partition with a cicd file lifts a format-7 run report to format 8, and a format-7 report without one stays 7', async () => {
+    const seven = { ...(await legacyManifest()), formatVersion: 7 as const };
+    const spans = file('partitions/0/spans.parquet', 3, '10', '20');
+    const plainPartition: UpdatePartition = { source: 'job:7#flush:0', files: { spans }, carried: true };
+    // `UpdatePartition` does not list a cicd file yet (the update schema is the deployer's); the plan copies any table's file.
+    const files = {
+      spans,
+      cicd: file('partitions/0/cicd.parquet', 1, '10', '20'),
+    } as UpdatePartition['files'];
+    const withCicd: UpdatePartition = { ...plainPartition, files };
+    expect(sync(seven, emptyRunState(1), [ju(push(1, [plainPartition]))]).manifest.formatVersion).toBe(7);
+    const lifted = sync(seven, emptyRunState(1), [ju(push(1, [withCicd]))]);
+    expect(lifted.manifest.formatVersion).toBe(8);
+    expect(lifted.manifest.partitions[0]?.files.cicd?.path).toMatch(/cicd\.parquet$/);
   });
   test('renumbering a format-6 manifest keeps serviceShare', async () => {
     const six = sync(await newManifest(), emptyRunState(1), [ju(upd(true))]);

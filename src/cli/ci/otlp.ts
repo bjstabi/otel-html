@@ -1,9 +1,13 @@
 /** OTLP JSON building blocks shared by the CI report modules. */
 
-export type AttrValue = string | number | boolean;
+export type AttrValue = string | number | boolean | string[];
 export type Attr = {
   key: string;
-  value: { stringValue: string } | { intValue: string } | { boolValue: boolean };
+  value:
+    | { stringValue: string }
+    | { intValue: string }
+    | { boolValue: boolean }
+    | { arrayValue: { values: { stringValue: string }[] } };
 };
 
 const RESULTS: Readonly<Record<string, string>> = {
@@ -23,6 +27,8 @@ export function attrs(values: Record<string, AttrValue | null | undefined>): Att
   for (const [key, v] of Object.entries(values)) {
     if (v === null || v === undefined) continue;
     if (typeof v === 'string') out.push({ key, value: { stringValue: v } });
+    else if (Array.isArray(v))
+      out.push({ key, value: { arrayValue: { values: v.map((x) => ({ stringValue: x })) } } });
     else if (typeof v === 'boolean') out.push({ key, value: { boolValue: v } });
     else out.push({ key, value: { intValue: String(v) } });
   }

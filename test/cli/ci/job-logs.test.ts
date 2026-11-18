@@ -10,6 +10,7 @@ const job: ApiJob = {
   name: 'build',
   status: 'completed',
   runner_name: 'r1',
+  labels: [],
   conclusion: 'failure',
   created_at: '2026-01-01T00:00:00Z',
   started_at: '2026-01-01T00:00:10Z',

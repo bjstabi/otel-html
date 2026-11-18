@@ -123,7 +123,7 @@ describe('manifest format 5 (partitions)', () => {
   });
 
   test('an unknown formatVersion is invalid-report at formatVersion', () => {
-    const e = failure(() => parseAnyManifest({ ...v5(), formatVersion: 8 }));
+    const e = failure(() => parseAnyManifest({ ...v5(), formatVersion: 9 }));
     expect(e.code).toBe('invalid-report');
     expect(e.path).toBe('manifest.formatVersion');
   });
@@ -285,16 +285,16 @@ describe('manifest format 5 additions', () => {
     expect(() => parseAnyManifest(withFile(base, logsEnd))).toThrow(OtelHtmlError);
   });
 
-  test('parseAnyManifest: 5 parses, 4 fails with the old-format message, 8 with the newer-format error naming 8', () => {
+  test('parseAnyManifest: 5 parses, 4 fails with the old-format message, 9 with the newer-format error naming 9', () => {
     expect(parseAnyManifest(v5()).formatVersion).toBe(5);
     const old = failure(() => parseAnyManifest({ ...v5(), formatVersion: 4 }));
     expect(old.code).toBe('invalid-report');
     expect(old.message).toBe(oldFormatMessage(4));
     expect(old.message).toContain('format 4');
-    const e = failure(() => parseAnyManifest({ ...v5(), formatVersion: 8 }));
+    const e = failure(() => parseAnyManifest({ ...v5(), formatVersion: 9 }));
     expect(e.code).toBe('invalid-report');
     expect(e.path).toBe('manifest.formatVersion');
-    expect(e.message).toContain('8');
+    expect(e.message).toContain('9');
   });
 
   test('rollup paths are partition files', () => {
@@ -510,5 +510,60 @@ describe('manifest format 6', () => {
     expect('epochUnixNano' in stored).toBe(false);
     expect(parseAnyManifest(JSON.parse(JSON.stringify(stored)))).toEqual(m);
     expect(manifestForWrite(v5())).toEqual(v5());
+  });
+});
+
+describe('manifest format 8', () => {
+  type Raw = Record<string, unknown> & { partitions: Record<string, unknown>[] };
+  const v8Raw = (version = 8, flag: boolean | 'absent' = true, withFile = true): Raw => {
+    const { epochUnixNano: _e, ...rest } = v5();
+    const m = { ...rest, formatVersion: version } as unknown as Raw;
+    const first = m.partitions[0] as { files: Record<string, unknown> };
+    const cicd = {
+      path: partitionFilePath(0, 'cicd'),
+      bytes: 10,
+      rows: 2,
+      timeMin: '5',
+      timeMax: '9',
+      values: {},
+    };
+    const files = withFile ? { ...first.files, cicd } : first.files;
+    const entry = { ...first, ...(flag === 'absent' ? {} : { cicd: flag }), files };
+    return { ...m, partitions: [entry, ...m.partitions.slice(1)] };
+  };
+
+  test('a format-8 manifest listing a cicd file and cicd: true parses', () => {
+    const m = parseAnyManifest(v8Raw()) as ManifestV4;
+    expect(m.formatVersion).toBe(8);
+    expect(m.partitions[0]?.cicd).toBe(true);
+    expect(m.partitions[0]?.files.cicd?.rows).toBe(2);
+  });
+  test('the flag may stand alone (a derivation that found no rows) and the file may lack the flag', () => {
+    expect((parseAnyManifest(v8Raw(8, true, false)) as ManifestV4).partitions[0]?.cicd).toBe(true);
+    expect((parseAnyManifest(v8Raw(8, 'absent', true)) as ManifestV4).partitions[0]?.cicd).toBeUndefined();
+  });
+  test('the flag only means true', () => {
+    expect(failure(() => parseAnyManifest(v8Raw(8, false))).code).toBe('invalid-report');
+  });
+  test('the same entry in a format-7 manifest is invalid-report', () => {
+    for (const [flag, withFile] of [
+      [true, true],
+      [true, false],
+      ['absent', true],
+    ] as const) {
+      expect(failure(() => parseAnyManifest(v8Raw(7, flag, withFile))).code).toBe('invalid-report');
+    }
+  });
+  test('the cicd file lives at its partition path', () => {
+    const raw = v8Raw();
+    const first = raw.partitions[0] as { files: { cicd: { path: string } } };
+    first.files.cicd.path = partitionFilePath(1, 'cicd');
+    expect(failure(() => parseAnyManifest(raw)).path).toContain('cicd');
+  });
+  test('serializes without epochUnixNano and parses back equal', () => {
+    const m = parseAnyManifest(v8Raw());
+    const stored = manifestForWrite(m) as Record<string, unknown>;
+    expect('epochUnixNano' in stored).toBe(false);
+    expect(parseAnyManifest(JSON.parse(JSON.stringify(stored)))).toEqual(m);
   });
 });

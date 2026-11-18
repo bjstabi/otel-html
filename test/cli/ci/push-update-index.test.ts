@@ -127,3 +127,89 @@ describe('the update schema', () => {
     expect(UpdateJsonSchema.safeParse(update(rollup)).success).toBe(true);
   });
 });
+
+describe('a push update carries the cicd table', () => {
+  test('build, readUpdate and planSync keep files.cicd and cicd: true', async () => {
+    const report = join(dir, 'report');
+    const w = await createReportWith({ out: report, format: 'local', assetsBase: 'assets/' }, deps);
+    const root = { traceId: 'a'.repeat(32), spanId: '1'.padStart(16, '0'), name: 'ci' };
+    await w.addSpans(
+      traceRequest(
+        [
+          span(root),
+          span({
+            traceId: root.traceId,
+            spanId: '2'.padStart(16, '0'),
+            parentSpanId: root.spanId,
+            name: 'build',
+            attributes: [
+              { key: 'cicd.pipeline.task.run.id', value: { stringValue: '9' } },
+              { key: 'cicd.pipeline.task.name', value: { stringValue: 'build' } },
+              { key: 'cicd.pipeline.task.run.result', value: { stringValue: 'success' } },
+            ],
+          }),
+        ],
+        [{ key: 'cicd.pipeline.run.id', value: { stringValue: '5' } }],
+      ),
+    );
+    await w.close();
+    const out = join(dir, 'update');
+    const built = await buildPushUpdate({
+      deps,
+      report,
+      ledger: { sequence: 0, shipped: [], uploads: [] },
+      out,
+      runId: 42,
+      runAttempt: 1,
+      jobId: 7,
+      jobName: 'build',
+      sequence: 1,
+      createdAt: '2026-11-10T12:00:00.000Z',
+    });
+    const listed = built?.update.partitions ?? [];
+    expect(listed.length).toBeGreaterThan(0);
+    for (const p of listed) expect(p.cicd).toBe(true);
+    expect(listed.some((p) => p.files.cicd !== undefined)).toBe(true);
+
+    const u = await readUpdate(deps.fs, out);
+    const config = resolveConfig({ file: {}, env: {}, fileLabel: 'config' }).config;
+    const manifest = newRunManifest({
+      title: 'run 42',
+      createdAt: '2026-11-10T00:00:00.000Z',
+      assetsBase: '../../../assets/0.4.0/',
+      config,
+      version: '0.4.0',
+    });
+    const plan = planSync({
+      manifest,
+      state: emptyRunState(1),
+      jobKey: '7',
+      jobName: 'build',
+      attempt: 1,
+      updates: [{ dir: out, update: u }],
+      now: '2026-11-10T12:00:00.000Z',
+    });
+    expect(plan.manifest.partitions.length).toBeGreaterThan(0);
+    for (const e of plan.manifest.partitions) expect(e.cicd).toBe(true);
+    expect(plan.manifest.partitions.some((e) => e.files.cicd !== undefined)).toBe(true);
+    const back = parseAnyManifest(manifestForWrite(plan.manifest));
+    expect(isPartitioned(back) ? back.partitions : undefined).toEqual(plan.manifest.partitions);
+  });
+
+  test('an update without the flag or file (an older publisher) still parses', () => {
+    const update = {
+      version: 1,
+      kind: 'push',
+      runId: 42,
+      runAttempt: 1,
+      createdAt: '2026-11-10T12:00:00.000Z',
+      jobId: 7,
+      jobName: 'build',
+      sequence: 1,
+      partitions: [{ source: 'job:7#flush:0', carried: true, files: {} }],
+    };
+    expect(UpdateJsonSchema.safeParse(update).success).toBe(true);
+    const flagged = { ...update, partitions: [{ ...update.partitions[0], cicd: true }] };
+    expect(UpdateJsonSchema.safeParse(flagged).success).toBe(true);
+  });
+});

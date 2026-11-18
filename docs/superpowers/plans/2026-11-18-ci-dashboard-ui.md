@@ -293,6 +293,9 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
     `cicd: true`; the file is written after `spans` only when it has rows.
   - `src/writer/compaction.ts`: `onRows('spans')` also feeds a `CicdRowSet`. The table is written after the TABLES
     loop when it has rows. The loop skips `cicd`.
+  - `src/cli/ci/update.ts`, `src/cli/ci/push-update.ts`, `src/cli/ci/deploy-apply.ts` (maintainer-approved
+    2026-11-18): the update schema accepts a `cicd` partition file and `cicd: true`; the push update and the run
+    report carry the flag, so the job update path keeps both.
 - Test: `test/writer/cicd-flush.test.ts`, `test/writer/merge-cicd.test.ts`
 
 **Interfaces:**
@@ -386,8 +389,9 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
 - [ ] **Step 3: implement.**
   - The catalogue classes follow the `widget_traces` route entry:
     - `cicd.rows`: `files` on retention and density, and on window.
-    - `cicd.rows.scan`: `scan` on density, with the `allowed` reason "partitions without the cicd flag (older or
-      upgraded)".
+    - `cicd.rows.scan`: `scan` on retention, density and window (measured), with the `allowed` reason "partitions
+      without the cicd flag (older or upgraded)".
+  - The SQL builders live in `src/query/sql/cicd.ts` and `encodeCicd` in `src/writer/cicd-encode.ts`.
   - Add a scaling-shape test that both stay in class.
 - [ ] **Step 4:** → PASS. Then `mise run check` → PASS (the catalogue gates included).
 - [ ] **Step 5:** commit `feat(viewer): cicdRows reads the cicd table and combines runs`.
@@ -830,3 +834,35 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
 - [ ] **Step 6: the record.** After the deploy that runs PR 3's build on the live site, measure `#/dashboards/ci` as
   in Step 3. Write it under "Record" at the end of this plan, mark every row merged, and merge that change as
   `docs(plan): ci-dashboard-ui record`.
+
+## Amendments
+
+### Task 1 findings (2026-11-18)
+
+Read from `otel-html-check` of push run 44232036620 (main, `3c97d775`; 4053 spans, 1 trace) and `otel-html-e2e-chromium-1of2`
+of push run 44009807376 (693 spans, 1 trace). The latest push run (44232036620) uploaded no e2e artifact, so the e2e one
+is from the previous push run. Attributes and resource attributes are JSON text columns in `spans.parquet`.
+
+- **`mise.task.skipped`.** Four spans in the check artifact carry it: `lint`, `typecheck`, `knip`, `scaling:reports`
+  (scope `mise.tasks`, service `ci/check`). It is a JSON boolean (`true` on all four); no span carries `false`, so absence
+  means "ran". The e2e artifact has none. Other `mise.tasks` spans: 34 in the check artifact (task spans with
+  `mise.task.name`, `mise.task.display_name`, `mise.task.source`, `process.exit.code`; `mise.span_type` = `run` or
+  `setup` for the "mise run X", "resolve tasks", "install tools", "deps", "start daemons" spans).
+- **Resource of mise spans.** `service.name` `ci/<job>`, `cicd.pipeline.run.id`, `cicd.pipeline.task.name` (`check`),
+  `cicd.pipeline.name`, `cicd.pipeline.run.url.full`, `vcs.*`, `telemetry.sdk.*`. All 38 spans of scope `mise.tasks`
+  (34) and `otel-html` (4 `bash` step spans) carry run.id and task.name (38 of 4053); the e2e artifact's mise spans
+  carry `cicd.pipeline.task.name` = `e2e (chromium, 1)`.
+- **Vitest spans.** 4015 of 4053, scope `vitest`, resource `{service.name: otel-html-tests, service.version, test.framework: vitest}`:
+  no `cicd.pipeline.*` on the resource. Names include `vitest.start`, `vitest.coverage.init`, `vitest.config.*` and the
+  test spans. Same trace as the mise spans.
+- **Playwright spans.** 75 spans in the chromium-1of2 artifact, scope `otel-html-tests`, resource
+  `{service.name: otel-html-tests, service.version, test.framework: playwright}`: no `cicd.pipeline.*`. Span name is the
+  test title; attributes `test.suite.name` (spec file), `test.case.name`, `playwright.project`, `otel_html.test.retry`,
+  `otel_html.test.tags`, `test.case.result.status`. Also 614 `otel-html-viewer` spans (scope and service
+  `otel-html-viewer`). Same trace as the mise spans.
+- **Trace and root.** Each artifact is one trace. No span has an empty parent; the only spans whose parent is absent
+  from the artifact are the `bash` step spans (scope `otel-html`: 4 in check, 3 in e2e). The CI run root span is not in
+  these artifacts (it is joined later by `otel-html ci`), so a widget must not assume a root in the per-job data.
+- **Consequence for the plan.** The `cache` tile and hollow marks can key on `mise.task.skipped = true` (bool, present
+  only when skipped). Test spans carry no `cicd.pipeline.task.name`/`run.id` on the resource: attribute them to a CI run
+  and job through `trace_id` shared with the mise spans of the same job, not through their own resource.

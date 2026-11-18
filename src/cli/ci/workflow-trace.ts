@@ -2,6 +2,7 @@ import type { ApiJob, ApiRun, ApiStep } from './github-api.js';
 import { type JobId, jobSpanIdOf, runSpanIdOf, stepSpanIdOf, traceIdOf } from './ids.js';
 import { type Attr, attrs, ms, ns, resultOf } from './otlp.js';
 import { jobIdFor } from './publish.js';
+import { matchJob, type WorkflowJob } from './workflow-file.js';
 
 /** The resource attributes every CI record carries, plus the service identity of the workflow run. */
 export function ciResource(run: ApiRun): Record<string, string> {
@@ -11,6 +12,8 @@ export function ciResource(run: ApiRun): Record<string, string> {
     'cicd.pipeline.run.url.full': run.html_url,
     ...(run.head_branch === null ? {} : { 'vcs.ref.head.name': run.head_branch }),
     'vcs.ref.head.revision': run.head_sha,
+    ...(run.display_title === '' ? {} : { 'vcs.ref.head.title': run.display_title }),
+    ...(run.event === '' ? {} : { 'cicd.pipeline.trigger': run.event }),
     'vcs.repository.url.full': run.repository.html_url,
     'service.name': run.name,
     'service.namespace': run.repository.full_name,
@@ -20,7 +23,11 @@ export function ciResource(run: ApiRun): Record<string, string> {
 
 /** The run's resource plus the job's name: the resource every record scoped to one job carries. */
 export function jobResource(run: ApiRun, job: ApiJob): Record<string, string> {
-  return { ...ciResource(run), 'cicd.pipeline.task.name': job.name };
+  return {
+    ...ciResource(run),
+    'cicd.pipeline.task.name': job.name,
+    ...(job.labels.length === 0 ? {} : { 'cicd.worker.labels': job.labels.join(',') }),
+  };
 }
 
 type Status = { code: number; message: string };
@@ -52,6 +59,7 @@ export function workflowTraceRequest(
   run: ApiRun,
   jobs: ApiJob[],
   approximate: ReadonlyMap<number, JobId>,
+  workflowJobs: readonly WorkflowJob[] = [],
 ): object {
   const traceId = traceIdOf(key);
   const runSpanId = runSpanIdOf(key);
@@ -65,7 +73,7 @@ export function workflowTraceRequest(
   spans.push(rootSpan(run, runSpanId, runStart, runEnd, false));
 
   for (const job of jobs) {
-    const jobSpans = jobSpansOf(key, job, runSpanId, runStart, runEnd, approximate, undefined);
+    const jobSpans = jobSpansOf(key, job, runSpanId, runStart, runEnd, approximate, undefined, workflowJobs);
     jobGroups.push({ job, spans: jobSpans });
   }
 
@@ -171,7 +179,9 @@ function jobSpansOf(
   runEnd: number,
   approximate: ReadonlyMap<number, JobId>,
   provisionalEnd: number | undefined,
+  workflowJobs: readonly WorkflowJob[] = [],
 ): SpanInput[] {
+  const declared = matchJob(workflowJobs, job.name);
   const jobSpans: SpanInput[] = [];
   const isApprox = approximate.has(job.id);
   const jobKeyId = jobIdFor(job, approximate);
@@ -193,6 +203,9 @@ function jobSpansOf(
       'cicd.pipeline.task.run.result': job.conclusion === null ? undefined : resultOf(job.conclusion),
       'cicd.pipeline.task.run.url.full': job.html_url,
       'cicd.worker.name': job.runner_name,
+      'cicd.pipeline.task.id': declared?.id,
+      'cicd.pipeline.task.needs': declared === null || declared === undefined ? undefined : declared.needs,
+      'cicd.pipeline.task.condition': declared?.condition,
       'github.job.id': job.id,
       'github.html_url': job.html_url,
       'otel_html.ci.parent_approximate': isApprox ? true : undefined,
@@ -238,7 +251,11 @@ function stepSpan(
     kind: SPAN_KIND_INTERNAL,
     start,
     end: Math.max(start, ms(step.completed_at) ?? jobEnd),
-    attributes: attrs({ 'github.job.step.name': step.name, 'github.job.step.number': step.number }),
+    attributes: attrs({
+      'github.job.step.name': step.name,
+      'github.job.step.number': step.number,
+      'cicd.pipeline.task.step.result': step.conclusion,
+    }),
     status: statusOf(step.conclusion),
   };
 }

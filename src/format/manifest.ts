@@ -207,17 +207,19 @@ export interface PartitionFile extends FileStatistics {
 }
 
 /** The five base tables are always listed; the two rollup tables only when the report has rollups. */
-export type StatisticsKeys = Record<Exclude<Table, RollupTable | 'widget_traces'>, string[]> &
+export type StatisticsKeys = Record<Exclude<Table, RollupTable | 'widget_traces' | 'cicd'>, string[]> &
   Partial<Record<RollupTable, string[]>>;
 
 export interface PartitionEntry {
   n: number;
   source: string;
+  /** Format 8: a writer derived the `cicd` table from this partition's spans; `files.cicd` is present when it had rows. */
+  cicd?: true;
   files: Partial<Record<Table, PartitionFile>>;
 }
 
 export interface ManifestV4 {
-  /** 5, 6 or 7; the type keeps its name from format 4. */
+  /** 5 to 8; the type keeps its name from format 4. */
   formatVersion: (typeof READABLE_PARTITION_FORMATS)[number];
   otelHtmlVersion: string;
   title: string;
@@ -431,6 +433,25 @@ const partitionsV7 = partitionEntry(
   }),
 );
 
+const partitionsV8 = z.array(
+  z.strictObject({
+    n: nonNegInt,
+    source: z.string().regex(SOURCE_RE, 'a source like flush:3 or ci:run#12'),
+    cicd: z.exactOptional(z.literal(true)),
+    files: z.strictObject({
+      spans: z.exactOptional(SpansPartitionFileSchemaV7),
+      logs: z.exactOptional(LogsPartitionFileSchemaV7),
+      points: z.exactOptional(PartitionFileSchema),
+      traces: z.exactOptional(ShareTracesPartitionFileSchema),
+      patterns: z.exactOptional(PartitionFileSchema),
+      span_rollups: z.exactOptional(RollupPartitionFileSchemaV7),
+      log_rollups: z.exactOptional(RollupPartitionFileSchemaV7),
+      widget_traces: z.exactOptional(WidgetTracesPartitionFileSchema),
+      cicd: z.exactOptional(PartitionFileSchema),
+    }),
+  }),
+);
+
 const statisticsKeysV5 = z.strictObject({
   ...tableKeyed(z.array(z.string())).shape,
   span_rollups: z.exactOptional(z.array(z.string())),
@@ -481,14 +502,27 @@ const ManifestV7Schema: z.ZodType<ManifestV4> = z
   .superRefine(refineManifest)
   .transform((m) => ({ ...m, epochUnixNano: m.range === null ? isoToUnixNano(m.createdAt) : m.range.start }));
 
+/** Format 8: format 7, plus a `cicd` partition file and `cicd: true` on the partition entry. */
+const ManifestV8Schema: z.ZodType<ManifestV4> = z
+  .strictObject({
+    formatVersion: z.literal(8),
+    ...ManifestShape,
+    createdAt: z.string().refine((t) => Number.isFinite(Date.parse(t)), 'an ISO time'),
+    partitions: partitionsV8,
+    statisticsKeys: statisticsKeysV5,
+    config: ConfigSchemaV5,
+  })
+  .superRefine(refineManifest)
+  .transform((m) => ({ ...m, epochUnixNano: m.range === null ? isoToUnixNano(m.createdAt) : m.range.start }));
+
 /** The viewer's time anchor: format 5 stores it; a parsed format 6 carries the derived value. */
 export function manifestAnchor(m: ManifestV4): bigint {
   return BigInt(m.epochUnixNano);
 }
 
-/** What goes into `data/manifest.js`: a format-6 or 7 manifest stores no `epochUnixNano`. */
+/** What goes into `data/manifest.js`: a format-6 to 8 manifest stores no `epochUnixNano`. */
 export function manifestForWrite(m: AnyManifest): unknown {
-  if (m.formatVersion !== 6 && m.formatVersion !== 7) return m;
+  if (m.formatVersion < 6) return m;
   const { epochUnixNano: _anchor, ...stored } = m;
   return stored;
 }
@@ -497,12 +531,12 @@ function parseManifestV5(input: unknown): ManifestV4 {
   return parseWith(ManifestV5Schema, input, 'manifest');
 }
 
-/** A partition manifest (format 5 to 7), as against a chunk manifest (formats 1 to 3). */
+/** A partition manifest (format 5 to 8), as against a chunk manifest (formats 1 to 3). */
 export function isPartitioned(m: AnyManifest): m is ManifestV4 {
   return READABLE_PARTITION_FORMATS.some((f) => f === m.formatVersion);
 }
 
-/** Dispatch on `formatVersion`: 5 to 7 are partition manifests, 1-3 a chunk manifest; format 4 gets the D12 message, anything else is invalid-report. */
+/** Dispatch on `formatVersion`: 5 to 8 are partition manifests, 1-3 a chunk manifest; format 4 gets the D12 message, anything else is invalid-report. */
 export function parseAnyManifest(input: unknown): AnyManifest {
   const v =
     typeof input === 'object' && input !== null && 'formatVersion' in input ? input.formatVersion : undefined;
@@ -510,6 +544,7 @@ export function parseAnyManifest(input: unknown): AnyManifest {
   if (v === 5) return parseManifestV5(input);
   if (v === 6) return parseWith(ManifestV6Schema, input, 'manifest');
   if (v === 7) return parseWith(ManifestV7Schema, input, 'manifest');
+  if (v === 8) return parseWith(ManifestV8Schema, input, 'manifest');
   if (CHUNK_READABLE_FORMAT_VERSIONS.some((c) => c === v)) return parseManifest(input);
   throw new OtelHtmlError('invalid-report', {
     path: 'manifest.formatVersion',

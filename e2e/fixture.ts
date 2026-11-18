@@ -105,7 +105,9 @@ export const PORT_ENV = 'OTEL_HTML_E2E_PORT';
 export const LOAD_REPORT_ENV = 'OTEL_HTML_LOAD_REPORT';
 
 /** Reports built from the committed SDK fixtures (`fixtures/<name>.otlp.json`) and served beside the main one. */
-export const FIXTURE_REPORTS = ['small', 'orphans', 'logs-only', 'empty', 'linked', 'sample'] as const;
+export const FIXTURE_REPORTS = ['small', 'orphans', 'logs-only', 'empty', 'linked', 'sample', 'ci'] as const;
+/** The config the `ci` report is converted with: the one this repository's own CI report uses. */
+export const CI_CONFIG: URL = new URL('../.github/otel-html-ci.yaml', import.meta.url);
 export type FixtureReport = (typeof FIXTURE_REPORTS)[number];
 /** Fixture files of the reports that are not just `fixtures/<name>.otlp.json`. */
 const FIXTURE_FILES: Partial<Record<FixtureReport, readonly string[]>> = {
@@ -156,6 +158,7 @@ export type ReportName =
   | 'frozen-format-5'
   | 'frozen-format-6'
   | 'frozen-format-7'
+  | 'frozen-format-8'
   | 'wide-format-6';
 
 /**

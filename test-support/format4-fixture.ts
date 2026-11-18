@@ -15,7 +15,7 @@ import type { OtlpRequest } from '../src/model/otlp-json.js';
 import { viewStatements } from '../src/query/sql/views.js';
 import { openSession } from '../src/writer/session.js';
 import { openTestDb, type TestDb } from './duckdb-node.js';
-import { asFormat5Manifest, hasFormat7Fields, withoutServiceShare } from './format6.js';
+import { asFormat5Manifest, hasFormat7Fields, withoutCicd, withoutServiceShare } from './format6.js';
 import { span, traceRequest } from './otlp-builders.js';
 import { createTestWriter, EPOCH_NS, otlp, testConfig } from './writer-deps.js';
 
@@ -64,7 +64,9 @@ export async function buildFormat4Report(
   if (!hasFormat7Fields(sized)) return { manifest: sized, files, epoch };
   // A manifest that keeps format-7 fields (an index file, recorded keys) is a format 7 one: stored without the epoch and
   // parsed as the viewer loads it, which derives the anchor from the range.
-  const v7 = parseAnyManifest(manifestForWrite({ ...sized, formatVersion: 7 }));
+  const v7 = parseAnyManifest(
+    manifestForWrite({ ...sized, formatVersion: 7, partitions: withoutCicd(sized.partitions) }),
+  );
   if (!isPartitioned(v7)) throw new Error('not a partition manifest');
   return { manifest: v7, files, epoch: manifestAnchor(v7) };
 }

@@ -7,12 +7,13 @@ export const TABLES = [
   'span_rollups',
   'log_rollups',
   'widget_traces',
+  'cicd',
 ] as const;
 export type Table = (typeof TABLES)[number];
-/** The tables that carry statistics keys: every table but `widget_traces`, whose columns are the report's own. */
-export type StatisticsTable = Exclude<Table, 'widget_traces'>;
+/** The tables that carry statistics keys: every table but `widget_traces`, whose columns are the report's own, and `cicd`. */
+export type StatisticsTable = Exclude<Table, 'widget_traces' | 'cicd'>;
 export const STATISTICS_TABLES: readonly StatisticsTable[] = TABLES.filter(
-  (t): t is StatisticsTable => t !== 'widget_traces',
+  (t): t is StatisticsTable => t !== 'widget_traces' && t !== 'cicd',
 );
 
 /** The base table each rollup table summarises. */
@@ -63,6 +64,14 @@ const DICTIONARY_COLUMNS: ReadonlySet<string> = new Set([
 function col(name: string, type: ColumnType, nullable = true): ColumnDef {
   return { name, type, nullable, dictionary: type === 'json' || DICTIONARY_COLUMNS.has(name) };
 }
+
+/** A nullable dictionary column the name set above does not cover (a name another table uses for a different type). */
+const dictionary = (name: string, type: ColumnType, nullable = true): ColumnDef => ({
+  name,
+  type,
+  nullable,
+  dictionary: true,
+});
 
 const required = (name: string, type: ColumnType): ColumnDef => col(name, type, false);
 
@@ -238,6 +247,33 @@ export function widgetTracesColumns(variables: readonly string[]): ColumnDef[] {
   ];
 }
 
+/** Format 8: one row per run, job and (per trace) tasks summary, derived from a partition's spans. */
+const CICD: readonly ColumnDef[] = [
+  dictionary('kind', 'utf8', false),
+  required('trace_id', 'utf8'),
+  col('span_id', 'utf8'),
+  required('start_ns', 'int64'),
+  required('end_ns', 'int64'),
+  col('name', 'utf8'),
+  dictionary('result', 'utf8'),
+  dictionary('pipeline', 'utf8'),
+  col('run_id', 'utf8'),
+  col('attempt', 'int32'),
+  dictionary('trigger', 'utf8'),
+  col('branch', 'utf8'),
+  col('revision', 'utf8'),
+  col('title', 'utf8'),
+  col('task', 'utf8'),
+  col('task_id', 'utf8'),
+  col('labels', 'utf8'),
+  col('queued_ns', 'int64'),
+  col('needs', 'utf8'),
+  col('condition', 'utf8'),
+  col('failed_step', 'utf8'),
+  col('tasks_replayed', 'int32'),
+  col('tasks_run', 'int32'),
+];
+
 export const TABLE_COLUMNS: Readonly<Record<Table, readonly ColumnDef[]>> = {
   spans: SPANS,
   logs: LOGS,
@@ -247,6 +283,7 @@ export const TABLE_COLUMNS: Readonly<Record<Table, readonly ColumnDef[]>> = {
   span_rollups: SPAN_ROLLUPS,
   log_rollups: LOG_ROLLUPS,
   widget_traces: WIDGET_TRACES,
+  cicd: CICD,
 };
 
 /** The columns a table's rows are sorted by, in order: scope_name, service_name, then its time column. */
@@ -259,6 +296,7 @@ export const SORT_COLUMNS: Readonly<Record<Table, readonly string[]>> = {
   span_rollups: ['scope_name', 'service_name', 'start_time_unix_nano'],
   log_rollups: ['scope_name', 'service_name', 'time_unix_nano'],
   widget_traces: ['condition', 'trace_id'],
+  cicd: ['trace_id', 'kind', 'start_ns'],
 };
 
 /** One column of a sort and its direction (nulls last either way). `bucketNs` sorts by the value's bucket (`value / bucketNs`, floored) instead of the value: a coarse time key. */
@@ -278,6 +316,7 @@ export const TIME_COLUMN: Readonly<Record<Table, string | null>> = {
   span_rollups: 'start_time_unix_nano',
   log_rollups: 'time_unix_nano',
   widget_traces: null,
+  cicd: 'start_ns',
 };
 
 export const FIXED_STATISTICS_COLUMNS: Readonly<Record<Table, readonly string[]>> = {
@@ -289,4 +328,5 @@ export const FIXED_STATISTICS_COLUMNS: Readonly<Record<Table, readonly string[]>
   span_rollups: ['scope_name', 'service_name', 'name'],
   log_rollups: ['scope_name', 'service_name', 'severity_number'],
   widget_traces: [],
+  cicd: [],
 };

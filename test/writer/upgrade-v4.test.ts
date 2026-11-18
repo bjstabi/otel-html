@@ -62,7 +62,7 @@ describe('upgradeReport on a format-5 report', () => {
     await w.fs.writeBytes('r/assets/duckdb.0.9.0.wasm', new Uint8Array([1]));
     await w.fs.writeTextAtomic('r/index.html', '<html>old</html>');
     const r = await upgradeReport(w.deps, 'r');
-    expect(r.formatVersion).toBe(7);
+    expect(r.formatVersion).toBe(8);
     expect(manifestV4(w, 'r')).toEqual({
       ...before,
       engine: { ...before.engine, version: ENGINE_VERSION },
@@ -347,7 +347,7 @@ describe('upgradeReport on a chunks report', () => {
     const w = createTestWriter();
     await v4Report(w, 'r', 'site');
     const text = w.fs.snapshot().get('r/data/manifest.js') ?? '';
-    await w.fs.writeTextAtomic('r/data/manifest.js', text.replace('"formatVersion":7', '"formatVersion":4'));
+    await w.fs.writeTextAtomic('r/data/manifest.js', text.replace('"formatVersion":8', '"formatVersion":4'));
     const before = new Map(w.fs.snapshot());
     const e = await failure(upgradeReport(w.deps, 'r'));
     expect(e.code).toBe('invalid-report');
@@ -392,7 +392,7 @@ describe('otel-html upgrade --format --assets-base', () => {
       w.deps,
     );
     expect(code).toBe(0);
-    expect(out).toMatch(/^upgraded r: viewer \S+, format 7\n$/);
+    expect(out).toMatch(/^upgraded r: viewer \S+, format 8\n$/);
     expect(manifestV4(w, 'r').engine).toMatchObject({ format: 'local', assetsBase: '../../assets/0.3.0/' });
   });
 });

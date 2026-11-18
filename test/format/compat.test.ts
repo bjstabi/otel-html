@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { mergeWith } from '../../src/api/convert.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { parseAnyManifest } from '../../src/format/manifest.js';
+import { isPartitioned, parseAnyManifest } from '../../src/format/manifest.js';
+import { decodeTable } from '../../src/format/parquet/codec.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
 import { manifestOf } from '../writer/helpers.js';
@@ -35,6 +36,7 @@ describe.each([
   ['format-5', 5],
   ['format-6', 6],
   ['format-7', 7],
+  ['format-8', 8],
 ])('%s', (name, version) => {
   test('merge reads it and the totals survive', async () => {
     const w = createTestWriter();
@@ -45,8 +47,8 @@ describe.each([
     expect(summary.totals).toEqual(expected.totals);
     expect(summary.totals.spans).toBeGreaterThan(0);
     expect(summary.totals.metrics).toBeGreaterThan(0);
-    // Every merge writes format 7: a chunk report is replayed through a flush, a format-5 report's partitions are copied as they are.
-    expect(manifestOf(w, 'm').formatVersion).toBe(7);
+    // Every merge writes format 8: a chunk report is replayed through a flush, a format-5 report's partitions are copied as they are.
+    expect(manifestOf(w, 'm').formatVersion).toBe(8);
   });
   test('merge into a format-6 (site) report keeps the totals', async () => {
     const w = createTestWriter();
@@ -54,6 +56,24 @@ describe.each([
     const config = { writer: { format: 'site' as const } };
     const summary = await mergeWith({ inputs: [name], out: 'm4', config }, w.deps);
     expect(summary.totals).toEqual(expected.totals);
-    expect(w.fs.snapshot().get('m4/data/manifest.js')).toContain('"formatVersion":7');
+    expect(w.fs.snapshot().get('m4/data/manifest.js')).toContain('"formatVersion":8');
+  });
+});
+
+describe('format-8', () => {
+  test('holds a cicd file with run, job and tasks rows', () => {
+    const root = join(REPORTS, 'format-8/data');
+    const text = readFileSync(join(root, 'manifest.js'), 'utf8');
+    const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
+    if (!isPartitioned(manifest)) throw new Error('not a partition manifest');
+    const kinds = new Set<unknown>();
+    for (const p of manifest.partitions) {
+      expect(p.cicd).toBe(true);
+      const file = p.files.cicd;
+      if (file === undefined) continue;
+      for (const row of decodeTable('cicd', readFileSync(join(root, '..', file.path))))
+        kinds.add((row as { kind: unknown }).kind);
+    }
+    expect(kinds).toEqual(new Set(['run', 'job', 'tasks']));
   });
 });

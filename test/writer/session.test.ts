@@ -46,7 +46,7 @@ async function open(w: TestWriter, config = testConfig()): Promise<WriterSession
 /** The report is format 7 and its manifest file holds no epoch: the anchor of a reader is derived, a writer's is its own. */
 function expectNoStoredEpoch(w: TestWriter): void {
   const raw = rawManifestOf(w, OUT);
-  expect(raw).toHaveProperty('formatVersion', 7);
+  expect(raw).toHaveProperty('formatVersion', 8);
   expect(raw).not.toHaveProperty('epochUnixNano');
 }
 

@@ -62,6 +62,8 @@ import {
   writeManifest,
   writeStateSlotV2,
 } from './checkpoint.js';
+import { encodeCicd } from './cicd-encode.js';
+import { CicdRowSet } from './cicd-rows.js';
 import { compactPartitions, latestTemplates, timeGroups, timeRangeOf } from './compaction.js';
 import { DedupeSet } from './dedupe.js';
 import { renderIndexHtml } from './html.js';
@@ -432,6 +434,7 @@ class PartitionSession implements WriterSession {
         return {
           rows: { traces: traceRows(taken.spans, taken.logs), patterns: p.rows, ...r.rows },
           rollups: r.descriptions,
+          cicd: this.#cicdRows(taken.spans),
           ...this.#widgetRows(taken.spans),
           commit: () => {
             this.#drain = p.drain;
@@ -559,6 +562,14 @@ class PartitionSession implements WriterSession {
       this.#toldIndex.add(message);
     }
     this.#deps.logger.warn(message, attrs);
+  }
+
+  /** The `cicd` rows of a cut's spans (none for a cut without CI spans). */
+  #cicdRows(spans: ColumnBatch): readonly Row[] {
+    if (spans.length === 0) return [];
+    const set = new CicdRowSet();
+    set.add(spans);
+    return set.rows();
   }
 
   /** The `widget_traces` rows of a cut's spans; nothing for a cut without spans or a set that is not exact. */
@@ -1308,6 +1319,10 @@ class PartitionSession implements WriterSession {
       !coversIndex(src.files.widget_traces?.widgetIndex, index)
         ? new WidgetTraceSet(index)
         : null;
+    // The `cicd` table is copied when the source says it derived one (its flag, not its format version); else it is
+    // computed from the spans in the same pass as the index.
+    const copyCicd = src.cicd === true;
+    const cicdSet = !copyCicd && src.files.spans !== undefined ? new CicdRowSet() : null;
     const spansRepair =
       src.files.span_rollups !== undefined &&
       this.#staleRollupBase('span_rollups', src.files.span_rollups, src) === 'spans';
@@ -1317,6 +1332,7 @@ class PartitionSession implements WriterSession {
         if (f === undefined) continue;
         // A `widget_traces` is copied only when this report's ids and variables are within its own; else it is computed below.
         if (table === 'widget_traces' && (index === null || !coversIndex(f.widgetIndex, index))) continue;
+        if (table === 'cicd' && !copyCicd) continue;
         const from = at(copy.dir, f.path);
         let bytes: Uint8Array;
         try {
@@ -1357,8 +1373,12 @@ class PartitionSession implements WriterSession {
             ? new AttributeKeyCounts()
             : undefined;
         let chunks: (() => AsyncIterable<ColumnBatch>) | undefined;
-        if (counts !== undefined || (table === 'spans' && (indexSet !== null || spansRepair))) {
+        if (
+          counts !== undefined ||
+          (table === 'spans' && (indexSet !== null || cicdSet !== null || spansRepair))
+        ) {
           const set = table === 'spans' ? indexSet : null;
+          const cicd = table === 'spans' ? cicdSet : null;
           const repair = table === 'spans' && spansRepair;
           chunks = () =>
             tapped(
@@ -1367,6 +1387,7 @@ class PartitionSession implements WriterSession {
                 : streamBatches(table === 'logs' ? 'logs' : 'spans', bytes, f.path, watch.guard),
               (chunk) => {
                 set?.add(chunk);
+                cicd?.add(chunk);
                 counts?.addBatch(chunk);
               },
             );
@@ -1399,6 +1420,21 @@ class PartitionSession implements WriterSession {
         };
       }
       const spansFile = files.spans;
+      if (cicdSet !== null && cicdSet.size > 0) {
+        if (!made) {
+          await fs.mkdirp(at(this.#out, partitionDir(n)));
+          made = true;
+        }
+        const rows = cicdSet.rows();
+        const bytes = encodeCicd(rows, this.#encodeOptions().rowGroupRows);
+        const path = partitionFilePath(n, 'cicd');
+        await this.#putFile(n, 'cicd', bytes);
+        files.cicd = {
+          path,
+          bytes: bytes.length,
+          ...fileStatistics('cicd', batchFromRows('cicd', rows), [], this.#config.writer.facetValueCap),
+        };
+      }
       if (
         index !== null &&
         indexSet !== null &&
@@ -1418,7 +1454,7 @@ class PartitionSession implements WriterSession {
     } finally {
       watch.stop();
     }
-    return { n, source: `merge:${copy.origin}#${src.n}`, files };
+    return { n, source: `merge:${copy.origin}#${src.n}`, files, cicd: true };
   }
 
   /**

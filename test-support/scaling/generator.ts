@@ -56,6 +56,12 @@ export interface Shape {
    * step attribute), partitions an hour apart that each spread over 50 minutes. Without it the content is unchanged.
    */
   mixed?: boolean;
+  /**
+   * CI runs (`ciRunsPerGroup` per row group of a partition, a root and two jobs each) on top of the usual content, for the
+   * entries that read the `cicd` table. `flagged`: as the writer leaves them (the table and the partition's flag);
+   * `unflagged`: the table and the flag removed, as in an upgraded report, so the rows come from a scan of the spans.
+   */
+  ci?: 'flagged' | 'unflagged';
 }
 
 export interface ScalingReport {
@@ -77,18 +83,24 @@ export function stepsOf(
   spacing: Shape['spacing'],
   merged = false,
   compacted = false,
+  ci?: Shape['ci'],
 ): readonly Shape[] {
   return [2, 4, 8].map((v) => ({
     ...BASE,
     spacing,
     ...(merged ? { merged } : {}),
     ...(compacted ? { compacted } : {}),
+    ...(ci === undefined ? {} : { ci }),
     [AXIS_FIELD[axis]]: v,
   }));
 }
 
 /** Whether an entry is measured on merged reports: those whose condition is on a statistics key (#272). */
 export const isMerged = (entry: { id: string }): boolean => entry.id.includes('.statkey.');
+
+/** The CI content an entry is measured on: the `cicd` rows of a report as the writer leaves it, or of an upgraded one (scanned). */
+export const ciOf = (entry: { id: string }): Shape['ci'] =>
+  entry.id === 'cicd.rows' ? 'flagged' : entry.id === 'cicd.rows.scan' ? 'unflagged' : undefined;
 
 /** The writer's default row-group size: the page fit measures density on groups this large (Task 6c). */
 export const PRODUCTION_ROW_GROUP_ROWS = 50_000;
@@ -296,7 +308,87 @@ function* chunkedPartitionJson(shape: Shape, n: number): Generator<Record<string
       };
     }
   }
+  if (shape.ci !== undefined) yield ciJson(shape, n);
   yield metricsJson(shape, n);
+}
+
+/** CI runs per row group of a partition in a `ci` shape. */
+const CI_RUNS_PER_GROUP = 10;
+const ciRunCount = (shape: Shape, n: number): number =>
+  CI_RUNS_PER_GROUP *
+  (n === FIRST_SLOT - shape.outside ? (shape.bigRowGroups ?? shape.rowGroups) : shape.rowGroups);
+
+/**
+ * The CI spans of partition `n` of a `ci` shape: runs a second apart, each a root span of a resource that has a run id
+ * and two job spans. Their ids and times are a function of the slot, like the rest of the partition.
+ */
+function ciJson(shape: Shape, n: number): Record<string, unknown> {
+  const resource = (run: string) => ({
+    attributes: [
+      str('service.name', 'ci'),
+      str('cicd.pipeline.name', 'ci'),
+      str('cicd.pipeline.run.id', run),
+      str('vcs.ref.head.name', 'main'),
+      str('cicd.pipeline.trigger', 'push'),
+    ],
+  });
+  const resourceSpans = [];
+  for (let r = 0; r < ciRunCount(shape, n); r++) {
+    const trace =
+      hex64(splitMix64(BigInt(n * ID_STRIDE + r + 1) * 3n)) +
+      hex64(splitMix64(BigInt(n * ID_STRIDE + r + 1) * 3n + 1n));
+    const start = startOf(shape, n) + BigInt(r) * 1_000_000_000n;
+    const id = (k: number) => hex(n * ID_STRIDE + r * 4 + k + 1, 16);
+    const span = (
+      k: number,
+      name: string,
+      parent: string | null,
+      attributes: unknown[],
+      from: bigint,
+      to: bigint,
+    ) => ({
+      traceId: trace,
+      spanId: id(k),
+      ...(parent === null ? {} : { parentSpanId: parent }),
+      name,
+      kind: 1,
+      startTimeUnixNano: String(from),
+      endTimeUnixNano: String(to),
+      status: { code: 1 },
+      attributes,
+    });
+    const spans = [
+      span(
+        0,
+        'CI',
+        null,
+        [str('cicd.pipeline.result', 'success'), { key: 'github.run_attempt', value: { intValue: '1' } }],
+        start,
+        start + 8_000_000_000n,
+      ),
+    ];
+    for (const [k, job] of ['build', 'test'].entries()) {
+      spans.push(
+        span(
+          1 + k,
+          job,
+          id(0),
+          [
+            str('cicd.pipeline.task.run.id', `${r}-${job}`),
+            str('cicd.pipeline.task.name', job),
+            str('cicd.pipeline.task.run.result', 'success'),
+          ],
+          start + 1_000_000_000n,
+          start + 6_000_000_000n + BigInt(k) * 1_000_000_000n,
+        ),
+      );
+    }
+    resourceSpans.push({
+      resource: resource(`ci-${n}-${r}`),
+      scopeSpans: [{ scope: { name: 'ci' }, spans }],
+    });
+  }
+  return { resourceSpans };
 }
 
 /** The metrics request of partition `n`: two gauges and a summary. */
@@ -375,6 +467,7 @@ function partitionJson(shape: Shape, n: number): Record<string, unknown>[] {
         })),
       })),
     },
+    ...(shape.ci === undefined ? [] : [ciJson(shape, n)]),
     metricsJson(shape, n),
   ];
 }
@@ -449,8 +542,19 @@ export async function buildFreshReport(shape: Shape): Promise<ScalingReport> {
   }
   const text = w.fs.snapshot().get(`${OUT}/data/manifest.js`);
   if (text === undefined) throw new OtelHtmlError('usage', { message: 'no manifest' });
-  const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-  if (!isPartitioned(manifest)) throw new OtelHtmlError('usage', { message: 'not a partition manifest' });
+  const parsed = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
+  if (!isPartitioned(parsed)) throw new OtelHtmlError('usage', { message: 'not a partition manifest' });
+  // an upgraded report: format 8 with the `cicd` table and flag taken away, so the viewer answers from the spans
+  const manifest: ManifestV4 =
+    shape.ci === 'unflagged'
+      ? {
+          ...parsed,
+          partitions: parsed.partitions.map(({ cicd: _flag, files: { cicd: _file, ...files }, ...p }) => ({
+            ...p,
+            files,
+          })),
+        }
+      : parsed;
   const files = new Map<string, Uint8Array>();
   for (const partition of manifest.partitions) {
     for (const table of TABLES) {
@@ -516,7 +620,7 @@ export async function buildFreshReport(shape: Shape): Promise<ScalingReport> {
 
 /** The one key of a shape: reports and measurements of one key are one thing (`{}` and `{rowGroupRows: 8192}` are one). */
 export const shapeKey = (shape: Shape): string =>
-  `${shape.outside}-${shape.inside}-${shape.rowGroups}-${shape.spacing}-${rowsPerGroup(shape)}-${shape.bigRowGroups ?? 0}${shape.merged === true ? '-merged' : ''}${shape.compacted === true ? '-compacted' : ''}${shape.mixed === true ? '-mixed' : ''}`;
+  `${shape.outside}-${shape.inside}-${shape.rowGroups}-${shape.spacing}-${rowsPerGroup(shape)}-${shape.bigRowGroups ?? 0}${shape.merged === true ? '-merged' : ''}${shape.compacted === true ? '-compacted' : ''}${shape.mixed === true ? '-mixed' : ''}${shape.ci === undefined ? '' : `-ci-${shape.ci}`}`;
 
 /** The folder of the reports `prebuildScalingReports` made, set by the scaling global setup for the worker processes. */
 export const PREBUILT_ENV = 'OTEL_HTML_SCALING_REPORTS';

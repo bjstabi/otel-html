@@ -115,7 +115,7 @@ describe('merge --compact and the service share', () => {
       real().deps,
     );
     const { raw, manifest } = manifestAt('m');
-    expect(raw.formatVersion).toBe(7);
+    expect(raw.formatVersion).toBe(8);
     expect(manifest.partitions).toHaveLength(1);
     expect(manifest.partitions[0]?.files.traces?.serviceShare).toBe(true);
     const file = manifest.partitions[0]?.files.traces;
@@ -136,7 +136,7 @@ describe('merge and format 6', () => {
     await report('five', 10, false);
     await merge(['six', 'five']);
     const { raw, manifest } = manifestAt('m');
-    expect(raw.formatVersion).toBe(7);
+    expect(raw.formatVersion).toBe(8);
     expect(raw.epochUnixNano).toBeUndefined();
     expect(manifest.partitions).toHaveLength(2);
     const shared = manifest.partitions.map((p) => p.files.traces?.serviceShare);
@@ -153,7 +153,7 @@ describe('merge and format 6', () => {
     const before = [...sizes('a'), ...sizes('b')].sort((x, y) => x - y);
     await merge(['a', 'b']);
     const { raw } = manifestAt('m');
-    expect(raw.formatVersion).toBe(7);
+    expect(raw.formatVersion).toBe(8);
     expect(raw.epochUnixNano).toBeUndefined();
     expect(sizes('m')).toEqual(before); // every file copied byte for byte
     expect(manifestAt('m').manifest.partitions.every((p) => p.files.traces?.serviceShare === undefined)).toBe(
@@ -166,7 +166,7 @@ describe('merge and format 6', () => {
     await report('five', 10, false);
     await merge(['up', 'five']);
     const { raw, manifest } = manifestAt('m');
-    expect(raw.formatVersion).toBe(7);
+    expect(raw.formatVersion).toBe(8);
     expect(raw.epochUnixNano).toBeUndefined();
     expect(manifest.partitions.every((p) => p.files.traces?.serviceShare === undefined)).toBe(true);
   });
@@ -179,7 +179,7 @@ describe('merge and format 6', () => {
     await s.close();
     await report('six', 0, true);
     await merge(['six', 'old']);
-    expect(manifestAt('m').raw.formatVersion).toBe(7);
+    expect(manifestAt('m').raw.formatVersion).toBe(8);
     const again = await openSession(real().deps, {
       out: join(dir, 'm'),
       config: testConfig(cfg),
@@ -220,7 +220,7 @@ describe('appending to a format-5 report', () => {
     await s.add(otlp(spansRequest(2, 400 * DAY, 10)), 'late.json');
     await s.close();
     const { raw, manifest } = manifestAt('five');
-    expect(raw.formatVersion).toBe(7);
+    expect(raw.formatVersion).toBe(8);
     expect(raw.epochUnixNano).toBeUndefined();
     expect(manifest.totals.spans).toBe(4);
     expect(manifest.partitions.slice(0, old.length)).toEqual(old);
@@ -234,7 +234,7 @@ describe('appending to a format-5 report', () => {
     const w = real();
     const s = await openSession(w.deps, { out: join(dir, 'five'), config: testConfig(cfg), mode: 'append' });
     await s.close();
-    expect(manifestAt('five').raw.formatVersion).toBe(7);
+    expect(manifestAt('five').raw.formatVersion).toBe(8);
     expect(manifestAt('five').raw.epochUnixNano).toBeUndefined();
   });
 });

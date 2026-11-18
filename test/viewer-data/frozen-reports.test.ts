@@ -27,9 +27,12 @@ function filesUnder(dir: string): string[] {
 
 /** Distinct trace ids in each frozen fixture (the three share one scenario; the count is the same in all). */
 const FROZEN_TRACES = 80;
-/** Format 7 is frozen from three inputs (`small`, `metrics`, `ci`), so its counts differ. */
-const FORMAT_7 = { spans: 3334, traces: 92, metrics: 14 };
-const tracesOf = (name: string): number => (name === 'format-7' ? FORMAT_7.traces : FROZEN_TRACES);
+/** Formats 7 and 8 are frozen from three inputs (`small`, `metrics`, `ci`), so their counts differ. */
+const WITH_CI: Readonly<Record<string, { spans: number; traces: number; metrics: number }>> = {
+  'format-7': { spans: 3334, traces: 92, metrics: 14 },
+  'format-8': { spans: 9939, traces: 121, metrics: 14 },
+};
+const tracesOf = (name: string): number => WITH_CI[name]?.traces ?? FROZEN_TRACES;
 
 const query = (over: Partial<SpanQuery>): SpanQuery => ({
   condition: null,
@@ -74,6 +77,7 @@ describe.each([
   ['format-5', 5],
   ['format-6', 6],
   ['format-7', 7],
+  ['format-8', 8],
 ])('the viewer opens frozen %s after merge', (name, version) => {
   test('reads the totals and one trace', async () => {
     const src = parseAnyManifest(
@@ -156,6 +160,7 @@ describe.each([
   ['format-5', 5],
   ['format-6', 6],
   ['format-7', 7],
+  ['format-8', 8],
 ])('the viewer opens the frozen %s report as written', (name, version) => {
   test('its manifest and .parquet.js wrappers are read directly, as after `otel-html upgrade` of a local report', async () => {
     const r = await openAsWritten(name);
@@ -164,12 +169,15 @@ describe.each([
       // format 6 stores each trace's share; the viewer's trace list reads it instead of loading the spans
       for (const partition of r.manifest.partitions)
         expect(partition.files.traces?.serviceShare).toBe(version >= 6 ? true : undefined);
-      expect((await r.ds.querySpans(query({}))).total).toBe(name === 'format-7' ? FORMAT_7.spans : 1228);
+      expect((await r.ds.querySpans(query({}))).total).toBe(WITH_CI[name]?.spans ?? 1228);
       const traces = await r.ds.querySpans(query({ mode: 'traces' }));
       expect(traces.total).toBe(tracesOf(name));
-      if (version >= 6) expect(traces.rows.every((t) => (t as TraceRow).share !== null)).toBe(true);
+      // A trace with spans in two partitions has no stored share (it is exact only within one `traces` row): at most
+      // one such trace per partition boundary here, and none in a one-partition report.
+      const split = traces.rows.filter((t) => (t as TraceRow).share === null).length;
+      if (version >= 6) expect(split).toBeLessThanOrEqual(r.manifest.partitions.length - 1);
       // 10 metrics, counted once from the fixture (the points side of the Parquet files).
-      expect((await r.ds.metricCatalog()).entries).toHaveLength(name === 'format-7' ? FORMAT_7.metrics : 10);
+      expect((await r.ds.metricCatalog()).entries).toHaveLength(WITH_CI[name]?.metrics ?? 10);
     } finally {
       await r.close();
     }

@@ -228,6 +228,8 @@ export function entryIdsOf(call: RecordedCall, long: boolean): string[] {
       return ['log.surrounding'];
     case 'patterns':
       return ['patterns'];
+    case 'cicdRows':
+      return ['cicd.rows'];
     case 'resourceValues':
       if (call.window === 'none') return [long ? 'resourceValues.all' : 'resourceValues.all.short'];
       return [`resourceValues.${s}`];

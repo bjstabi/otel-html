@@ -400,6 +400,7 @@ Decided by the maintainer, 2026-11-18:
    - the two CI dashboard configs, including `.github/actions/otel-html-publish/otel-html-ci.yaml`.
 
    No workflow file and no other action file changes; a file outside the plan's lists is a stop.
+   2026-11-18: the job update path (`src/cli/ci/update.ts`, `push-update.ts`, `deploy-apply.ts`) carries the `cicd` file and flag, approved for PR 1.
 
 Taken by this document, listed so that they can be checked:
 - **The `cache` tile.** It is derived from replayed mise tasks, not from the workflow's `MISE_TASK_CACHE`. Nothing

@@ -3,6 +3,7 @@ import type { TraceId } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../model/records.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import type { FacetValueKind } from '../components/filter-tokens.js';
+import type { CicdQuery, CicdRow } from './cicd-query.js';
 import type { LogRef, LogRow } from './log-query.js';
 import type { MetricMethods } from './metric-results.js';
 import type {
@@ -82,5 +83,11 @@ export interface DataSource extends MetricMethods {
     opts: { window: TimeWindow | null },
     signal?: AbortSignal,
   ): Promise<ResourceValues>;
+  /**
+   * The `cicd` rows (runs, jobs and task counts) of the traces whose run row starts in `q.window`, with every row of those
+   * traces whatever partition it is in. Only the run-level bindings (branch, trigger) and `q.pipeline` narrow it; the job
+   * and runner bindings narrow job rows in memory, per view. Times are run-relative.
+   */
+  cicdRows(q: CicdQuery, signal?: AbortSignal): Promise<readonly CicdRow[]>;
   close(): Promise<void>;
 }

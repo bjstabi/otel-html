@@ -3,6 +3,7 @@ import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
 import { jobSpanIdOf, runKey, runSpanIdOf, stepSpanIdOf, traceIdOf } from '../../../src/cli/ci/ids.js';
 import {
   ciResource,
+  jobResource,
   jobTraceRequest,
   PROVISIONAL_ATTR,
   workflowTraceRequest,
@@ -14,6 +15,7 @@ const run: ApiRun = {
   run_attempt: 2,
   name: 'ci',
   event: 'push',
+  display_title: 't',
   status: 'completed',
   conclusion: 'cancelled',
   created_at: '2026-01-01T00:00:00Z',
@@ -35,6 +37,7 @@ const jobs: ApiJob[] = [
     name: 'build',
     status: 'completed',
     runner_name: 'r1',
+    labels: [],
     conclusion: 'success',
     created_at: '2026-01-01T00:00:01Z',
     started_at: '2026-01-01T00:00:10Z',
@@ -56,6 +59,7 @@ const jobs: ApiJob[] = [
     name: 'test',
     status: 'in_progress',
     runner_name: null,
+    labels: [],
     conclusion: 'cancelled',
     created_at: '2026-01-01T00:00:01Z',
     started_at: '2026-01-01T00:01:00Z',
@@ -271,6 +275,22 @@ describe('workflowTraceRequest', () => {
     });
   });
 
+  test('the run resource carries the title and trigger; the job resource the runner labels', () => {
+    const titled: ApiRun = { ...run, display_title: 'fix: x', event: 'pull_request' };
+    const [first] = jobs as [ApiJob];
+    expect(ciResource(titled)).toMatchObject({
+      'vcs.ref.head.title': 'fix: x',
+      'cicd.pipeline.trigger': 'pull_request',
+    });
+    expect(ciResource(titled)).not.toHaveProperty('cicd.worker.labels');
+    expect(jobResource(titled, { ...first, labels: ['ubuntu-24.04-arm'] })).toMatchObject({
+      'vcs.ref.head.title': 'fix: x',
+      'cicd.pipeline.trigger': 'pull_request',
+      'cicd.worker.labels': 'ubuntu-24.04-arm',
+    });
+    expect(jobResource(titled, { ...first, labels: [] })).not.toHaveProperty('cicd.worker.labels');
+  });
+
   test('the library accepts the output', () => {
     const [req] = parseOtlpObject(workflowTraceRequest(key, run, jobs, new Map([[2, 'name:test']])), 'test');
     expect(req?.signal).toBe('traces');
@@ -289,6 +309,7 @@ describe('jobTraceRequest', () => {
     name: 'build',
     status: 'in_progress',
     runner_name: 'r1',
+    labels: [],
     conclusion: null,
     created_at: '2026-01-01T00:00:01Z',
     started_at: '2026-01-01T00:00:10Z',
@@ -350,5 +371,52 @@ describe('jobTraceRequest', () => {
     expect(
       spansOf(workflowTraceRequest(key, run, jobs, new Map())).some((s) => provisional(s) !== undefined),
     ).toBe(false);
+  });
+});
+
+describe('workflow file and step results', () => {
+  const wf = [{ id: 'coverage', name: null, needs: ['changes'], condition: "github.event_name == 'push'" }];
+  const withSteps: ApiJob[] = [
+    {
+      ...(jobs[0] as ApiJob),
+      name: 'coverage',
+      steps: [
+        {
+          number: 1,
+          name: 'a',
+          status: 'completed',
+          conclusion: 'skipped',
+          started_at: '2026-01-01T00:00:11Z',
+          completed_at: '2026-01-01T00:00:12Z',
+        },
+        {
+          number: 2,
+          name: 'b',
+          status: 'pending',
+          conclusion: null,
+          started_at: null,
+          completed_at: null,
+        },
+      ],
+    },
+  ];
+  const attr = (s: Span, k: string) => s.attributes.find((a) => a.key === k)?.value;
+  test('the job span carries the matched workflow job, the steps their results', () => {
+    const spans = spansOf(workflowTraceRequest(key, run, withSteps, new Map(), wf));
+    const job = byName(spans, 'coverage');
+    expect(attr(job, 'cicd.pipeline.task.id')).toEqual({ stringValue: 'coverage' });
+    expect(attr(job, 'cicd.pipeline.task.needs')).toEqual({
+      arrayValue: { values: [{ stringValue: 'changes' }] },
+    });
+    expect(attr(job, 'cicd.pipeline.task.condition')).toEqual({
+      stringValue: "github.event_name == 'push'",
+    });
+    expect(attr(byName(spans, 'a'), 'cicd.pipeline.task.step.result')).toEqual({ stringValue: 'skipped' });
+    expect(attr(byName(spans, 'b'), 'cicd.pipeline.task.step.result')).toBeUndefined();
+  });
+  test('without the workflow file the job span has no needs', () => {
+    const job = byName(spansOf(workflowTraceRequest(key, run, withSteps, new Map())), 'coverage');
+    expect(attr(job, 'cicd.pipeline.task.needs')).toBeUndefined();
+    expect(attr(job, 'cicd.pipeline.task.id')).toBeUndefined();
   });
 });

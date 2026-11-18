@@ -17,6 +17,7 @@ const run = (over: Partial<ApiRun> = {}): ApiRun => ({
   run_attempt: 1,
   name: 'ci',
   event: 'push',
+  display_title: 't',
   status: 'completed',
   conclusion: 'success',
   created_at: '2026-01-01T00:00:00Z',
@@ -36,6 +37,7 @@ const job = (id: number, name: string, conclusion: string | null, over: Partial<
   name,
   status: 'completed',
   runner_name: 'r1',
+  labels: [],
   conclusion,
   created_at: '2026-01-01T00:00:00Z',
   started_at: '2026-01-01T00:00:10Z',
@@ -196,5 +198,25 @@ describe('runReport from inside the run', () => {
     expect(post).toContain('merged 2 reports');
     expect(logsB).toEqual(logsA);
     expect(logsB.some((u) => u.includes('/jobs/8/') || u.includes('/jobs/9/'))).toBe(false);
+  });
+
+  test('a workflow file that cannot be read warns once and the job spans are written without needs', async () => {
+    const root = await artifacts();
+    const jobs = [job(1, 'build', 'success')];
+    const fetchFn = async (url: string) => {
+      if (url.includes('/contents/')) return new Response('', { status: 404 });
+      if (url.includes('/logs')) return new Response('2026-01-01T00:00:11.0000000Z hello\n');
+      if (url.includes('/jobs')) return Response.json({ jobs });
+      return Response.json(run());
+    };
+    await runReport(
+      { runId: 42, repository: 'o/r', artifacts: root, token: 't', stepSummary: false, out: join(dir, 'o') },
+      io(),
+      deps,
+      fetchFn,
+    );
+    const text = out.join('');
+    expect(text.match(/workflow file not read/g)).toHaveLength(1);
+    expect(text).toContain('merged 2 reports');
   });
 });
