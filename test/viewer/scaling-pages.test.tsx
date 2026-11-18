@@ -21,6 +21,7 @@ import {
 import { closeMeasured } from '../../test-support/scaling/measure.js';
 import { entryIdsOf, recordingDataSource } from '../../test-support/scaling/recording-source.js';
 import {
+  CI_CONFIGS,
   manifestWithCi,
   measureShape,
   PAGE_CALLS,
@@ -233,4 +234,23 @@ describe.skipIf(SCALING !== '1' || OUT === undefined)('a page is measured whole'
       600_000,
     );
   });
+});
+
+/** The shipped CI config (cicd widgets, ruling R38) over the `ci` shape: the page reads the cicd table and nothing else. */
+// 4 requests in 1 queryBatch measured (the cicd table's files), +10 % rounded up = 5.
+const SHIPPED_REQUESTS_MAX = 5;
+describe('the shipped CI dashboard on the ci shape', () => {
+  test('asks cicdRows once and nothing that scans spans, logs or resources, in bounded requests', async () => {
+    const live = await buildScalingReport({ ...BASE, ci: 'flagged' });
+    try {
+      const cost = await pageOn(live, '#/dashboards/ci', PAGE_THRESHOLD, CI_CONFIGS.shipped, ['cicdRows']);
+      const counts = new Map<string, number>();
+      for (const m of cost.methods) counts.set(m, (counts.get(m) ?? 0) + 1);
+      expect(Object.fromEntries(counts)).toEqual({ cicdRows: 1 });
+      expect(cost.serial + cost.parallel, 'requests').toBeLessThanOrEqual(SHIPPED_REQUESTS_MAX);
+      expect(cost.batches, 'queryBatch calls').toBe(1);
+    } finally {
+      await live.close();
+    }
+  }, 120_000);
 });

@@ -12,7 +12,7 @@ import {
   facetToken,
   tokensToOttl,
 } from '../components/filter-tokens.js';
-import type { ResourceValues } from '../data/data-source.js';
+import type { DataSource, ResourceValues } from '../data/data-source.js';
 import type { TimeWindow } from '../data/time-window.js';
 import type { DashboardPageState } from '../state/dashboard-state.js';
 
@@ -38,6 +38,43 @@ export async function variableValues(
   const all = await read(key, null);
   if (all.values.length === 0) return inWindow;
   return empty ? { ...inWindow, kind: all.kind, emptyInWindow: true } : { ...inWindow, kind: all.kind };
+}
+
+/** Page-lifetime state shared between the values sources and the widgets (one slot per token, made on first use). */
+export class PageShared {
+  private readonly slots = new Map<object, unknown>();
+
+  get<T>(token: object, make: () => T): T {
+    if (!this.slots.has(token)) this.slots.set(token, make());
+    return this.slots.get(token) as T;
+  }
+}
+
+/** What a values source is told about the page it serves. */
+export interface ValuesSourceContext {
+  widgets: readonly Widget[];
+  dataSource: DataSource;
+  shared: PageShared;
+}
+
+/** Answers a variable's values for a window (null is the whole report); null when the page cannot use this source. */
+export type ValuesSource = (
+  ctx: ValuesSourceContext,
+) => ((window: TimeWindow | null) => Promise<ResourceValues>) | null;
+
+const VALUES_SOURCES = new Map<string, ValuesSource>();
+
+/** A variable key's own values source, asked before `resourceValues` (the module that knows the key registers it). */
+export function registerValuesSource(key: string, source: ValuesSource): void {
+  VALUES_SOURCES.set(key, source);
+}
+
+/** The registered source for `key` as it applies to this page; null when there is none (use `resourceValues`). */
+export function valuesSourceFor(
+  key: string,
+  ctx: ValuesSourceContext,
+): ((window: TimeWindow | null) => Promise<ResourceValues>) | null {
+  return VALUES_SOURCES.get(key)?.(ctx) ?? null;
 }
 
 /** A variable's selected value: the URL's (`null` is all), else the config default; `null` when none is selected. */

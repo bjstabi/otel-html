@@ -43,10 +43,12 @@ import {
   fixedScope,
   following,
   honours,
+  PageShared,
   scopeFor,
   selectedOf,
   type VariableBinding,
   type VariableValues,
+  valuesSourceFor,
   variableValues,
   type WidgetScope,
 } from './scope.js';
@@ -357,6 +359,7 @@ function DashboardView(props: {
     [store],
   );
 
+  const shared = useMemo(() => new PageShared(), []);
   const loadValues = useCallback(
     async (
       k: { dash: typeof d; window: TimeWindow | null; selected: readonly (string | null)[] },
@@ -371,14 +374,19 @@ function DashboardView(props: {
                 await variableValues(
                   v.key,
                   k.window,
-                  (key, window) => dataSource.resourceValues(key, { window }, signal),
+                  (key, window) => {
+                    // a null page window reads the extent; a null read beside a page window is the whole report
+                    const w = window ?? (k.window === null ? manifestRange(manifest) : null);
+                    const source = valuesSourceFor(key, { widgets: k.dash.widgets, dataSource, shared });
+                    return source === null ? dataSource.resourceValues(key, { window }, signal) : source(w);
+                  },
                   k.selected[i] ?? null,
                 ),
               ] as const,
           ),
         ),
       ),
-    [dataSource],
+    [dataSource, manifest, shared],
   );
   // the values are the page window's and the selections': asked again when either changes (a selection outside the
   // window is bound by the report's kind), the last answer standing while that runs
@@ -531,7 +539,7 @@ function DashboardView(props: {
   );
 
   return (
-    <CicdProvider dataSource={dataSource} extent={extent}>
+    <CicdProvider dataSource={dataSource} extent={extent} shared={shared}>
       <RunActionsProvider dashboard={d} state={state} change={change} dataSource={dataSource}>
         <PageChrome title={d.title} manifest={manifest} actions={actions} timeRange={false}>
           <div className="flex flex-col gap-3">

@@ -1,4 +1,4 @@
-import { type JSX, useEffect, useMemo, useState } from 'react';
+import { type JSX, type RefObject, useEffect, useMemo, useRef, useState } from 'react';
 import { parseTraceId } from '../../../model/ids.js';
 import { formatDuration } from '../../../semconv/formatters.js';
 import type { WidgetRenderer } from '../../dashboards/dashboard-page.js';
@@ -113,6 +113,22 @@ function FileRow(props: { file: SuiteFile; longest: number; open: boolean; toggl
   );
 }
 
+/** True once the element has been on screen; at once where `IntersectionObserver` is missing (jsdom). */
+function useSeen(): [RefObject<HTMLDivElement | null>, boolean] {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [seen, setSeen] = useState(() => typeof IntersectionObserver === 'undefined');
+  useEffect(() => {
+    const el = ref.current;
+    if (seen || el === null) return;
+    const io = new IntersectionObserver((items) => {
+      if (items.some((i) => i.isIntersecting)) setSeen(true);
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [seen]);
+  return [ref, seen];
+}
+
 /** Pills per suite of the latest run with test spans, its slowest files, a file's tests, and the skipped tests. */
 export const TestsView: WidgetRenderer = ({ widget, scope, dataSource, actions: page }): JSX.Element => {
   const data = useCicd(widget, scope);
@@ -121,8 +137,10 @@ export const TestsView: WidgetRenderer = ({ widget, scope, dataSource, actions: 
   const [picked, setPicked] = useState<string | null>(null);
   const [openFile, setOpenFile] = useState<string | null>(null);
   const runs = data.runs;
+  // an off-screen widget reads no trace: the read starts when the widget first comes into view (R40)
+  const [rootRef, seen] = useSeen();
   useEffect(() => {
-    if (data.status !== 'ready') return;
+    if (data.status !== 'ready' || !seen) return;
     let live = true;
     setFound({ status: 'loading' });
     latestWithTests(dataSource, runs, () => live).then((f) => {
@@ -131,7 +149,7 @@ export const TestsView: WidgetRenderer = ({ widget, scope, dataSource, actions: 
     return () => {
       live = false;
     };
-  }, [dataSource, runs, data.status]);
+  }, [dataSource, runs, data.status, seen]);
 
   const suites = found.status === 'ready' ? found.suites : [];
   const suite = suites.find((s) => s.id === picked) ?? suites[0];
@@ -154,7 +172,7 @@ export const TestsView: WidgetRenderer = ({ widget, scope, dataSource, actions: 
 
   const run = found.status === 'ready' ? found.run : null;
   return (
-    <>
+    <div ref={rootRef}>
       <CicdBody data={data}>
         {() => {
           if (found.status === 'loading') return <div className="p-3 text-sm text-muted">Loading…</div>;
@@ -228,6 +246,6 @@ export const TestsView: WidgetRenderer = ({ widget, scope, dataSource, actions: 
         }}
       </CicdBody>
       {actions.element}
-    </>
+    </div>
   );
 };

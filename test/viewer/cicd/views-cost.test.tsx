@@ -394,6 +394,38 @@ describe('tests', () => {
     expect(traceCalls).toEqual([TRACE(3), TRACE(2), TRACE(1)]);
   });
 
+  it('makes no getTrace call until its widget is intersecting (R40)', async () => {
+    details.set(TRACE(3), traceWithTests());
+    const callbacks: ((e: { isIntersecting: boolean }[]) => void)[] = [];
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(cb: (e: { isIntersecting: boolean }[]) => void) {
+          callbacks.push(cb);
+        }
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+    try {
+      await show(widget('tests'), rows());
+      expect(callbacks.length).toBeGreaterThan(0);
+      expect(traceCalls).toEqual([]);
+      const fire = async (isIntersecting: boolean): Promise<void> => {
+        await act(async () => {
+          for (const cb of callbacks) cb([{ isIntersecting }]);
+        });
+      };
+      await fire(false);
+      expect(traceCalls).toEqual([]);
+      await fire(true);
+      expect(traceCalls).toEqual([TRACE(3)]);
+      expect(host.querySelectorAll('[data-suite]')).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('says so when no run has test spans', async () => {
     for (const i of [1, 2, 3]) details.set(TRACE(i), noTests);
     await show(widget('tests'), rows());

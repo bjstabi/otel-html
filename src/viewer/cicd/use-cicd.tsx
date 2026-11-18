@@ -8,7 +8,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 import type { Widget } from '../../dashboards/schema.js';
-import { honours, type WidgetScope } from '../dashboards/scope.js';
+import { honours, PageShared, registerValuesSource, type WidgetScope } from '../dashboards/scope.js';
 import type { CicdQuery, CicdRow } from '../data/cicd-query.js';
 import type { DataSource } from '../data/data-source.js';
 import type { TimeWindow } from '../data/time-window.js';
@@ -31,6 +31,7 @@ const LOADING: Entry = { status: 'loading' };
 /** The page's `cicd` fetches, one per distinct window, run-level bindings and pipeline; started only when a widget asks. */
 class CicdStore {
   private readonly entries = new Map<string, Entry>();
+  private readonly pending = new Map<string, Promise<readonly CicdRow[]>>();
   private readonly listeners = new Set<() => void>();
 
   constructor(private readonly dataSource: DataSource) {}
@@ -46,13 +47,28 @@ class CicdStore {
 
   /** Starts the fetch for `key` unless it is under way or done. */
   request(key: string, q: CicdQuery): void {
-    if (this.entries.has(key)) return;
-    this.set(key, LOADING);
-    this.dataSource.cicdRows(q).then(
-      (rows) => this.set(key, { status: 'ready', rows }),
-      (e: unknown) =>
-        this.set(key, { status: 'error', error: e instanceof Error ? e : new Error(String(e)) }),
-    );
+    this.load(key, q).catch(() => undefined);
+  }
+
+  /** The rows of the fetch for `key`, started if nothing has; the one fetch every asker of `key` shares. */
+  load(key: string, q: CicdQuery): Promise<readonly CicdRow[]> {
+    let p = this.pending.get(key);
+    if (p === undefined) {
+      this.set(key, LOADING);
+      p = this.dataSource.cicdRows(q).then(
+        (rows) => {
+          this.set(key, { status: 'ready', rows });
+          return rows;
+        },
+        (e: unknown) => {
+          const error = e instanceof Error ? e : new Error(String(e));
+          this.set(key, { status: 'error', error });
+          throw error;
+        },
+      );
+      this.pending.set(key, p);
+    }
+    return p;
   }
 
   private set(key: string, e: Entry): void {
@@ -60,6 +76,18 @@ class CicdStore {
     for (const fn of this.listeners) fn();
   }
 }
+
+/** The page's store: made on first use in `shared` (one per data source), so the values sources and the provider hold the same one. */
+function storeOf(shared: PageShared, dataSource: DataSource): CicdStore {
+  return shared.get(dataSource, () => new CicdStore(dataSource));
+}
+
+/** The store's key for a fetch: the fetch window, the run-level bindings, the pipeline. */
+const fetchKey = (
+  window: TimeWindow | null,
+  bindings: CicdQuery['bindings'],
+  pipeline: string | null,
+): string => JSON.stringify([window, bindings, pipeline]);
 
 interface CicdContext {
   store: CicdStore;
@@ -76,10 +104,12 @@ const Ctx = createContext<CicdContext | null>(null);
 export function CicdProvider(props: {
   dataSource: DataSource;
   extent: TimeWindow | null;
+  /** The page's shared state, when something else (the variables' values) uses the same store. */
+  shared?: PageShared;
   children: ReactNode;
 }): JSX.Element {
-  const { dataSource, extent } = props;
-  const store = useMemo(() => new CicdStore(dataSource), [dataSource]);
+  const { dataSource, extent, shared } = props;
+  const store = useMemo(() => storeOf(shared ?? new PageShared(), dataSource), [shared, dataSource]);
   const value = useMemo(() => ({ store, extent }), [store, extent]);
   return <Ctx.Provider value={value}>{props.children}</Ctx.Provider>;
 }
@@ -162,7 +192,7 @@ function useCicdRuns(
     .filter((v) => FETCH_KEYS.has(v.key))
     .map((v) => ({ key: v.key, value: v.value }));
   const fetchWin = extent === null || !enabled ? null : fetchWindow(extent);
-  const key = JSON.stringify([fetchWin, fetchBindings, pipeline]);
+  const key = fetchKey(fetchWin, fetchBindings, pipeline);
   useEffect(() => {
     const [window, bindings, pipe] = JSON.parse(key) as [
       TimeWindow | null,
@@ -202,4 +232,46 @@ function honoured(widget: Widget, scope: Pick<WidgetScope, 'vars'>, key: string)
   const b = scope.vars.find((v) => v.key === key);
   if (b === undefined || !honours(widget, { key, label: key, default: null })) return null;
   return b.value;
+}
+
+/** Which rows and which field each CI variable key lists (the distinct values over the page window's runs). */
+const VALUE_FIELDS: Readonly<Record<string, { kind: CicdRow['kind']; pick: (r: CicdRow) => string | null }>> =
+  {
+    'vcs.ref.head.name': { kind: 'run', pick: (r) => r.branch },
+    'cicd.pipeline.trigger': { kind: 'run', pick: (r) => r.trigger },
+    [JOB_KEY]: { kind: 'job', pick: (r) => r.task ?? r.name },
+    [RUNNER_KEY]: { kind: 'job', pick: (r) => r.labels },
+  };
+
+/**
+ * The values of the CI keys come from the same shared fetch as the widgets (window only, no bindings, the first `cicd`
+ * widget's pipeline, as `useCicdPage` takes it), so in the default state the lists cost no request of their own.
+ * A page without a `cicd` widget has no source and reads `resourceValues`.
+ */
+for (const [key, { kind, pick }] of Object.entries(VALUE_FIELDS)) {
+  registerValuesSource(key, ({ widgets, dataSource, shared }) => {
+    const first = widgets.find((w) => w.type === 'cicd');
+    if (first === undefined) return null;
+    const pipeline = first.type === 'cicd' ? first.pipeline : null;
+    const store = storeOf(shared, dataSource);
+    return async (window) => {
+      const fetchWin = window === null ? null : fetchWindow(window);
+      const rows = await store.load(fetchKey(fetchWin, [], pipeline), {
+        window: fetchWin,
+        bindings: [],
+        pipeline,
+      });
+      const inWindow = new Set<string>();
+      for (const r of rows)
+        if (r.kind === 'run' && (window === null || (r.start >= window.start && r.start <= window.end)))
+          inWindow.add(r.traceId);
+      const values = new Set<string>();
+      for (const r of rows) {
+        if (r.kind !== kind || !inWindow.has(r.traceId)) continue;
+        const v = pick(r);
+        if (v !== null) values.add(v);
+      }
+      return { values: [...values].sort(), kind: 'string', capped: false };
+    };
+  });
 }
