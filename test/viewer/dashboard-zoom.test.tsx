@@ -71,3 +71,48 @@ test('two arrow presses within one frame build on each other', async () => {
   expect(a).toBe(Math.round(31 * 3_600_000_000_000 * 0.02));
   vi.unstubAllGlobals();
 });
+
+const NS = 31 * 3_600_000_000_000;
+
+test('a multi-frame drag writes the URL at most every 250 ms and commits the last value on release', async () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => frames.push(cb));
+  vi.stubGlobal('cancelAnimationFrame', () => frames.splice(0));
+  renderShell('#/dashboards/ci', dataSourceOf(manifest(5)));
+  const svg = await screen.findByTestId('range-slider');
+  svg.getBoundingClientRect = () => ({ left: 0, width: 873.5 }) as DOMRect;
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  const replace = vi.spyOn(window.history, 'replaceState');
+  fireEvent.pointerDown(screen.getByLabelText('Zoom start'), { clientX: 0 });
+  for (let x = 20; x <= 300; x += 20) {
+    fireEvent.pointerMove(svg, { clientX: x });
+    for (const f of frames.splice(0)) f(0);
+    vi.advanceTimersByTime(10); // 14 frames in 140 ms
+  }
+  expect(replace.mock.calls.length).toBeLessThanOrEqual(1);
+  fireEvent.pointerUp(svg);
+  const [a] = (currentD()?.sel?.t ?? '').split('~').map(Number);
+  expect(a).toBe(Math.round((300 / 873.5) * NS));
+  expect(replace.mock.calls.length).toBeLessThanOrEqual(2);
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+test('a click on a handle after the zoom was cleared does not bring the old zoom back', async () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => frames.push(cb));
+  vi.stubGlobal('cancelAnimationFrame', () => frames.splice(0));
+  renderShell('#/dashboards/ci', dataSourceOf(manifest(5)));
+  const svg = await screen.findByTestId('range-slider');
+  svg.getBoundingClientRect = () => ({ left: 0, width: 873.5 }) as DOMRect;
+  fireEvent.keyDown(screen.getByLabelText('Zoom start'), { key: 'ArrowRight' });
+  for (const f of frames.splice(0)) f(0);
+  expect(currentD()?.sel?.t).toBeTruthy();
+  fireEvent.click(await screen.findByRole('button', { name: '↺ full range' }));
+  expect(currentD()?.sel?.t ?? null).toBeNull();
+  fireEvent.pointerDown(screen.getByLabelText('Zoom start'), { clientX: 0 });
+  fireEvent.pointerUp(svg);
+  for (const f of frames.splice(0)) f(0);
+  expect(currentD()?.sel?.t ?? null).toBeNull();
+  vi.unstubAllGlobals();
+});

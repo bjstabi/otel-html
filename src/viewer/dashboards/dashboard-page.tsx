@@ -489,14 +489,8 @@ function DashboardView(props: {
           bound={bound}
           state={state}
           onVars={(vars) => change((s) => ({ ...s, vars }))}
-          onZoom={(z) =>
-            change((s) => ({
-              ...s,
-              sel: {
-                ...s.sel,
-                t: z === null ? null : zoomText(z, anchor),
-              },
-            }))
+          onZoom={(z, live) =>
+            change((s) => ({ ...s, sel: { ...s.sel, t: z === null ? null : zoomText(z, anchor) } }), live)
           }
           slider={
             extent === null

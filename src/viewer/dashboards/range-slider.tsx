@@ -71,7 +71,9 @@ export function RangeSlider(props: RangeSliderProps): JSX.Element {
   const { extent, zoom, ticks, onZoom, onRelease } = props;
   const epoch = props.epoch ?? 0n;
   const [draft, setDraft] = useState<Range | null>(null);
-  const drag = useRef<{ handle: Handle; from: Range; x0: number; anchor: number } | null>(null);
+  const drag = useRef<{ handle: Handle; from: Range; x0: number; anchor: number; moved: boolean } | null>(
+    null,
+  );
   // the last zoom this slider emitted, until the caller's `zoom` catches up (key repeats within one frame build on it)
   const emitted = useRef<Range | null>(null);
   useEffect(() => {
@@ -93,12 +95,12 @@ export function RangeSlider(props: RangeSliderProps): JSX.Element {
   };
 
   const start = (handle: Handle) => (e: React.PointerEvent<HTMLElement>) => {
-    drag.current = { handle, from: shown, x0: e.clientX, anchor: 0 };
+    drag.current = { handle, from: shown, x0: e.clientX, anchor: 0, moved: false };
     e.currentTarget.setPointerCapture?.(e.pointerId);
     e.stopPropagation();
   };
   const startDraw = (e: React.PointerEvent<HTMLElement>) => {
-    drag.current = { handle: 'new', from: shown, x0: e.clientX, anchor: valueAt(e).at };
+    drag.current = { handle: 'new', from: shown, x0: e.clientX, anchor: valueAt(e).at, moved: false };
     e.currentTarget.setPointerCapture?.(e.pointerId);
   };
   const move = (e: React.PointerEvent<HTMLElement>) => {
@@ -107,14 +109,16 @@ export function RangeSlider(props: RangeSliderProps): JSX.Element {
     const { at, delta } = valueAt(e);
     const next =
       d.handle === 'new' ? drawn(d.anchor, at, extent) : dragged(d.handle, d.from, at, delta, extent);
+    d.moved = true;
     setDraft(next);
     emit(next);
   };
   const end = () => {
-    if (drag.current === null) return;
+    const d = drag.current;
+    if (d === null) return;
     drag.current = null;
     setDraft(null);
-    onRelease?.();
+    if (d.moved) onRelease?.(); // a click that moved nothing commits nothing
   };
   const key = (handle: 'start' | 'end') => (e: React.KeyboardEvent<HTMLElement>) => {
     const dir = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;

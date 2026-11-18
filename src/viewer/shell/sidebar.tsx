@@ -197,7 +197,7 @@ export function Sidebar({
       el?.removeEventListener('click', onClick);
     };
   }, [close]);
-  // Escape closes the drawer; Tab cycles inside it (the page behind is inert while it is open)
+  // Escape closes the drawer; Tab cycles inside it (the backdrop covers the page behind it)
   const onKeyDown = (e: React.KeyboardEvent<HTMLElement>): void => {
     if (close === undefined) return;
     if (e.key === 'Escape') {
