@@ -6,10 +6,10 @@ import type { WidgetRenderer } from '../../dashboards/dashboard-page.js';
 import { useEpoch } from '../../dashboards/widgets/layout.js';
 import { absoluteTime } from '../../shell/time-range.js';
 import { useTheme } from '../../theme/theme-provider.js';
-import { trendBuckets } from '../derive.js';
+import { bucketOf, trendBuckets } from '../derive.js';
 import { useRunActions } from '../run-actions.js';
 import { useCicd } from '../use-cicd.js';
-import { CicdBody, chartPx, indexOf, pointOf, resultColors } from './body.js';
+import { CicdBody, chartPx, indexOf, pointOf, resultColors, ringSeries } from './body.js';
 import { lengthText } from './stat.js';
 
 const MIN = 60_000_000_000;
@@ -46,18 +46,24 @@ export const RunsTrendView: WidgetRenderer = ({
     [data.runs, data.span],
   );
   const { setSubtitle } = page;
+  const { selectedTraceId, isSource } = actions;
   const select = useRef(page.selectWindow);
   select.current = page.selectWindow;
   const openMenu = menu.open;
   const subtitle = trend === null || trend.buckets.length === 0 ? null : `${stepText(trend.step)} buckets`;
+  // the page hands every render a new `setSubtitle`; going through a ref keeps the effect to a change of the text
+  const subtitleRef = useRef(setSubtitle);
+  subtitleRef.current = setSubtitle;
   useEffect(() => {
-    setSubtitle(subtitle);
-    return () => setSubtitle(null);
-  }, [setSubtitle, subtitle]);
+    subtitleRef.current(subtitle);
+    return () => subtitleRef.current(null);
+  }, [subtitle]);
 
   const option = useMemo(() => {
     if (trend === null) return null;
     const { buckets } = trend;
+    const mark = bucketOf(buckets, selectedTraceId);
+    const marked = mark === null ? undefined : buckets[mark];
     const bar = (name: string, key: 'passed' | 'failed' | 'cancelled', color: string) => ({
       type: 'bar',
       name,
@@ -98,9 +104,12 @@ export const RunsTrendView: WidgetRenderer = ({
         bar('cancelled', 'cancelled', colors.cancelled),
         line('p50', 'p50'),
         line('p95', 'p95'),
+        ...(mark === null || marked === undefined
+          ? []
+          : [ringSeries([mark, marked.runs.length], isSource, colors.ink, 1)]),
       ],
     };
-  }, [trend, colors, epoch]);
+  }, [trend, colors, epoch, selectedTraceId, isSource]);
 
   const onEvents = useMemo(
     () => ({

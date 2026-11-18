@@ -6,9 +6,7 @@ import { useTheme } from '../../theme/theme-provider.js';
 import { useRunActions } from '../run-actions.js';
 import type { CiRun } from '../runs.js';
 import { useCicd } from '../use-cicd.js';
-import { CicdBody, chartPx, escapeHtml, indexOf, pointOf, resultColors } from './body.js';
-
-const RING_PX = 18;
+import { CicdBody, chartPx, escapeHtml, indexOf, pointOf, resultColors, ringSeries } from './body.js';
 
 /** One bar per run, oldest first: height is the duration, colour the result, hollow when no task was replayed. */
 export const RunsView: WidgetRenderer = ({ widget, scope, height }): JSX.Element => {
@@ -36,7 +34,7 @@ export const RunsView: WidgetRenderer = ({ widget, scope, height }): JSX.Element
       xAxis: { type: 'category', data: runs.map((r) => r.runId), show: false },
       yAxis: {
         type: 'value',
-        max: maxDuration,
+        max: maxDuration * 1.08,
         axisLabel: { formatter: (v: number) => formatDuration(v) },
       },
       series: [
@@ -54,26 +52,7 @@ export const RunsView: WidgetRenderer = ({ widget, scope, height }): JSX.Element
             };
           }),
         },
-        ...(open < 0
-          ? []
-          : [
-              {
-                // the open run's ring: faint here, full in the view it was opened from
-                id: 'open-run',
-                type: 'scatter',
-                silent: true,
-                symbol: 'circle',
-                symbolSize: RING_PX,
-                z: 10,
-                itemStyle: {
-                  color: 'transparent',
-                  borderColor: colors.ink,
-                  borderWidth: isSource ? 2 : 1.5,
-                  opacity: isSource ? 1 : 0.35,
-                },
-                data: [[open, runs[open]?.duration ?? 0]],
-              },
-            ]),
+        ...(open < 0 ? [] : [ringSeries([open, runs[open]?.duration ?? 0], isSource, colors.ink)]),
       ],
     }),
     [runs, colors, open, isSource, maxDuration],

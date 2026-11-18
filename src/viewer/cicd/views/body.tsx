@@ -54,3 +54,23 @@ export function indexOf(params: unknown): number | null {
   const i = (params as { dataIndex?: unknown }).dataIndex;
   return typeof i === 'number' ? i : null;
 }
+
+/** The open run's ring as a scatter series: faint in every view, full in the one the run was opened from. */
+export function ringSeries(at: [number, number], source: boolean, ink: string, yAxisIndex = 0) {
+  return {
+    id: 'open-run',
+    type: 'scatter',
+    silent: true,
+    symbol: 'circle',
+    symbolSize: 18,
+    yAxisIndex,
+    z: 10,
+    itemStyle: {
+      color: 'transparent',
+      borderColor: ink,
+      borderWidth: source ? 2 : 1.5,
+      opacity: source ? 1 : 0.35,
+    },
+    data: [at],
+  };
+}

@@ -245,6 +245,48 @@ describe('runs-trend', () => {
   });
 });
 
+const ring = (): { itemStyle: { opacity: number; borderWidth: number }; data: unknown[][] } | undefined =>
+  series().find((x) => x.type === 'scatter') as never;
+const open = (from: string): void => {
+  state = {
+    ...EMPTY_DASHBOARD_STATE,
+    sel: { ...EMPTY_DASHBOARD_STATE.sel, trace: TRACE(3) as never },
+    run: { from, mode: 'attached' },
+  };
+};
+
+describe('the open run ring', () => {
+  it('is full in the view the run was opened from (runs)', async () => {
+    open('w1');
+    await show(widget('runs'), sevenDays());
+    expect(ring()?.itemStyle).toMatchObject({ opacity: 1, borderWidth: 2 });
+    expect(ring()?.data[0]?.[0]).toBe(2);
+  });
+
+  it('is faint when another widget opened the run (runs)', async () => {
+    open('other');
+    await show(widget('runs'), sevenDays());
+    expect(ring()?.itemStyle).toMatchObject({ opacity: 0.35, borderWidth: 1.5 });
+  });
+
+  it('is absent with no open run (runs, runs-trend)', async () => {
+    await show(widget('runs'), sevenDays());
+    expect(ring()).toBeUndefined();
+    await show(widget('runs-trend'), sevenDays());
+    expect(ring()).toBeUndefined();
+  });
+
+  it('rings the bucket that holds the run in runs-trend, faint or full', async () => {
+    open('other');
+    await show(widget('runs-trend'), sevenDays());
+    expect(ring()?.itemStyle).toMatchObject({ opacity: 0.35, borderWidth: 1.5 });
+    expect(ring()?.data[0]?.[0]).toBe(0);
+    open('w1');
+    await show(widget('runs-trend'), sevenDays());
+    expect(ring()?.itemStyle).toMatchObject({ opacity: 1, borderWidth: 2 });
+  });
+});
+
 describe('runs', () => {
   it('draws one bar per run, hollow when no task was replayed, and opens a run on click', async () => {
     await show(widget('runs'), sevenDays());

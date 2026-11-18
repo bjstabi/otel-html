@@ -247,6 +247,7 @@
     "test/viewer/dashboard-grid.test.ts": 0.5,
     "test/viewer/dashboard-logs.test.tsx": 3.2,
     "test/viewer/dashboard-metric.test.tsx": 3.9,
+    "test/viewer/dashboard-cicd-zoom.test.tsx": 1.0,
     "test/viewer/dashboard-page.test.tsx": 6,
     "test/viewer/dashboard-zoom.test.tsx": 1,
     "test/viewer/dashboard-registry.test.ts": 0.5,

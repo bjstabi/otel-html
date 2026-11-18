@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
+  bucketOf,
   failures,
   jobsTable,
   minutesPerDay,
@@ -265,6 +266,20 @@ describe('rerunsAndCancelled', () => {
     expect(r.reruns).toBe(1);
     expect(r.rerunRuns).toHaveLength(r.reruns);
     expect(r.rerunRuns[0]).toBe(runs[1]);
+  });
+});
+
+describe('bucketOf', () => {
+  test('the index of the bucket that holds the run, else null', () => {
+    const a = run(0);
+    const b = run(2 * DAY);
+    const { buckets } = trendBuckets([a, b], [0, 4 * DAY]);
+    const i = bucketOf(buckets, b.traceId);
+    expect(i).not.toBeNull();
+    expect(buckets[i ?? -1]?.runs).toContain(b);
+    expect(bucketOf(buckets, 'nope')).toBeNull();
+    expect(bucketOf(buckets, null)).toBeNull();
+    expect(bucketOf([], a.traceId)).toBeNull();
   });
 });
 

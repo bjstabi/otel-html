@@ -291,6 +291,13 @@ export function trendBuckets(
   return { step, buckets };
 }
 
+/** The index of the bucket that holds the run with `traceId` (the trend's run mark); null when none does. */
+export function bucketOf(buckets: readonly TrendBucket[], traceId: string | null): number | null {
+  if (traceId === null) return null;
+  const i = buckets.findIndex((b) => b.runs.some((r) => r.traceId === traceId));
+  return i < 0 ? null : i;
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Jobs
 

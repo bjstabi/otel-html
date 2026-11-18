@@ -14,7 +14,13 @@ import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { manifestV4 } from './v4-manifest.js';
 
 // jsdom has no layout or ResizeObserver, which ECharts needs; chart widgets are covered by their own tests.
-vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));
+// A test may collect the props of the charts drawn by setting `globalThis.__chartProps` to an array.
+vi.mock('../../src/viewer/components/chart.js', () => ({
+  Chart: (props: unknown): null => {
+    (globalThis as { __chartProps?: unknown[] }).__chartProps?.push(props);
+    return null;
+  },
+}));
 
 const HOUR = 3_600_000_000_000;
 const EPOCH = 1_700_000_000_000_000_000n;
