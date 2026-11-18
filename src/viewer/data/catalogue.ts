@@ -999,8 +999,8 @@ const BASELINE: Record<string, Declared> = {
   'metrics.runQuery.failed': decl(['fixed', 'fixed', 'files']),
   'metrics.forResources': decl(['fixed', 'fixed', null]),
   'metrics.points': decl(['files', 'fixed', null]),
-  // the rows file of every flagged partition is read whole, in parallel, except those ending before the window: the file count still grows with the partitions
-  'cicd.rows': decl(['files', 'files', 'files']),
+  // the rows file of every flagged partition is read whole, in parallel, except those ending before the window: fixed over retention (a window of the newest data), still growing with density and a window that covers the report
+  'cicd.rows': decl(['fixed', 'files', 'files']),
   // the scan reads the spans files of every partition without the flag, whatever the window (a trace's rows may sit in any
   // of them), and those files are read by range: the serial reads grow with the partitions as well as with the density
   'cicd.rows.scan': decl(['scan', 'scan', 'scan'], {
