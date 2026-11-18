@@ -133,6 +133,10 @@ describe('fixtures/ci.otlp.json', () => {
     const mise = spans.filter((s) => s.scope === 'mise.tasks');
     expect(mise.length).toBeGreaterThan(0);
     for (const s of mise) {
+      if (!s.attrs.some((a) => a.key === 'mise.task.name')) {
+        expect(s.attrs.some((a) => a.key === 'mise.span_type')).toBe(true);
+        continue;
+      }
       const skipped = s.attrs.find((a) => a.key === 'mise.task.skipped');
       if (skipped !== undefined) expect(skipped.value.boolValue).toBe(true);
       expect(value(s.resource, 'cicd.pipeline.run.id')).toBeDefined();
@@ -146,6 +150,7 @@ describe('fixtures/ci.otlp.json', () => {
     expect(schedule.size).toBeGreaterThan(0);
     for (const s of mise.filter((m) => schedule.has(value(m.resource, 'cicd.pipeline.run.id'))))
       expect(s.attrs.some((a) => a.key === 'mise.task.skipped')).toBe(false);
+    expect(mise.some((s) => !s.attrs.some((a) => a.key === 'mise.task.name'))).toBe(true);
     expect(mise.some((s) => s.attrs.some((a) => a.key === 'mise.task.skipped'))).toBe(true);
     expect(mise.some((s) => !s.attrs.some((a) => a.key === 'mise.task.skipped'))).toBe(true);
 

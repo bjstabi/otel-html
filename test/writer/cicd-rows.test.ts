@@ -195,7 +195,7 @@ describe('CicdRowSet', () => {
     expect(rows[0]).toMatchObject({ kind: 'run', trigger: 'push' });
   });
 
-  test('mise counts: replayed are skipped=true, the rest ran', () => {
+  test('mise counts: only spans naming a task count; replayed are skipped=true, the rest ran', () => {
     const mise = (id: string, attributes: Record<string, AnyValue>): Made => ({
       id,
       scope: 'mise.tasks',
@@ -203,10 +203,13 @@ describe('CicdRowSet', () => {
     });
     const rows = rowsOf(
       batchOf(
-        mise('m1', { 'mise.task.skipped': bool(true) }),
-        mise('m2', { 'mise.task.skipped': bool(true) }),
-        mise('m3', {}),
-        mise('m4', { 'mise.task.skipped': bool(false) }),
+        mise('m1', { 'mise.task.name': str('a'), 'mise.task.skipped': bool(true) }),
+        mise('m2', { 'mise.task.name': str('b'), 'mise.task.skipped': bool(true) }),
+        mise('m3', { 'mise.task.name': str('c') }),
+        mise('m4', { 'mise.task.name': str('d'), 'mise.task.skipped': bool(false) }),
+        // wrapper and setup spans carry no task name: not counted
+        mise('w1', { 'mise.span_type': str('setup') }),
+        mise('w2', { 'mise.task.skipped': bool(true) }),
         { id: 'other', scope: 'vitest' },
       ),
     );

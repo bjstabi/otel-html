@@ -126,7 +126,10 @@ function miseSpans(t: number, at: number, replayed: number, ran: number): JsonOb
     kind: 1,
     startTimeUnixNano: String(T0 + BigInt(at + k) * SEC),
     endTimeUnixNano: String(T0 + BigInt(at + k + 1) * SEC),
-    attributes: [{ key: 'mise.task.skipped', value: { boolValue: k < replayed } }],
+    attributes: [
+      str('mise.task.name', `task-${k}`),
+      { key: 'mise.task.skipped', value: { boolValue: k < replayed } },
+    ],
   }));
   return [
     {
@@ -311,6 +314,36 @@ describe('cicdRows over a report the writer derived', () => {
     expect(rows.map((r) => r.kind).sort()).toEqual(['job', 'run', 'tasks']);
     // a window holding only mise spans selects nothing: the trace starts before it
     expect(await ds.cicdRows({ ...ALL, window: { start: at(8001), end: at(9000) } })).toEqual([]);
+  });
+
+  test('a window leaves out the cicd files that end before it', async () => {
+    const f = await writtenReport();
+    const { ds, prepared, epoch } = await open(f);
+    const at = (s: number) => Number(T0 + BigInt(s) * SEC - epoch);
+    const cicd = (n: number) => f.manifest.partitions[n]?.files.cicd?.path ?? '';
+    const rows = await ds.cicdRows({ ...ALL, window: { start: at(7000), end: at(9000) } });
+    expect(traces(rows)).toEqual([hex(4, 32)]);
+    expect(rows.map((r) => r.kind).sort()).toEqual(['job', 'run', 'tasks']);
+    expect(prepared).toContain(cicd(2));
+    expect(prepared).toContain(cicd(3));
+    expect(prepared).not.toContain(cicd(0));
+    expect(prepared).not.toContain(cicd(1));
+  });
+
+  test('a cicd file listed without the flag is scanned, not read as well', async () => {
+    const written = await writtenReport();
+    const want = await (await open(written)).ds.cicdRows(ALL);
+    const manifest: ManifestV4 = {
+      ...written.manifest,
+      partitions: written.manifest.partitions.map((p) => {
+        const { cicd: _flag, ...rest } = p;
+        return p.n === 0 ? rest : p;
+      }),
+    };
+    expect(manifest.partitions[0]?.files.cicd).toBeDefined();
+    const { ds, prepared } = await open({ ...written, manifest });
+    expect(await ds.cicdRows(ALL)).toEqual(want);
+    expect(prepared).not.toContain(written.manifest.partitions[0]?.files.cicd?.path);
   });
 
   test('the run-level bindings and the pipeline narrow the runs and keep all their jobs; others are ignored', async () => {

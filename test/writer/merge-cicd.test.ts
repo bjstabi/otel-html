@@ -1,5 +1,5 @@
 import '../../src/writer/parquet-wasm-source.js';
-import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -105,6 +105,30 @@ describe('a merge copy writes the cicd table', () => {
       Array.from(bytesOf('in', from?.path ?? '')),
     );
     expect(reads.tables.filter((t) => t === 'cicd')).toEqual([]);
+  });
+
+  test('a format-8 input listing a cicd file without the flag is recomputed, not copied', async () => {
+    const w = { ...createTestWriter().deps, fs: createNodeFileSystem() };
+    const s = await openSession(w, { out: join(dir, 'in'), config, mode: 'replace' });
+    await s.add(ciRequest([{ i: 1 }, { i: 2, job: 'success', task: 'build' }]), 'a.json');
+    await s.close();
+    const from = manifestAt('in').partitions[0]?.files.cicd;
+    expect(from).toBeDefined();
+    const file = join(dir, 'in/data/manifest.js');
+    const text = readFileSync(file, 'utf8');
+    expect(text).toContain('"cicd":true');
+    writeFileSync(file, text.replaceAll('"cicd":true,', '').replaceAll(',"cicd":true', ''));
+    const unflagged = manifestAt('in').partitions[0];
+    expect(unflagged?.cicd).toBeUndefined();
+    expect(unflagged?.files.cicd).toBeDefined();
+    reads.tables.length = 0;
+    await merge(['in']);
+    const p = manifestAt('m').partitions[0];
+    expect(p?.cicd).toBe(true);
+    expect(reads.tables.filter((t) => t === 'spans')).toHaveLength(1);
+    expect(decodeTable('cicd', bytesOf('m', p?.files.cicd?.path ?? ''))).toEqual(
+      decodeTable('cicd', bytesOf('in', from?.path ?? '')),
+    );
   });
 
   test('an unflagged input is computed with one read of each spans file', async () => {

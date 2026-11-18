@@ -11,6 +11,7 @@ const STEP_NUMBER = 'github.job.step.number';
 const PROVISIONAL = 'otel_html.ci.provisional';
 const MISE_SCOPE = 'mise.tasks';
 const MISE_SKIPPED = 'mise.task.skipped';
+const MISE_TASK = 'mise.task.name';
 const STATUS_ERROR = 2;
 
 const column = (b: ColumnBatch, name: string): readonly unknown[] => b.cells[name] ?? [];
@@ -95,14 +96,19 @@ export class CicdRowSet {
       const attrText = typeof attrTexts[i] === 'string' ? (attrTexts[i] as string) : '{}';
 
       if (scopes[i] === MISE_SCOPE) {
-        const skipped = attrText.includes(MISE_SKIPPED)
-          ? attributesFromJson(attrText).get(MISE_SKIPPED)
-          : undefined;
+        // Only spans naming a task count; the wrapper and setup spans ("mise run X", "deps", …) do not.
+        const named = attrText.includes(MISE_TASK);
+        const skipped =
+          named && attrText.includes(MISE_SKIPPED)
+            ? attributesFromJson(attrText).get(MISE_SKIPPED)
+            : undefined;
         const t = this.#tasks.get(trace) ?? { start, end, replayed: 0, run: 0 };
         if (start < t.start) t.start = start;
         if (end > t.end) t.end = end;
-        if (skipped?.kind === 'bool' && skipped.value) t.replayed++;
-        else t.run++;
+        if (named) {
+          if (skipped?.kind === 'bool' && skipped.value) t.replayed++;
+          else t.run++;
+        }
         this.#tasks.set(trace, t);
         continue;
       }

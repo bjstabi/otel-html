@@ -726,7 +726,7 @@ export const CATALOGUE = [
     builders: [...METRIC_CATALOG],
     run: async (ds) => ds.metricsForResources((await ds.metricCatalog()).resources),
   }),
-  // the CI runs that start in the window, from the rows table the writer derived (every partition's file, whole)
+  // the CI runs that start in the window, from the rows table the writer derived (each flagged partition's file that does not end before the window, whole)
   entry({
     id: 'cicd.rows',
     family: 'rows by trace',
@@ -999,7 +999,7 @@ const BASELINE: Record<string, Declared> = {
   'metrics.runQuery.failed': decl(['fixed', 'fixed', 'files']),
   'metrics.forResources': decl(['fixed', 'fixed', null]),
   'metrics.points': decl(['files', 'fixed', null]),
-  // every partition's rows file is read whole, in parallel, whatever the window: the file count grows with the partitions
+  // the rows file of every flagged partition is read whole, in parallel, except those ending before the window: the file count still grows with the partitions
   'cicd.rows': decl(['files', 'files', 'files']),
   // the scan reads the spans files of every partition without the flag, whatever the window (a trace's rows may sit in any
   // of them), and those files are read by range: the serial reads grow with the partitions as well as with the density

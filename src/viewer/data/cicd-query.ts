@@ -6,9 +6,9 @@ import {
   cicdRowsQuery,
   cicdSpansQuery,
 } from '../../query/sql/cicd.js';
-import { absWindow } from '../../query/sql/prune.js';
+import { absWindow, type Pruned } from '../../query/sql/prune.js';
 import { CicdRowSet } from '../../writer/cicd-rows.js';
-import { filesFor, runPrepared, throwIfAborted } from './query-common.js';
+import { runPrepared, throwIfAborted } from './query-common.js';
 import type { QueryEngine } from './query-engine.js';
 import { cell, rowsOf } from './span-results.js';
 import type { TimeWindow } from './time-window.js';
@@ -185,9 +185,28 @@ async function scanned(
 }
 
 /**
+ * The `cicd` files to read: those of flagged partitions (the others are scanned, so reading their file would count a
+ * trace twice), less those whose latest row starts before the window. A run's job and `tasks` rows never start before its
+ * root, so a file ending before the window holds no row of a run that starts in it.
+ */
+function storedFiles(manifest: ManifestV4, sel: CicdSelection): Pruned {
+  const files: string[] = [];
+  let total = 0;
+  for (const p of manifest.partitions) {
+    if (p.files.cicd === undefined) continue;
+    total++;
+    const f = p.cicd === true ? p.files.cicd : undefined;
+    if (f === undefined) continue;
+    if (sel.window !== null && f.timeMax !== null && BigInt(f.timeMax) < sel.window.start) continue;
+    files.push(f.path);
+  }
+  return { files, all: files.length === total, total };
+}
+
+/**
  * The run, job and `tasks` rows of the traces whose run row starts in `q.window` and satisfies the run-level bindings and
  * `q.pipeline`, whatever partition each of their rows is in. Partitions with the `cicd` flag are read from their `cicd`
- * file (every file, whole); the others by a scan of their spans. The rows come in the table's order, run-relative.
+ * file (every file that does not end before the window, whole); the others by a scan of their spans. The rows come in the table's order, run-relative.
  */
 export async function readCicdRows(
   deps: { engine: Pick<QueryEngine, 'prepare' | 'query'>; manifest: ManifestV4; epoch: bigint },
@@ -201,11 +220,12 @@ export async function readCicdRows(
   const scanSelected = new Set(scan.filter((r) => selects(sel, epoch, r)).map((r) => r.traceId));
   const stored: CicdRow[] = [];
   const fileSelected = new Set<string>();
-  if (manifest.partitions.some((p) => p.files.cicd !== undefined)) {
+  const files = storedFiles(manifest, sel);
+  if (files.files.length > 0) {
     const table = await runPrepared(
       engine,
-      cicdRowsQuery(sel, [...scanSelected]),
-      filesFor(manifest, ['cicd']),
+      cicdRowsQuery(sel, [...scanSelected], files),
+      files.files,
       signal,
     );
     for (const r of rowsOf(table)) {

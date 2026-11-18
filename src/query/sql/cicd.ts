@@ -46,15 +46,17 @@ function runTerms(sel: CicdSelection): ExprNode[] {
 /**
  * Every column of the `cicd` rows of the traces whose run row is selected, plus `selected`: whether the trace is
  * selected by the files read (its other rows may sit in any partition, so each row is returned whatever file it is in).
- * `alsoTraces` are traces selected elsewhere (by a scan of partitions without the table): their rows are returned too.
+ * `files` are the `cicd` files read. `alsoTraces` are traces selected elsewhere (by a scan of partitions without the table): their rows are returned too.
  */
-export function cicdRowsQuery(sel: CicdSelection, alsoTraces: readonly string[]): Query {
+export function cicdRowsQuery(sel: CicdSelection, alsoTraces: readonly string[], files: Pruned): Query {
+  const own = filenameTerm(files);
   const runs = Query.from('cicd')
     .select('trace_id')
-    .where(...runTerms(sel));
+    .where(...runTerms(sel), ...(own === null ? [] : [own]));
   const inRuns = sql`${column('trace_id')} IN (${runs})`;
   const q = Query.from('cicd').select(...CICD_COLUMNS, { selected: inRuns });
   q.where(
+    ...(own === null ? [] : [own]),
     alsoTraces.length === 0
       ? inRuns
       : or(

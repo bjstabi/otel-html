@@ -515,6 +515,20 @@ function miseRequest(
   const miseSpans: object[] = [];
   const vitestSpans: object[] = [];
   const playwrightSpans: object[] = [];
+  // The wrapper and setup spans mise records around the tasks carry no `mise.task.name`.
+  for (const [k, [name, type]] of (
+    [
+      ['resolve tasks', 'setup'],
+      ['install tools', 'setup'],
+      [`mise run ${plan[0]?.name ?? ''}`, 'run'],
+    ] as const
+  ).entries()) {
+    miseSpans.push(
+      span(traceId, jobSpanIdOf(key, `${jobId}#mise-wrap:${k}`), jobSpanId, name, winStart, winStart + 1, {
+        'mise.span_type': type,
+      }),
+    );
+  }
   let at = winStart;
   for (const [i, task] of plan.entries()) {
     const end = at + Math.round(((weights[i] ?? 0) / total) * winLen);

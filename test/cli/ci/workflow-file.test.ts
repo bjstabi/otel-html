@@ -35,6 +35,12 @@ describe('matchJob', () => {
     expect(matchJob(named, 'build linux')?.id).toBe('a');
     expect(matchJob(named, 'a')).toBeNull();
   });
+  test('a static name: matches a matrix entry as a prefix', () => {
+    const named = parseWorkflow(`jobs:\n  a:\n    name: Build\n    runs-on: x\n`);
+    expect(matchJob(named, 'Build')?.id).toBe('a');
+    expect(matchJob(named, 'Build (ubuntu)')?.id).toBe('a');
+    expect(matchJob(named, 'Builder')).toBeNull();
+  });
 });
 
 describe('fetchWorkflowFile', () => {

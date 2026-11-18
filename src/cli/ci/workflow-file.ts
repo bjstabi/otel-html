@@ -36,7 +36,7 @@ const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\
 
 /**
  * The workflow job an API job name came from: a `name:` with each `${{ … }}` as a wildcard, or, without one, the
- * id itself or `<id> (` as a prefix (a matrix entry). The first match in file order wins.
+ * id itself or `<id> (` as a prefix (a matrix entry); a `name:` with no expression also takes `<name> (`. The first match in file order wins.
  */
 export function matchJob(jobs: readonly WorkflowJob[], apiName: string): WorkflowJob | null {
   for (const job of jobs) {
@@ -46,6 +46,8 @@ export function matchJob(jobs: readonly WorkflowJob[], apiName: string): Workflo
         .map(escapeRegExp)
         .join('.*');
       if (new RegExp(`^${pattern}$`, 's').test(apiName)) return job;
+      // a static name with a matrix: the API appends the entry, `<name> (…)`
+      if (!job.name.includes('${{') && apiName.startsWith(`${job.name} (`)) return job;
     } else if (apiName === job.id || apiName.startsWith(`${job.id} (`)) return job;
   }
   return null;
