@@ -112,16 +112,21 @@ export const StatusGridView: WidgetRenderer = ({ widget, scope, actions: page })
                   const top = DOTS_H + y * ROW;
                   return (
                     <g key={row.job} data-job-row={row.job}>
-                      <text
-                        x={0}
-                        y={top + CELL}
-                        fontSize={11}
-                        className="cursor-pointer fill-current"
-                        {...menuTriggers((at) => jobMenu(row.job, at))}
-                      >
-                        {fitLabel(row.job)}
-                        <title>{row.job}</title>
-                      </text>
+                      {/* WebKit hit-tests SVG text by glyph: the transparent box makes the whole label cell a target */}
+                      <g className="cursor-pointer" {...menuTriggers((at) => jobMenu(row.job, at))}>
+                        <rect
+                          data-label-hit=""
+                          x={0}
+                          y={top}
+                          width={LABEL_W - 4}
+                          height={PITCH}
+                          fill="transparent"
+                        />
+                        <text x={0} y={top + CELL} fontSize={11} className="fill-current">
+                          {fitLabel(row.job)}
+                          <title>{row.job}</title>
+                        </text>
+                      </g>
                       {row.cells.map((cell, i) => {
                         const run = grid.runs[i];
                         if (run === undefined) return null;

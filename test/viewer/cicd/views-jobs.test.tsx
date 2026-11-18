@@ -305,6 +305,18 @@ describe('status-grid', () => {
     expect(state.run?.from).toBe('w1');
   });
 
+  it('opens the job menu from the whole label box, not only its glyphs (WebKit hit-tests SVG text by glyph)', async () => {
+    await show(widget('status-grid'), runs(12, ['build', 'test']));
+    const hit = q<SVGRectElement>('[data-job-row="test"] rect[data-label-hit]');
+    expect(hit.getAttribute('fill')).toBe('transparent');
+    await act(async () =>
+      hit.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }),
+      ),
+    );
+    expect(menuLabels()).toContain('Filter the page by job');
+  });
+
   it('opens the run menu of a dot on Shift+F10', async () => {
     await show(widget('status-grid'), runs(12, ['build', 'test']));
     const dot = q<SVGElement>('[data-run-dot]');

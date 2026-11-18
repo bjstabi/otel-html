@@ -114,7 +114,7 @@ test('Filter the page by job sets the chip; the runs view ignores it, the jobs v
   await row.scrollIntoViewIfNeeded();
   // the scroll event of that scroll is delivered a frame later, and a scroll closes an open menu
   await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
-  await row.locator('text').first().click({ button: 'right' });
+  await row.locator('rect[data-label-hit]').click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Filter the page by job' }).click();
   await expect(page.getByRole('button', { name: 'Clear job' })).toBeVisible();
   await expect(widget(page, VIEW_IDS.runs).getByTestId('echo')).toContainText('ignores job');
