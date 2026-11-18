@@ -10,8 +10,8 @@ description: Continue the CI dashboard UI project (the sketched CI dashboard bui
    uncommitted work, say so and ask before switching.
 2. Read §12, "Sessions for `/ui-1`", of `docs/superpowers/specs/2026-11-18-ci-dashboard-ui-design.md`. It states the
    rules for deciding which session is next (an open PR of the project is finished first; 0: the design awaits the
-   maintainer's answers; B: execute the plan; after the plan's last PR is merged or marked dropped the work is
-   complete and the skill says so) and carries each session's prompt.
+   maintainer's answers; B: execute the plan; R: after the last PR, wait for the live deploy and write the record;
+   once the record is in the plan the work is complete and the skill says so) and carries each session's prompt.
 3. Apply the rules with `gh pr list --base main --state open`, the document's status line,
    `ls docs/superpowers/plans/` and `gh pr list --base main --state all --head <branch>` for the branches the plan's
    PR table names. Tell the maintainer which session you picked and why, in two lines.

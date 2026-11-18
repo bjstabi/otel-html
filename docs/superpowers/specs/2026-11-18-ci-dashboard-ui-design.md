@@ -179,8 +179,9 @@ whole.
 
 **Shared fetch.** Every `cicd` widget on a page shares one fetch, a hook keyed by window and variables. The window is
 the page window extended backwards by its own length, so the stat tiles can compare against the previous period.
-The zoom slider narrows that result in memory; it never queries. The job, runner and trigger variables apply to job
-rows, and a run is kept when it has a job left. Run-level views ignore `job` and `runner` (§5.3).
+The zoom slider narrows that result in memory; it never queries. The branch and trigger variables narrow the fetch. The job and runner variables do not: they
+narrow job rows in memory for the views that honour them, so run-level views keep every job (§5.3). The previous
+period and the current span are split before attempts are combined, so each keeps its own latest attempt.
 
 **Other variables.** A `cicd` view honours only `branch`, `trigger`, `job` and `runner`. These are the variables
 whose keys are `vcs.ref.head.name`, `cicd.pipeline.trigger`, `cicd.pipeline.task.name` and `cicd.worker.labels`, plus
@@ -412,7 +413,7 @@ Taken by this document, listed so that they can be checked:
   nothing is backfilled.
 - **Rows across partitions.** These are joined in the viewer, and provisional spans are skipped (§4.2).
 - **Runs and attempts.** A run is a run id, counted by its latest attempt.
-- **Variables in `cicd` views.** These views honour only the four CI variables.
+- **Variables in `cicd` views.** These views honour only the four CI variables. Job and runner narrow job rows in memory, per view.
 - **The slider.** It appears on dashboards only.
 
 ## 12. Sessions for `/ui-1`
@@ -433,8 +434,11 @@ Continue the CI dashboard UI work. Read §12 of docs/superpowers/specs/2026-11-1
 2. A plan exists (`docs/superpowers/plans/*-ci-dashboard-ui*.md`) and a PR of its table is neither merged nor marked
    dropped (`gh pr list --base main --state all --head <branch>`) → **session B**. Resume at the first such PR, on
    its branch if it exists, at the first task whose commit is not on it.
-3. Every PR is merged or dropped → the work is complete. Say so, name what §2 left out (flaky tests, steps across
-   runs), and stop.
+3. Every PR is merged or dropped, but the plan has no "Record" section → **session R**: when a deploy has run PR 3's
+   build on the live site (`gh run list --workflow ci.yml --branch main` after PR 3's merge commit), measure and
+   record; otherwise say it is still waiting for that deploy, and stop.
+4. Every PR is merged or dropped and the plan has its Record → the work is complete. Say so, name what §2 left out
+   (flaky tests, steps across runs), and stop.
 
 **Session 0, answers:**
 
@@ -446,6 +450,12 @@ The CI dashboard UI design (docs/superpowers/specs/2026-11-18-ci-dashboard-ui-de
 
 ```
 Execute the CI dashboard UI plan (docs/superpowers/plans/*-ci-dashboard-ui*.md) with superpowers:subagent-driven-development, resuming at the first PR of its table that is neither merged nor marked dropped, on its branch if it exists, at the first task whose commit is not on it. The PR process is unattended (docs/agents/process-unattended.md): review on the branch, squash-merge when CI is green, branch the next PR from the updated main. Per CLAUDE.md, implementers and task reviewers run on Sonnet 5.5 and the whole-branch review on Opus 5.5; say which model each review ran on. A bug found while building is fixed in the same PR and listed under Also in its body; do not open an issue for it. Stop and ask where the process says so; its stop for files that run with a write token on main is lifted only for the files the plan lists (§11 point 5 of the design records the maintainer's approval). Every PR body carries the measurements its row in the plan asks for. After the last PR, measure the live dashboard as §2 goal 4 says and write the record in the plan.
+```
+
+**Session R, the record:**
+
+```
+Run Task 25 Step 6 of the CI dashboard UI plan (docs/superpowers/plans/*-ci-dashboard-ui*.md): measure #/dashboards/ci on the live site as §2 goal 4 of the design says, write the Record section at the end of the plan, mark every PR row merged, and merge it as "docs(plan): ci-dashboard-ui record" under the unattended process. A miss against §2 goal 4 is reported to the maintainer, not fixed in this session.
 ```
 
 A session that changes what the next session has to do updates this section in the same commit.

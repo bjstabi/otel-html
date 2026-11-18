@@ -59,7 +59,7 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
   - `kind` (`run` | `job` | `tasks`).
   - `trace_id`, `span_id`, `start_ns`, `end_ns`, `name` and `result`.
   - `pipeline`, `run_id`, `attempt`, `trigger`, `branch`, `revision` and `title`.
-  - `task`, `labels`, `queued_ns`, `needs` (JSON text), `condition` and `failed_step`.
+  - `task`, `task_id`, `labels`, `queued_ns`, `needs` (JSON text), `condition` and `failed_step`.
   - `tasks_replayed` and `tasks_run`.
 
   Every column is nullable except `kind`, `trace_id`, `start_ns` and `end_ns`. The table is sorted by `trace_id`,
@@ -86,8 +86,8 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
 
 ## Review Focus
 
-1. **Mixed formats.** A window spanning format-7 partitions (no table) and format-8 ones returns the same combined
-   runs as an all-format-8 rewrite of the same data. Test: Task 8.
+1. **Mixed and upgraded formats.** A window spanning format-7 partitions, upgraded ones (format 8, no flag) and
+   derived ones returns the same combined runs as an all-derived rewrite of the same data. Test: Task 8.
 2. **Re-run attempts.** Two attempts of one run id, the first failed and the second passed, count as one passed run
    with `reruns` 1. The status grid and failures show only attempt 2. Test: Task 18.
 3. **A run split across partitions.** The root and job spans are in one partition and the mise spans in another.
@@ -99,10 +99,13 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
 
 ## Plan notes against the spec
 
-1. **The `cicd` manifest flag (spec §4.2, "`cicd: true` on the partition").** A format-8 writer always runs the
-   derivation. So a format-8 partition with spans and no `files.cicd` has no CI rows, and the viewer reads nothing
-   from it. The flag is the presence of `files.cicd`; no separate boolean is written. Only partitions of format ≤ 7
-   take the scan path.
+1. **The `cicd` manifest flag (spec §4.2, "`cicd: true` on the partition").**
+   - **What is written.** A writer that ran the derivation on a partition's spans records `cicd: true` on the
+     partition entry, and writes `files.cicd` only when there are rows.
+   - **Why the format version is not enough.** `upgrade` rewrites a 5–7 manifest as 8 without touching partitions,
+     and sets no flag. So "format 8" cannot mean "derived".
+   - **What the viewer reads.** A partition with `cicd: true` is read from `files.cicd`; none at all when it has no
+     file. Any partition with spans and without the flag takes the scan path, whatever the manifest version.
 2. **The live-data rebuild.** It is made as in `docs/superpowers/plans/2026-11-16-widget-trace-index.md` Task 12
    (download the live site's rolling report, `merge` it with the branch build, serve it at 14 ms per request). That
    plan's measuring script is reused.
@@ -212,7 +215,7 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
     - `TIME_COLUMN.cicd = 'start_ns'`.
     - `FIXED_STATISTICS_COLUMNS.cicd = []`.
   - `src/format/manifest.ts`:
-    - `ManifestV8Schema`: format 7's, plus a `cicd` partition file.
+    - `ManifestV8Schema`: format 7's, plus a `cicd` partition file and `cicd?: true` on the partition entry (Plan note 1).
     - `parseAnyManifest` dispatches 8.
     - `StatisticsKeys` excludes `cicd`.
   - `src/query/sql/views.ts`: a `cicd` view over every partition's `cicd` file.
@@ -226,8 +229,9 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
 - Produces: `ManifestV4['formatVersion']` is `5 | 6 | 7 | 8`; `Table` includes `'cicd'`.
 
 - [ ] **Step 1: failing tests.**
-  - A format-8 manifest listing a `cicd` file parses. The same entry in a format-7 manifest is `invalid-report`.
-  - `upgradeReport` of a format-7 report writes 8 and changes no partition byte.
+  - A format-8 manifest listing a `cicd` file and `cicd: true` parses. The same entry in a format-7 manifest is
+    `invalid-report`.
+  - `upgradeReport` of a format-7 report writes 8, changes no partition byte, and sets no `cicd` flag.
   - A fresh session writes `formatVersion: 8`, and so does `newRunManifest`.
   - `viewStatements` over a manifest with a `cicd` file creates the `cicd` view.
 - [ ] **Step 2:** `pnpm exec vitest run test/format test/query/sql/views.test.ts test/writer/upgrade.test.ts test/cli/ci/run-report.test.ts` → FAIL.
@@ -250,7 +254,8 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
     - `trigger` is the resource's `cicd.pipeline.trigger`, else the span's `github.event`;
     - `pipeline`, `run_id`, `branch`, `revision` and `title` come from the resource.
   - **Job row.** A span with the attributes `cicd.pipeline.task.run.id` and `cicd.pipeline.task.name`:
-    - `task` is the task name; `result` is `cicd.pipeline.task.run.result`; `labels` comes from the resource;
+    - `task` is the task name; `task_id` is `cicd.pipeline.task.id`; `result` is `cicd.pipeline.task.run.result`;
+      `labels` comes from the resource;
     - `needs` is JSON text of the array; `condition` comes from the span;
     - `queued_ns` is the duration of its child span named `queued`;
     - `failed_step` is the name of its first child (by `github.job.step.number`) with
@@ -284,7 +289,8 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
   - `src/writer/partition-session.ts`: the `derive` hook adds `cicd` from `taken.spans`. `#copyPartition` copies a
     source `cicd` byte for byte when the source format is 8. Otherwise it computes one from the decoded spans,
     sharing the memo used by the widget index and the rollup repair.
-  - `src/writer/partition-writer.ts`: `Derived.cicd?: Row[]`. It is written after `spans` only when it has rows.
+  - `src/writer/partition-writer.ts`: `Derived.cicd?: Row[]`. Whenever the derivation ran, the partition entry gets
+    `cicd: true`; the file is written after `spans` only when it has rows.
   - `src/writer/compaction.ts`: `onRows('spans')` also feeds a `CicdRowSet`. The table is written after the TABLES
     loop when it has rows. The loop skips `cicd`.
 - Test: `test/writer/cicd-flush.test.ts`, `test/writer/merge-cicd.test.ts`
@@ -294,7 +300,8 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
 - Produces: every new partition holding CI spans lists `files.cicd` (Plan note 1).
 
 - [ ] **Step 1: failing tests.**
-  - A flush of a CI run writes `cicd` with Task 5's rows. A flush of non-CI spans writes none.
+  - A flush of a CI run writes `cicd` with Task 5's rows and `cicd: true`. A flush of non-CI spans writes no file
+    but still sets `cicd: true`.
   - Three flushes compacted give one `cicd` whose rows equal the union.
   - Merging a format-7 input (`fixtures/reports/format-7`) and a format-6 input gives a `cicd` file per partition
     holding CI spans, equal to a fresh write.
@@ -351,12 +358,13 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
 - Test: `test/viewer-data/cicd-rows.test.ts`, `test/viewer/cicd/runs.test.ts`
 
 **Interfaces:**
-- Produces: `interface CicdRow { kind: 'run' | 'job' | 'tasks'; traceId: string; spanId: string | null; start: number; end: number; name: string | null; result: string | null; pipeline: string | null; runId: string | null; attempt: number | null; trigger: string | null; branch: string | null; revision: string | null; title: string | null; task: string | null; labels: string | null; queuedNs: number | null; needs: string[] | null; condition: string | null; failedStep: string | null; tasksReplayed: number | null; tasksRun: number | null }`.
+- Produces: `interface CicdRow { kind: 'run' | 'job' | 'tasks'; traceId: string; spanId: string | null; start: number; end: number; name: string | null; result: string | null; pipeline: string | null; runId: string | null; attempt: number | null; trigger: string | null; branch: string | null; revision: string | null; title: string | null; task: string | null; taskId: string | null; labels: string | null; queuedNs: number | null; needs: string[] | null; condition: string | null; failedStep: string | null; tasksReplayed: number | null; tasksRun: number | null }`.
   - `start` and `end` are run-relative ns, like other viewer times.
 - Produces: `DataSource.cicdRows(q: { window: TimeWindow | null; bindings: VariableBinding[]; pipeline: string | null }, signal?: AbortSignal): Promise<readonly CicdRow[]>`.
   - It returns the rows of the traces whose run row starts in the window.
-  - The `job` and `runner` bindings apply to job rows; the others to run rows.
-- Produces: `interface CiJob { name: string; result: string; start: number; end: number; queuedNs: number | null; labels: string | null; needs: string[]; condition: string | null; failedStep: string | null; spanId: string | null }`.
+  - It applies only the run-level bindings (branch, trigger) and `pipeline`. The `job` and `runner` bindings are not
+    sent: they narrow job rows in memory, per view (Task 18), so the run-level views keep every job of a run.
+- Produces: `interface CiJob { name: string; id: string | null; result: string; start: number; end: number; queuedNs: number | null; labels: string | null; needs: string[]; condition: string | null; failedStep: string | null; spanId: string | null }`.
 - Produces: `interface CiRun { traceId: string; runId: string; attempt: number; attempts: number; start: number; duration: number; result: 'success' | 'failure' | 'cancelled'; trigger: string | null; branch: string | null; revision: string | null; title: string | null; jobs: CiJob[]; minutes: number; replayed: number; ran: number; cached: boolean | null }`.
   - `cached` is null when `replayed + ran = 0`, else `replayed > 0`.
   - `result` maps `cancellation` to `cancelled`, and any result other than success to `failure`.
@@ -368,8 +376,9 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
     `cicdRows` over 7 days returns 1 row per run, its jobs and its `tasks` rows, and reads no `spans.parquet`.
   - **Mixed formats (Review Focus 1).** The same data with half its partitions rewritten as format 7 (copy
     `fixtures/reports/format-7`'s procedure) returns equal rows; the format-7 half takes `cicd.rows.scan`.
-  - **Bindings.** A `job` binding keeps the jobs of that name and their run rows. A `trigger` binding keeps only those
-    runs.
+  - **Upgraded.** The same format-7 half after `upgradeReport` (format 8, no flag) is still scanned and returns
+    equal rows.
+  - **Bindings.** A `trigger` binding keeps only those runs, with all their jobs.
   - **`combineRuns`.** Two attempts give one run with `attempts: 2`, taking attempt 2's result (Review Focus 2).
     `tasks` rows from two partitions sum (Review Focus 3). A run with no job rows has duration
     `end - start` of its root.
@@ -377,7 +386,8 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
 - [ ] **Step 3: implement.**
   - The catalogue classes follow the `widget_traces` route entry:
     - `cicd.rows`: `files` on retention and density, and on window.
-    - `cicd.rows.scan`: `scan` on density, with the `allowed` reason "older partitions without a cicd table".
+    - `cicd.rows.scan`: `scan` on density, with the `allowed` reason "partitions without the cicd flag (older or
+      upgraded)".
   - Add a scaling-shape test that both stay in class.
 - [ ] **Step 4:** → PASS. Then `mise run check` → PASS (the catalogue gates included).
 - [ ] **Step 5:** commit `feat(viewer): cicdRows reads the cicd table and combines runs`.
@@ -605,10 +615,13 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
 **Interfaces:**
 - Consumes: `combineRuns`, `CiRun` and `DataSource.cicdRows` (Task 8).
 - Produces: `useCicd(widget: Widget): { status: 'loading' | 'ready' | 'error'; runs: CiRun[]; previous: CiRun[]; error?: Error }`.
-  - It reads one shared fetch per page (React context keyed by page window, bindings and pipeline).
-  - The fetch window is the page window extended backwards by its own length. `runs` are those inside the page
-    window, narrowed by `sel.t` when following.
-  - `previous` is the same length before the narrowed span.
+  - It reads one shared fetch per page (React context keyed by page window, run-level bindings and pipeline).
+  - The fetch window is the page window extended backwards by its own length.
+  - **Periods first.** The rows are split by run start into the current span (the page window narrowed by `sel.t`
+    when following) and `previous` (the same length just before it). `combineRuns` runs on each part separately, so
+    each period keeps its own latest attempt.
+  - **Job and runner.** For a view that honours them, the `job` and `runner` bindings then drop non-matching jobs,
+    and runs left with no job. Run-level views get the runs unnarrowed.
 - Produces, all pure:
   - `stat(kind, runs, previous): { value: string; delta: { text: string; better: boolean | null } | null; spark: number[] | null; note: string | null }`.
   - `trendBuckets(runs, span: [number, number]): { step: number; buckets: { t: number; p50: number | null; p95: number | null; passed: number; failed: number; cancelled: number; runs: CiRun[] }[] }`.
@@ -630,13 +643,15 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
 
 - [ ] **Step 1: failing tests** on 12 hand-built `CiRun`s with exact expected values for each function:
   - success rate 9/11 when one run is cancelled;
-  - the trend step is 6 h for 12 runs over 7 days;
+  - the trend step is 2 d for 12 runs over 7 days (at most 6 buckets), and 6 h for 257 runs over 7 days;
   - Δ "baseline too small" under 3;
   - folded trigger chips;
   - a `(no label)` queue row;
   - the minutes top-7 cut.
 
-  Review Focus 2: two attempts give `reruns` 1 and one grid column. Review Focus 4: an empty `runs` gives
+  Review Focus 2: two attempts give `reruns` 1 and one grid column. Attempt 1 in the previous period and attempt 2
+  in the current one count once in each period. A `job` binding drops a run without that job from `jobsTable`, but
+  not from `stat('median-run')`. Review Focus 4: an empty `runs` gives
   `value: '–'`, empty buckets and empty rows, and no number in any result is `NaN` or infinite (walk the result and
   check `Number.isFinite` on every number).
 - [ ] **Step 2:** `pnpm exec vitest run test/viewer/cicd/derive.test.ts` → FAIL.
@@ -676,7 +691,7 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
 - [ ] **Step 1: failing tests** (rendered with the `dashboard-shell.tsx` helper and a fake `cicdRows`):
   - **stat.** It shows 82% and "▲ … pts vs 7 days before". Better is green: success up is good ink, duration up is
     critical ink.
-  - **runs-trend.** The subtitle reads "6 hours buckets". The chart option has two line series (p50, p95) and three
+  - **runs-trend.** For 12 runs over 7 days the subtitle reads "2 days buckets". The chart option has two line series (p50, p95) and three
     stacked bar series. Right-clicking a bucket offers "Zoom the slider to this bucket", which sets `sel.t`.
   - **runs.** There is one bar per run, a run with `cached: false` is hollow, and a click calls `openRun`.
   - **Empty (Review Focus 4).** All three show "No run in this range." with no error.
@@ -748,7 +763,8 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
 - Produces: `<RunGantt run={CiRun} traceId />`:
   - the summary line;
   - job bars, with hatched queue, result colours, the last-to-finish outline and a dashed end line;
-  - `needs` edges;
+  - `needs` edges: `needs` names workflow job ids, and an edge is drawn from every job whose `id` is one of them
+    (every leg of a matrix);
   - expanding a job loads `getTrace(traceId)` once and shows its steps (`cicd.pipeline.task.step.result` colours);
   - a step with mise task descendants expands to them, replayed ones hatched.
 - Produces: the pane height in rows, which is `ceil((contentPx + 10) / 30)` and is measured after render.
