@@ -37,9 +37,9 @@ is the sketch artifact `https://claude.ai/artifact/UFvzBwkCgUNqQpHxbmYdni`, v5. 
 
 | #   | branch                      | PR title                                                                              | status |
 | --- | --------------------------- | ------------------------------------------------------------------------------------- | ------ |
-| 1   | `feat/cicd-table`           | `feat(format)!: format 8 records CI runs in a cicd table`                             |        |
-| 2   | `feat/dashboard-filter-bar` | `feat(viewer): page filter bar, range slider, context menus and paired stacking`      |        |
-| 3   | `feat/cicd-widgets`         | `feat(viewer): cicd widgets, the open run and the new CI dashboard`                   |        |
+| 1   | `feat/cicd-table`           | `feat(format)!: format 8 records CI runs in a cicd table`                             | merged #347 |
+| 2   | `feat/dashboard-filter-bar` | `feat(viewer): page filter bar, range slider, context menus and paired stacking`      | merged #348 |
+| 3   | `feat/cicd-widgets`         | `feat(viewer): cicd widgets, the open run and the new CI dashboard`                   | merged #349 |
 
 ## Global Constraints
 
@@ -901,3 +901,38 @@ What PR 3 builds on, changed from the task text by the branch review:
   it. This is a known gap.
 - **`measure:live` reports more.** It now reports the `cicd` byte share and the slider's frame rate. The Record
   (Task 25 Step 6) reads all three targets from one run.
+
+## Record
+
+Measured 2026-11-18 with `mise run measure:live`, after the deploy of `fd55cfb6` (#349, main run 44362889936,
+`site / deploy` green). The rebuild covers 33 partitions: 3.67 M spans, 591 k logs and 1,017 metric points. It is served
+with 14 ms per request. Three fresh contexts were used per page; the median is shown first, with the range after it.
+
+| page | requests | settled ms |
+| --- | --- | --- |
+| `#/dashboards/ci` (root, the default) | 63 | 1313 (1310–1330) |
+| `#/dashboards/ci` | 63 | 1321 (1288–1326) |
+| `#/dashboards/ci?job=check` | 63 | 1305 (1303–1311) |
+| traces list | 98 | 1521 (1511–1535) |
+| logs | 99 | 1669 (1650–1675) |
+| trace open | 145 | 2449 (2444–2466) |
+
+- **§2 goal 4: met.**
+  - Requests: 63, against at most 100.
+  - Settled: 1.32 s, against at most 3.0 s.
+  - Slider drag: 60.7 fps (60.3–60.7), against at least 30 fps.
+  - The first PR 3 build missed all three, with 207 requests, 3.2 s and 10.4 fps. Task 26 fixed it.
+- **`cicd` bytes.** 282,525 B against 146,713,508 B of spans, which is **0.193 %** (limit 1 %). All 33 partitions carry
+  the table.
+- **The deployed site itself.** At https://bjstabi.github.io/otel-html/branch/main/, `#/dashboards/ci` renders its
+  15 widgets with no page error and no alert, in 63 requests. It settles in 3.3 s over the real network, from a cold
+  Chromium context.
+- **CI along the way.**
+  - WebKit e2e found a real gap. WebKit hit-tests SVG text by glyph only, so a right-click between the letters of a
+    status-grid job label missed the label. The whole label cell is now a target.
+  - The side-panel assertion got a 15 s timeout. The panel takes about 0.2 s idle, but 2.7–3.8 s on one shared core,
+    because the page lays out all 15 widgets again.
+  - Unrelated CLI and scaling unit tests time out at 5 s on loaded runners, mostly on Windows: `report-main`,
+    `deploy-apply` and the scaling generator's lock. They passed on re-run.
+
+§2 left these out, and they remain outside this project: flaky tests, and steps compared across runs.
