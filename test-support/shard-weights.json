@@ -282,6 +282,8 @@
     "test/viewer/palette.test.ts": 0.5,
     "test/viewer/plots.test.ts": 0.4,
     "test/viewer/query-bar.test.tsx": 2.1,
+    "test/viewer/range-label.test.ts": 0.1,
+    "test/viewer/range-slider.test.tsx": 0.5,
     "test/viewer/red-services.test.tsx": 0.8,
     "test/viewer/registry.test.ts": 0.5,
     "test/viewer/results-table.test.tsx": 2,

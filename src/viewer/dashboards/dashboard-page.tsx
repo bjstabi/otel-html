@@ -4,6 +4,7 @@ import { type JSX, useCallback, useEffect, useMemo, useState, useSyncExternalSto
 import type { RunControls, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import type { DataSource } from '../data/data-source.js';
+import { manifestRange } from '../data/manifest-range.js';
 import type { TimeWindow } from '../data/time-window.js';
 import { LogPanel } from '../logs/log-panel.js';
 import { CONTROL, POPUP } from '../shell/controls.js';
@@ -21,6 +22,7 @@ import { TracePanel } from '../traces/trace-panel.js';
 import { dashboardToYaml } from './copy-config.js';
 import { DashboardLink } from './dashboard-link.js';
 import { DashboardGrid, useStacked } from './grid.js';
+import { ZoomRow } from './range-slider.js';
 import { type DashboardEntry, dashboardsOf, findDashboard } from './registry.js';
 import { useRunSession } from './run-session.js';
 import {
@@ -308,6 +310,7 @@ function DashboardView(props: {
       ? { status: 'ready', value: lastReady.value }
       : loaded;
 
+  const extent = page ?? manifestRange(manifest);
   const stale = staleIds(entry, state);
   const bound = values.status === 'ready' ? bindings(d, state, values.value) : null;
   const sel = {
@@ -450,6 +453,23 @@ function DashboardView(props: {
             bound={bound}
             state={state}
             onChange={(vars) => change((s) => ({ ...s, vars }))}
+          />
+        )}
+        {extent !== null && (
+          <ZoomRow
+            extent={[extent.start, extent.end]}
+            zoom={sel.t === null ? null : [sel.t.start, sel.t.end]}
+            preset={page === null ? 'all' : null}
+            epoch={epoch}
+            onZoom={(z) =>
+              change((s) => ({
+                ...s,
+                sel: {
+                  ...s.sel,
+                  t: z === null ? null : formatWindow({ start: z[0], end: z[1] }, anchor ?? undefined),
+                },
+              }))
+            }
           />
         )}
         <SelectionChips
