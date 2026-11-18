@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, ZoomOut } from 'lucide-react';
-import type { JSX } from 'react';
+import { type JSX, useState } from 'react';
 import type { AnyManifest, Manifest } from '../../format/manifest.js';
 import { parseUnixNanos, type RelNanos, type UnixNanos } from '../../model/ids.js';
 import { formatTime } from '../../semconv/formatters.js';
@@ -20,16 +20,30 @@ interface Preset {
 }
 const PRESETS: readonly Preset[] = [
   { label: 'Entire run', widthNs: null },
-  { label: '15m', widthNs: 15 * MINUTE_NS },
   { label: '1h', widthNs: HOUR_NS },
-  { label: '6h', widthNs: 6 * HOUR_NS },
   { label: '24h', widthNs: 24 * HOUR_NS },
   { label: '7d', widthNs: 168 * HOUR_NS },
+  { label: '30d', widthNs: 720 * HOUR_NS },
+  { label: '90d', widthNs: 2160 * HOUR_NS },
+  { label: '1y', widthNs: 8760 * HOUR_NS },
 ];
 
 /** A preset is offered only while the run is longer than it ("Entire run" always). */
 function offered(p: Preset, range: Range): boolean {
   return p.widthNs === null || range.end - range.start > p.widthNs;
+}
+
+/** Run-relative nanoseconds as the `YYYY-MM-DDTHH:mm:ss` UTC text a datetime-local input holds. */
+function toLocalInput(rel: number, epoch: bigint): string {
+  const ms = Number((BigInt(Math.round(rel)) + epoch) / 1_000_000n);
+  return new Date(ms).toISOString().slice(0, 19);
+}
+
+/** The inverse: a datetime-local text read as UTC, as run-relative nanoseconds; NaN when it is empty or invalid. */
+function fromLocalInput(text: string, epoch: bigint): number {
+  const ms = Date.parse(`${text}Z`);
+  if (Number.isNaN(ms)) return Number.NaN;
+  return Number(BigInt(ms) * 1_000_000n - epoch);
 }
 
 /** Run-relative nanoseconds as an absolute UTC time. */
@@ -74,7 +88,54 @@ export const APPROXIMATE_TITLE = 'Percentiles over windows of 4 h 40 min or long
 const BUTTON =
   'rounded-full p-1.5 text-ink-2 hover:bg-hairline disabled:opacity-40 disabled:hover:bg-transparent';
 
+function CustomRange({
+  initial,
+  epoch,
+  onApply,
+}: {
+  initial: TimeWindow;
+  epoch: bigint;
+  onApply: (w: TimeWindow) => void;
+}): JSX.Element {
+  const [from, setFrom] = useState(toLocalInput(initial.start, epoch));
+  const [to, setTo] = useState(toLocalInput(initial.end, epoch));
+  const start = fromLocalInput(from, epoch);
+  const end = fromLocalInput(to, epoch);
+  const valid = start < end;
+  const INPUT = 'rounded border border-hairline bg-page px-1 py-0.5 text-xs font-mono text-ink-2';
+  return (
+    <span className="flex flex-wrap items-center gap-1">
+      <input
+        type="datetime-local"
+        step={1}
+        aria-label="Custom range from (UTC)"
+        value={from}
+        onChange={(e) => setFrom(e.target.value)}
+        className={INPUT}
+      />
+      <span aria-hidden>→</span>
+      <input
+        type="datetime-local"
+        step={1}
+        aria-label="Custom range to (UTC)"
+        value={to}
+        onChange={(e) => setTo(e.target.value)}
+        className={INPUT}
+      />
+      <button
+        type="button"
+        disabled={!valid}
+        onClick={() => valid && onApply({ start, end })}
+        className="rounded-full px-3 py-1 text-sm text-ink-2 hover:bg-hairline disabled:opacity-40 disabled:hover:bg-transparent"
+      >
+        Apply
+      </button>
+    </span>
+  );
+}
+
 export function TimeRange({ manifest }: { manifest: AnyManifest }): JSX.Element {
+  const [custom, setCustom] = useState(false);
   const win = useSelection((s) => s.window);
   const setWindow = useSelection((s) => s.setWindow);
   const anchored = useSelection((s) => s.anchor !== null);
@@ -107,7 +168,25 @@ export function TimeRange({ manifest }: { manifest: AnyManifest }): JSX.Element 
             {p.label}
           </button>
         ))}
+        <button
+          type="button"
+          aria-expanded={custom}
+          onClick={() => setCustom((c) => !c)}
+          className={`rounded-full px-3 py-1 text-sm ${custom ? 'bg-ink text-page font-medium' : 'text-ink-2 hover:bg-hairline'}`}
+        >
+          custom…
+        </button>
       </div>
+      {custom && (
+        <CustomRange
+          initial={shown}
+          epoch={BigInt(manifest.epochUnixNano)}
+          onApply={(w) => {
+            setWindow(w);
+            setCustom(false);
+          }}
+        />
+      )}
       <Tip label="Previous window">
         <button
           type="button"
