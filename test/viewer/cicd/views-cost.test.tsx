@@ -125,23 +125,31 @@ function runs(
   });
 }
 
-async function show(w: Widget, rows: CicdRow[]): Promise<void> {
-  // A fresh data source per call keeps the per-trace cache of the tests view apart between tests.
-  const dataSource = {
-    cicdRows: () => Promise.resolve(rows),
+/** One data source per test, so the tests view's per-trace cache lives across `show` calls; `shift` forces a refetch. */
+let currentRows: CicdRow[];
+let sharedSource: DataSource | null;
+let gate: Promise<void> | null;
+
+async function show(w: Widget, rows: CicdRow[], shift = 0): Promise<void> {
+  currentRows = rows;
+  sharedSource ??= {
+    cicdRows: () => Promise.resolve(currentRows),
     manifest: { epochUnixNano: '1700000000000000000' },
-    getTrace: (id: string) => {
+    getTrace: async (id: string) => {
       traceCalls.push(id);
+      if (gate !== null) await gate;
       const d = details.get(id);
-      return d === undefined ? Promise.reject(new Error('no trace')) : Promise.resolve(d);
+      if (d === undefined) throw new Error('no trace');
+      return d;
     },
   } as unknown as DataSource;
+  const dataSource = sharedSource;
   subtitles = [];
   const actions = { selectWindow: () => {}, setSubtitle: (t: string | null) => subtitles.push(t) };
   await act(async () => {
     root.render(
       <ThemeProvider>
-        <CicdProvider dataSource={dataSource} extent={{ start: 0, end: 14 * DAY }}>
+        <CicdProvider dataSource={dataSource} extent={{ start: 0, end: 14 * DAY + shift }}>
           <RunActionsProvider
             dashboard={dashboard}
             state={state}
@@ -182,6 +190,8 @@ const q = <T extends Element>(sel: string): T => {
 };
 
 beforeEach(() => {
+  sharedSource = null;
+  gate = null;
   traceCalls = [];
   details = new Map();
   state = EMPTY_DASHBOARD_STATE;
@@ -256,6 +266,7 @@ describe('queue', () => {
     await show(
       widget('queue'),
       runs(6, ['build'], () => ({})).map((r) => (r.kind === 'job' ? { ...r, queuedNs: SEC } : r)),
+      1000,
     );
     expect(host.querySelector('[data-queue-label="(no label)"]')).not.toBeNull();
     expect(host.textContent).toContain('n 6');
@@ -304,6 +315,38 @@ describe('minutes', () => {
     expect([...host.querySelectorAll('[data-legend]')]).toHaveLength(8);
   });
 
+  it('cycles the seven series colours past the seventh series, and only Other is grey', async () => {
+    const root = document.documentElement.style;
+    for (let i = 1; i <= 7; i++) root.setProperty(`--oh-series-${i}`, `#00000${i}`);
+    root.setProperty('--oh-series-other', '#999999');
+    try {
+      await show(
+        widget('minutes'),
+        runs(9, ['build'], (i) => ({ trigger: `t${i}` })),
+      );
+      const colors = (lastChart().option as unknown as { color: string[] }).color;
+      expect(colors).toHaveLength(9);
+      expect(colors[7]).toBe(colors[0]);
+      expect(colors[8]).toBe(colors[1]);
+      expect(colors).not.toContain('#999999');
+      await act(async () => q<HTMLElement>('[data-by="job"]').click());
+      const names = ['j1', 'j2', 'j3', 'j4', 'j5', 'j6', 'j7', 'j8', 'j9'];
+      await show(widget('minutes'), runs(12, names), 1000);
+      const byJob = (lastChart().option as unknown as { color: string[] }).color;
+      expect(byJob.at(-1)).toBe('#999999');
+    } finally {
+      for (const n of ['--oh-series-other', ...[1, 2, 3, 4, 5, 6, 7].map((i) => `--oh-series-${i}`)])
+        root.removeProperty(n);
+    }
+  });
+
+  it('follows widget.by when the config changes', async () => {
+    await show(widget('minutes'), runs(12, names));
+    expect(host.querySelector('[data-by="trigger"]')?.getAttribute('aria-pressed')).toBe('true');
+    await show(widget('minutes', { by: 'job' }), runs(12, names));
+    expect(host.querySelector('[data-by="job"]')?.getAttribute('aria-pressed')).toBe('true');
+  });
+
   it('opens the trigger menu from a legend item by trigger, the job menu by job, none for Other', async () => {
     await show(widget('minutes'), runs(12, names));
     await act(async () => q<HTMLElement>('[data-legend="push"]').click());
@@ -316,7 +359,13 @@ describe('minutes', () => {
 });
 
 describe('tests', () => {
-  const rows = (): CicdRow[] => runs(3, ['check']);
+  /** Runs 1 to 3 with their mise tasks recorded (a `tasks` row), except those in `without`. */
+  const rows = (without: number[] = []): CicdRow[] => [
+    ...runs(3, ['check']),
+    ...[1, 2, 3]
+      .filter((i) => !without.includes(i))
+      .map((i): CicdRow => ({ ...blank, kind: 'tasks', traceId: TRACE(i), tasksRun: 4, tasksReplayed: 1 })),
+  ];
   const noTests = { spans: [], tree: buildTraceTree([]), resources: () => ({ attributes: new Map() }) };
 
   it('shows pills per suite, files by test time, expands a file and discloses the skipped', async () => {
@@ -348,6 +397,45 @@ describe('tests', () => {
   it('says so when no run has test spans', async () => {
     for (const i of [1, 2, 3]) details.set(TRACE(i), noTests);
     await show(widget('tests'), rows());
-    expect(host.textContent).toContain('No run in this range has test spans.');
+    expect(host.textContent).toContain('No recent run in this range has test spans.');
+  });
+
+  it('never fetches a run with no recorded tasks', async () => {
+    details.set(TRACE(1), traceWithTests());
+    await show(widget('tests'), rows([2]));
+    expect(traceCalls).toEqual([TRACE(3), TRACE(1)]);
+  });
+
+  it('fetches at most 3 candidate runs', async () => {
+    const many = runs(6, ['check']).concat(
+      [1, 2, 3, 4, 5, 6].map((i): CicdRow => ({ ...blank, kind: 'tasks', traceId: TRACE(i), tasksRun: 1 })),
+    );
+    for (const i of [1, 2, 3, 4, 5, 6]) details.set(TRACE(i), noTests);
+    await show(widget('tests'), many);
+    expect(traceCalls).toEqual([TRACE(6), TRACE(5), TRACE(4)]);
+  });
+
+  it('issues no further getTrace once the runs have changed', async () => {
+    for (const i of [1, 2, 3, 9]) details.set(TRACE(i), noTests);
+    let release: () => void = () => {};
+    gate = new Promise<void>((r) => {
+      release = r;
+    });
+    await show(widget('tests'), rows());
+    expect(traceCalls).toEqual([TRACE(3)]);
+    const other = [run(9, 8 * DAY), { ...blank, kind: 'tasks' as const, traceId: TRACE(9), tasksRun: 1 }];
+    await show(widget('tests'), other, 1000);
+    gate = null;
+    await act(async () => release());
+    expect(traceCalls).not.toContain(TRACE(2));
+  });
+
+  it('retries a failed fetch on a later render', async () => {
+    await show(widget('tests'), rows([1, 2]));
+    expect(host.textContent).toContain('could not be read');
+    details.set(TRACE(3), traceWithTests());
+    await show(widget('tests'), rows([1, 2]), 1000);
+    expect(traceCalls).toEqual([TRACE(3), TRACE(3)]);
+    expect(host.querySelectorAll('[data-suite]')).toHaveLength(1);
   });
 });

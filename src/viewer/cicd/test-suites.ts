@@ -88,7 +88,9 @@ export function testSuites(trace: Pick<TraceDetail, 'spans' | 'tree' | 'resource
     const key = `${file}\u0000${name}\u0000${project ?? ''}`;
     const retry = num(a.get(RETRY));
     const skipped = mode === 'skip' || mode === 'todo' || status === 'skipped';
-    const prior = suite.seen.get(key);
+    // Only Playwright retries are one test; two vitest tests may share a name.
+    const isRetry = status !== null || a.has(RETRY);
+    const prior = isRetry ? suite.seen.get(key) : undefined;
     if (prior !== undefined) {
       prior.test.ms += ms;
       if (retry >= prior.retry) {
@@ -98,7 +100,7 @@ export function testSuites(trace: Pick<TraceDetail, 'spans' | 'tree' | 'resource
       continue;
     }
     const test: SuiteTest = { name, ms, skipped, project };
-    suite.seen.set(key, { test, retry });
+    if (isRetry) suite.seen.set(key, { test, retry });
     let f = suite.files.find((x) => x.file === file);
     if (f === undefined) {
       f = { file, ms: 0, tests: [], skipped: 0 };

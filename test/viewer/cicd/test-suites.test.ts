@@ -130,3 +130,110 @@ describe('testSuites on a trace without tests', () => {
     expect(t).toBeDefined();
   });
 });
+
+describe('testSuites on hand-made spans', () => {
+  type Spec = {
+    id: string;
+    parent: string | null;
+    name: string;
+    attrs: Record<string, string | number>;
+    ms?: number;
+  };
+  const detail = (specs: Spec[]): Pick<TraceDetail, 'spans' | 'tree' | 'resources'> => {
+    const spans: SpanRow[] = specs.map((s) => {
+      const ms = s.ms ?? 0;
+      const span: SpanRecord = {
+        traceId: 't' as TraceId,
+        spanId: s.id as SpanId,
+        parentSpanId: s.parent as SpanId | null,
+        traceState: '',
+        flags: 0,
+        name: s.name,
+        kind: 1,
+        start: 0 as RelNanos,
+        end: (ms * 1e6) as RelNanos,
+        attributes: new Map(
+          Object.entries(s.attrs).map(([k, v]): [string, AnyValue] =>
+            typeof v === 'number'
+              ? [k, { kind: 'int', value: BigInt(v) }]
+              : [k, { kind: 'string', value: v }],
+          ),
+        ),
+        droppedAttributesCount: 0,
+        events: [],
+        droppedEventsCount: 0,
+        links: [],
+        droppedLinksCount: 0,
+        status: { code: StatusCode.UNSET, message: '' },
+        resource: 0 as never,
+        scope: 0 as never,
+      };
+      return { span, service: '', resource: '', durationNs: ms * 1e6 };
+    });
+    return {
+      spans,
+      tree: buildTraceTree(spans),
+      resources: () => ({ attributes: new Map(), droppedAttributesCount: 0, schemaUrl: '' }),
+    };
+  };
+  const base: Spec[] = [
+    { id: 'j', parent: null, name: 'check', attrs: { 'cicd.pipeline.task.name': 'check' } },
+    { id: 'k', parent: 'j', name: 'task', attrs: { 'mise.task.name': 'task' } },
+  ];
+  const pw = (id: string, retry: number, status: string, ms: number): Spec => ({
+    id,
+    parent: 'k',
+    name: 'same',
+    ms,
+    attrs: {
+      'test.suite.name': 'e2e/a.spec.ts',
+      'test.case.name': 'same',
+      'test.case.result.status': status,
+      'otel_html.test.retry': retry,
+    },
+  });
+
+  it('keeps two vitest tests that share a name in one file as two tests', () => {
+    const v = (id: string): Spec => ({
+      id,
+      parent: 'k',
+      name: 'dup',
+      ms: 5,
+      attrs: { 'test.suite.name': 'a.test.ts', 'vitest.test.name': 'dup', 'vitest.test.mode': 'run' },
+    });
+    const [s] = testSuites(detail([...base, v('v1'), v('v2')]));
+    expect(s?.total).toBe(2);
+  });
+
+  it('counts a retried Playwright test once, sums its time and takes the last attempt', () => {
+    const [s] = testSuites(detail([...base, pw('p0', 0, 'fail', 10), pw('p1', 1, 'skipped', 20)]));
+    expect(s?.total).toBe(1);
+    expect(s?.files[0]?.ms).toBe(30);
+    expect(s?.skipped).toBe(1);
+  });
+
+  it('counts a vitest todo as skipped', () => {
+    const [s] = testSuites(
+      detail([
+        ...base,
+        {
+          id: 'v',
+          parent: 'k',
+          name: 'x',
+          attrs: { 'test.suite.name': 'a.test.ts', 'vitest.test.mode': 'todo' },
+        },
+      ]),
+    );
+    expect(s?.skipped).toBe(1);
+  });
+
+  it('leaves out a test span with no mise task ancestor', () => {
+    const loose: Spec = {
+      id: 'l',
+      parent: 'j',
+      name: 'x',
+      attrs: { 'test.suite.name': 'a.test.ts', 'vitest.test.mode': 'run' },
+    };
+    expect(testSuites(detail([base[0] as Spec, loose]))).toEqual([]);
+  });
+});

@@ -22,7 +22,7 @@ function seriesColors(keys: readonly string[]): string[] {
   const style = getComputedStyle(document.documentElement);
   const token = (name: string): string => style.getPropertyValue(name).trim() || 'gray';
   return keys.map((k, i) =>
-    k === OTHER || i >= SERIES_TOKENS ? token('--oh-series-other') : token(`--oh-series-${i + 1}`),
+    k === OTHER ? token('--oh-series-other') : token(`--oh-series-${(i % SERIES_TOKENS) + 1}`),
   );
 }
 
@@ -41,7 +41,14 @@ export const MinutesView: WidgetRenderer = ({
   const actions = useRunActions(widget.id);
   const epoch = useEpoch(dataSource);
   const { resolved } = useTheme();
-  const [by, setBy] = useState<By>(widget.type === 'cicd' ? widget.by : 'trigger');
+  const configured: By = widget.type === 'cicd' ? widget.by : 'trigger';
+  const [by, setBy] = useState<By>(configured);
+  const [seen, setSeen] = useState<By>(configured);
+  if (seen !== configured) {
+    // The config changed under the view: it wins over the last pill pressed.
+    setSeen(configured);
+    setBy(configured);
+  }
   const result = useMemo(() => minutesPerDay(data.runs, by, epoch), [data.runs, by, epoch]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: `resolved` re-reads the colour tokens
   const colors = useMemo(() => seriesColors(result.keys), [result.keys, resolved]);

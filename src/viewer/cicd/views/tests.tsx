@@ -11,8 +11,8 @@ import { useCicd } from '../use-cicd.js';
 import { CicdBody } from './body.js';
 
 const TOP_FILES = 10;
-/** How many runs, newest first, are asked for test spans before the view gives up. */
-const MAX_RUNS = 8;
+/** How many candidate runs (those with mise tasks recorded), newest first, are asked for test spans. */
+const MAX_RUNS = 3;
 const MS = 1e6;
 
 const suiteCache = new WeakMap<DataSource, Map<string, Promise<TestSuite[]>>>();
@@ -25,6 +25,8 @@ function suitesOf(dataSource: DataSource, run: CiRun): Promise<TestSuite[]> {
   if (hit === undefined) {
     hit = dataSource.getTrace(parseTraceId(run.traceId, 'trace')).then(testSuites);
     cache.set(run.traceId, hit);
+    // A failure is not remembered: a later render asks again.
+    hit.catch(() => cache.delete(run.traceId));
   }
   return hit;
 }
@@ -35,10 +37,18 @@ type Found =
   | { status: 'ready'; run: CiRun | null; suites: TestSuite[] };
 
 /** The newest run, within the cap, that has test spans; runs are read one after the other. */
-async function latestWithTests(dataSource: DataSource, runs: readonly CiRun[]): Promise<Found> {
-  const newest = [...runs].sort((a, b) => b.start - a.start).slice(0, MAX_RUNS);
+async function latestWithTests(
+  dataSource: DataSource,
+  runs: readonly CiRun[],
+  live: () => boolean,
+): Promise<Found> {
+  const newest = runs
+    .filter((r) => r.ran + r.replayed > 0)
+    .sort((a, b) => b.start - a.start)
+    .slice(0, MAX_RUNS);
   let failed = 0;
   for (const run of newest) {
+    if (!live()) break;
     try {
       const suites = await suitesOf(dataSource, run);
       if (suites.length > 0) return { status: 'ready', run, suites };
@@ -115,7 +125,7 @@ export const TestsView: WidgetRenderer = ({ widget, scope, dataSource, actions: 
     if (data.status !== 'ready') return;
     let live = true;
     setFound({ status: 'loading' });
-    latestWithTests(dataSource, runs).then((f) => {
+    latestWithTests(dataSource, runs, () => live).then((f) => {
       if (live) setFound(f);
     });
     return () => {
@@ -155,7 +165,7 @@ export const TestsView: WidgetRenderer = ({ widget, scope, dataSource, actions: 
               </div>
             );
           if (suite === undefined || run === null)
-            return <div className="p-3 text-sm text-muted">No run in this range has test spans.</div>;
+            return <div className="p-3 text-sm text-muted">No recent run in this range has test spans.</div>;
           return (
             <div className="text-sm">
               <div className="flex flex-wrap items-center gap-2 border-b border-hairline px-3 py-1.5">
