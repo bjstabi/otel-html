@@ -397,6 +397,7 @@
   "e2e": {
     "chromium": {
       "calibration.spec.ts": 14.4,
+      "ci-dashboard.spec.ts": 6,
       "cross-link.spec.ts": 19.7,
       "dashboards.spec.ts": 27.4,
       "default-window.spec.ts": 8.3,
@@ -427,6 +428,7 @@
     },
     "firefox": {
       "calibration.spec.ts": 14.4,
+      "ci-dashboard.spec.ts": 12,
       "cross-link.spec.ts": 55.2,
       "dashboards.spec.ts": 83.5,
       "default-window.spec.ts": 8.3,
@@ -457,6 +459,7 @@
     },
     "webkit": {
       "calibration.spec.ts": 0.1,
+      "ci-dashboard.spec.ts": 10,
       "cross-link.spec.ts": 25.9,
       "dashboards.spec.ts": 40.5,
       "default-window.spec.ts": 7.7,
