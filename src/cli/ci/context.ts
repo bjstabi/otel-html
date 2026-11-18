@@ -38,6 +38,12 @@ export type ContextInputs = {
   serverUrl: string;
   jobName: string;
   jobId: JobId;
+  /** `GITHUB_EVENT_NAME`. */
+  event: string;
+  /** The run's title; null when the job side has no source for it. */
+  title: string | null;
+  /** The job's `runs-on` labels. */
+  labels: readonly string[];
   existingResourceAttributes?: string;
 };
 
@@ -57,7 +63,10 @@ export function contextEnv(i: ContextInputs): ContextEnv {
     ['vcs.ref.head.name', i.ref],
     ['vcs.ref.head.revision', i.sha],
     ['vcs.repository.url.full', `${i.serverUrl}/${i.repository}`],
-  ];
+    ['cicd.pipeline.trigger', i.event],
+    ['vcs.ref.head.title', i.title ?? ''],
+    ['cicd.worker.labels', i.labels.join(',')],
+  ].filter(([, v]) => v !== '') as [string, string][];
   const pairs = ours.map(([k, v]) => `${k}=${encodeValue(v)}`);
   const ourKeys = new Set(ours.map(([k]) => k));
   const existing = (i.existingResourceAttributes ?? '')
@@ -73,7 +82,7 @@ export function contextEnv(i: ContextInputs): ContextEnv {
 }
 
 /** The raw facts the entry point reads from the environment, before the jobs lookup. */
-export type RawInputs = Omit<ContextInputs, 'jobName' | 'jobId'> & {
+export type RawInputs = Omit<ContextInputs, 'jobName' | 'jobId' | 'title' | 'labels'> & {
   runnerName: string;
   jobNameHint: string;
   token: string | undefined;
@@ -109,6 +118,7 @@ export function readInputs(env: Env): RawInputs {
     runUrl: `${serverUrl}/${repository}/actions/runs/${runId}`,
     ref: need('GITHUB_REF_NAME'),
     sha: need('GITHUB_SHA'),
+    event: opt('GITHUB_EVENT_NAME') ?? '',
     serverUrl,
     runnerName: need('RUNNER_NAME'),
     jobNameHint: hint ?? need('GITHUB_JOB'),

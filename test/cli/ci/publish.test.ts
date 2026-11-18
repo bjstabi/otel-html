@@ -104,12 +104,16 @@ test('a matrix leg whose lookup failed parents its spans under the publisher job
     serverUrl: 'https://github.com',
     jobName: 'e2e',
     jobId: resolved.jobId,
+    event: 'push',
+    title: null,
+    labels: [],
   }).TRACEPARENT.split('-')[2];
   const run = {
     id: 42,
     run_attempt: 1,
     name: 'ci',
     event: 'push',
+    display_title: 't',
     status: 'completed',
     conclusion: 'success',
     created_at: '2026-01-01T00:00:00Z',
@@ -124,6 +128,7 @@ test('a matrix leg whose lookup failed parents its spans under the publisher job
   const leg = {
     ...j(7, 'e2e (chromium)', 'gh-1'),
     steps: [],
+    labels: [],
     started_at: null,
     completed_at: null,
     created_at: '2026-01-01T00:00:00Z',

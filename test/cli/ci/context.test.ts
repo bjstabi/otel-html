@@ -8,6 +8,7 @@ const job = (id: number, over: Partial<ApiJob> = {}): ApiJob => ({
   name: `job ${id}`,
   status: 'in_progress',
   runner_name: 'runner-1',
+  labels: [],
   conclusion: null,
   started_at: null,
   completed_at: null,
@@ -89,6 +90,9 @@ const base = {
   serverUrl: 'https://github.com',
   jobName: 'e2e (webkit)',
   jobId: 7,
+  event: 'push',
+  title: null,
+  labels: [] as string[],
 };
 
 describe('contextEnv', () => {
@@ -107,6 +111,17 @@ describe('contextEnv', () => {
     expect(contextEnv({ ...base, jobName: 'a,b=c' }).OTEL_RESOURCE_ATTRIBUTES).toContain(
       'cicd.pipeline.task.name=a%2Cb%3Dc',
     );
+  });
+
+  test('records the trigger, the encoded title and the runner labels; empty values are left out', () => {
+    const attrs = contextEnv({ ...base, title: 'a,b=c', labels: ['x', 'y'] }).OTEL_RESOURCE_ATTRIBUTES;
+    expect(attrs).toContain('cicd.pipeline.trigger=push');
+    expect(attrs).toContain('vcs.ref.head.title=a%2Cb%3Dc');
+    expect(attrs).toContain('cicd.worker.labels=x%2Cy');
+    const bare = contextEnv({ ...base, event: '' }).OTEL_RESOURCE_ATTRIBUTES;
+    expect(bare).not.toContain('cicd.pipeline.trigger');
+    expect(bare).not.toContain('vcs.ref.head.title');
+    expect(bare).not.toContain('cicd.worker.labels');
   });
 
   test('keeps existing attributes first', () => {

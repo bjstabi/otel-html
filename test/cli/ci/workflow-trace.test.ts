@@ -3,6 +3,7 @@ import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
 import { jobSpanIdOf, runKey, runSpanIdOf, stepSpanIdOf, traceIdOf } from '../../../src/cli/ci/ids.js';
 import {
   ciResource,
+  jobResource,
   jobTraceRequest,
   PROVISIONAL_ATTR,
   workflowTraceRequest,
@@ -14,6 +15,7 @@ const run: ApiRun = {
   run_attempt: 2,
   name: 'ci',
   event: 'push',
+  display_title: 't',
   status: 'completed',
   conclusion: 'cancelled',
   created_at: '2026-01-01T00:00:00Z',
@@ -35,6 +37,7 @@ const jobs: ApiJob[] = [
     name: 'build',
     status: 'completed',
     runner_name: 'r1',
+    labels: [],
     conclusion: 'success',
     created_at: '2026-01-01T00:00:01Z',
     started_at: '2026-01-01T00:00:10Z',
@@ -56,6 +59,7 @@ const jobs: ApiJob[] = [
     name: 'test',
     status: 'in_progress',
     runner_name: null,
+    labels: [],
     conclusion: 'cancelled',
     created_at: '2026-01-01T00:00:01Z',
     started_at: '2026-01-01T00:01:00Z',
@@ -271,6 +275,22 @@ describe('workflowTraceRequest', () => {
     });
   });
 
+  test('the run resource carries the title and trigger; the job resource the runner labels', () => {
+    const titled: ApiRun = { ...run, display_title: 'fix: x', event: 'pull_request' };
+    const [first] = jobs as [ApiJob];
+    expect(ciResource(titled)).toMatchObject({
+      'vcs.ref.head.title': 'fix: x',
+      'cicd.pipeline.trigger': 'pull_request',
+    });
+    expect(ciResource(titled)).not.toHaveProperty('cicd.worker.labels');
+    expect(jobResource(titled, { ...first, labels: ['ubuntu-24.04-arm'] })).toMatchObject({
+      'vcs.ref.head.title': 'fix: x',
+      'cicd.pipeline.trigger': 'pull_request',
+      'cicd.worker.labels': 'ubuntu-24.04-arm',
+    });
+    expect(jobResource(titled, { ...first, labels: [] })).not.toHaveProperty('cicd.worker.labels');
+  });
+
   test('the library accepts the output', () => {
     const [req] = parseOtlpObject(workflowTraceRequest(key, run, jobs, new Map([[2, 'name:test']])), 'test');
     expect(req?.signal).toBe('traces');
@@ -289,6 +309,7 @@ describe('jobTraceRequest', () => {
     name: 'build',
     status: 'in_progress',
     runner_name: 'r1',
+    labels: [],
     conclusion: null,
     created_at: '2026-01-01T00:00:01Z',
     started_at: '2026-01-01T00:00:10Z',

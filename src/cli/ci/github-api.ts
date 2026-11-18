@@ -9,6 +9,8 @@ export type ApiRun = {
   run_attempt: number;
   name: string;
   event: string;
+  /** The run's title: the commit subject or the pull request title. */
+  display_title: string;
   status: string;
   conclusion: string | null;
   created_at: string;
@@ -39,6 +41,8 @@ export type ApiJob = {
   name: string;
   status: string;
   runner_name: string | null;
+  /** The `runs-on` labels the job asked for. */
+  labels: string[];
   conclusion: string | null;
   started_at: string | null;
   completed_at: string | null;

@@ -27,6 +27,7 @@ const apiRun = (over: Partial<ApiRun> = {}): ApiRun => ({
   run_attempt: 1,
   name: 'ci',
   event: 'push',
+  display_title: 't',
   status: 'completed',
   conclusion: 'success',
   created_at: '2026-01-01T00:00:00Z',

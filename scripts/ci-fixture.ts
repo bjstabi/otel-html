@@ -203,6 +203,7 @@ function buildJob(
         name: plan.name,
         status: 'completed',
         runner_name: null,
+        labels: [],
         conclusion: 'skipped',
         created_at: at,
         started_at: at,
@@ -280,6 +281,7 @@ function buildJob(
       name: plan.name,
       status: 'completed',
       runner_name: `GitHub Actions ${1_000_002_000 + index}`,
+      labels: ['ubuntu-latest'],
       conclusion,
       created_at: iso(createdAt),
       started_at: iso(started),
@@ -313,6 +315,7 @@ function runRequests(rand: () => number, run: number, t0Seconds: number): object
     run_attempt: 1,
     name: 'ci',
     event,
+    display_title: `demo run ${run}`,
     status: 'completed',
     conclusion: jobs.every((j) => j.conclusion === 'success' || j.conclusion === 'skipped')
       ? 'success'

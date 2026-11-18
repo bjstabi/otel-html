@@ -11,6 +11,8 @@ export function ciResource(run: ApiRun): Record<string, string> {
     'cicd.pipeline.run.url.full': run.html_url,
     ...(run.head_branch === null ? {} : { 'vcs.ref.head.name': run.head_branch }),
     'vcs.ref.head.revision': run.head_sha,
+    ...(run.display_title === '' ? {} : { 'vcs.ref.head.title': run.display_title }),
+    ...(run.event === '' ? {} : { 'cicd.pipeline.trigger': run.event }),
     'vcs.repository.url.full': run.repository.html_url,
     'service.name': run.name,
     'service.namespace': run.repository.full_name,
@@ -20,7 +22,11 @@ export function ciResource(run: ApiRun): Record<string, string> {
 
 /** The run's resource plus the job's name: the resource every record scoped to one job carries. */
 export function jobResource(run: ApiRun, job: ApiJob): Record<string, string> {
-  return { ...ciResource(run), 'cicd.pipeline.task.name': job.name };
+  return {
+    ...ciResource(run),
+    'cicd.pipeline.task.name': job.name,
+    ...(job.labels.length === 0 ? {} : { 'cicd.worker.labels': job.labels.join(',') }),
+  };
 }
 
 type Status = { code: number; message: string };
