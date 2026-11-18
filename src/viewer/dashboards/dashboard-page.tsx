@@ -11,7 +11,7 @@ import { CONTROL, POPUP } from '../shell/controls.js';
 import { useGoTo } from '../shell/go-to.js';
 import { CopyButton, PageChrome } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
-import { absoluteTime } from '../shell/time-range.js';
+import { absoluteTime, activePreset } from '../shell/time-range.js';
 import type { UrlPatch } from '../state/carry.js';
 import { type DashboardPageState, EMPTY_DASHBOARD_STATE } from '../state/dashboard-state.js';
 import type { Page } from '../state/page-options.js';
@@ -104,6 +104,14 @@ function staleIds(entry: DashboardEntry, state: DashboardPageState): string[] {
       .filter((k) => !keys.has(k))
       .map((k) => `vars.${k}`),
   ];
+}
+
+/** The page window as a preset text for the slider's label (`all`, `7d`); null for a custom window. */
+function presetOf(w: TimeWindow | null, manifest: DataSource['manifest'], floor: boolean): string | null {
+  const range = manifestRange(manifest);
+  if (range === null) return null;
+  const label = activePreset(w, range, BigInt(manifest.epochUnixNano), floor);
+  return label === 'Entire run' ? 'all' : label;
 }
 
 function windowText(w: TimeWindow | null, epoch: ReturnType<typeof parseUnixNanos>): string {
@@ -249,6 +257,7 @@ function DashboardView(props: {
   const page = useSelection((s) => s.window);
   const defaultWindow = useSelection((s) => s.defaultWindow);
   const anchor = useSelection((s) => s.anchor);
+  const anchored = anchor !== null;
   const traceId = useSelection((s) => s.traceId);
   const logRef = useSelection((s) => s.logRef);
   const clear = useSelection((s) => s.clear);
@@ -459,7 +468,7 @@ function DashboardView(props: {
           <ZoomRow
             extent={[extent.start, extent.end]}
             zoom={sel.t === null ? null : [sel.t.start, sel.t.end]}
-            preset={page === null ? 'all' : null}
+            preset={presetOf(page, manifest, !anchored)}
             epoch={epoch}
             onZoom={(z) =>
               change((s) => ({

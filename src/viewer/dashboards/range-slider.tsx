@@ -17,6 +17,8 @@ export interface RangeSliderProps {
   ticks: readonly { t: number; color: string }[];
   /** Called with each new zoom while dragging; null is the whole extent. */
   onZoom(zoom: Range | null): void;
+  /** Called when a drag ends, after its last `onZoom`. */
+  onRelease?(): void;
 }
 
 /** Snaps an edge within 0.5 % of the extent's edge to it. */
@@ -43,7 +45,7 @@ function dragged(handle: Handle, from: Range, at: number, delta: number, extent:
  * whole extent. Calls `onZoom` on every move; the caller throttles what it writes.
  */
 export function RangeSlider(props: RangeSliderProps): JSX.Element {
-  const { extent, zoom, ticks, onZoom } = props;
+  const { extent, zoom, ticks, onZoom, onRelease } = props;
   const [draft, setDraft] = useState<Range | null>(null);
   const drag = useRef<{ handle: Handle; from: Range; x0: number } | null>(null);
   const shown = draft ?? zoom ?? extent;
@@ -71,8 +73,20 @@ export function RangeSlider(props: RangeSliderProps): JSX.Element {
     onZoom(next[0] === extent[0] && next[1] === extent[1] ? null : next);
   };
   const end = () => {
+    if (drag.current === null) return;
     drag.current = null;
     setDraft(null);
+    onRelease?.();
+  };
+  const key = (handle: 'start' | 'end') => (e: React.KeyboardEvent<SVGElement>) => {
+    const dir = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+    if (dir === 0) return;
+    e.preventDefault();
+    const step = span * (e.shiftKey ? 0.1 : 0.01) * dir;
+    const from = zoom ?? extent;
+    const at = (handle === 'start' ? from[0] : from[1]) + step;
+    const next = dragged(handle, from, at, 0, extent);
+    onZoom(next[0] === extent[0] && next[1] === extent[1] ? null : next);
   };
 
   const [s0, s1] = [x(shown[0]), x(shown[1])];
@@ -114,6 +128,8 @@ export function RangeSlider(props: RangeSliderProps): JSX.Element {
         height={22}
         rx={3}
         className="cursor-ew-resize fill-accent"
+        tabIndex={0}
+        onKeyDown={key('start')}
         onPointerDown={start('start')}
       />
       <rect
@@ -129,34 +145,44 @@ export function RangeSlider(props: RangeSliderProps): JSX.Element {
         height={22}
         rx={3}
         className="cursor-ew-resize fill-accent"
+        tabIndex={0}
+        onKeyDown={key('end')}
         onPointerDown={start('end')}
       />
     </svg>
   );
 }
 
-/** Returns a writer that calls `write` with the latest value at most once per animation frame. */
-function useFrameWriter<T>(write: (v: T) => void): (v: T) => void {
+/** A writer that calls `write` with the latest value at most once per animation frame, and `flush` to write it now. */
+function useFrameWriter<T>(write: (v: T) => void): { write: (v: T) => void; flush: () => void } {
   const latest = useRef(write);
   latest.current = write;
   const pending = useRef<{ v: T } | null>(null);
   const frame = useRef<number | null>(null);
+  const run = useCallback(() => {
+    frame.current = null;
+    const p = pending.current;
+    pending.current = null;
+    if (p !== null) latest.current(p.v);
+  }, []);
   useEffect(
     () => () => {
       if (frame.current !== null) cancelAnimationFrame(frame.current);
     },
     [],
   );
-  return useCallback((v: T) => {
-    pending.current = { v };
-    if (frame.current !== null) return;
-    frame.current = requestAnimationFrame(() => {
-      frame.current = null;
-      const p = pending.current;
-      pending.current = null;
-      if (p !== null) latest.current(p.v);
-    });
-  }, []);
+  const put = useCallback(
+    (v: T) => {
+      pending.current = { v };
+      if (frame.current === null) frame.current = requestAnimationFrame(run);
+    },
+    [run],
+  );
+  const flush = useCallback(() => {
+    if (frame.current !== null) cancelAnimationFrame(frame.current);
+    run();
+  }, [run]);
+  return { write: put, flush };
 }
 
 /** The slider with its label: what Task 12 moves into the filter bar's slider row. */
@@ -167,7 +193,7 @@ export function ZoomRow(props: {
   epoch: bigint;
   onZoom(zoom: Range | null): void;
 }): JSX.Element {
-  const write = useFrameWriter(props.onZoom);
+  const frames = useFrameWriter(props.onZoom);
   const l = rangeLabel(props);
   return (
     <div className="flex items-center gap-3" data-testid="zoom-row">
@@ -176,7 +202,13 @@ export function ZoomRow(props: {
         {l.of}
       </span>
       <div className="min-w-0 flex-1">
-        <RangeSlider extent={props.extent} zoom={props.zoom} ticks={[]} onZoom={write} />
+        <RangeSlider
+          extent={props.extent}
+          zoom={props.zoom}
+          ticks={[]}
+          onZoom={frames.write}
+          onRelease={frames.flush}
+        />
       </div>
     </div>
   );

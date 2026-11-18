@@ -74,7 +74,12 @@ function zoomOutWindow(w: TimeWindow, range: Range): TimeWindow | null {
 }
 
 /** The preset the window is, as the selection holds it: a long preset sits on absolute grains, so compare after alignment. */
-function activePreset(w: TimeWindow | null, range: Range, epoch: bigint, floor: boolean): string | null {
+export function activePreset(
+  w: TimeWindow | null,
+  range: Range,
+  epoch: bigint,
+  floor: boolean,
+): string | null {
   if (w === null) return 'Entire run';
   const hit = PRESETS.find((p) => {
     return p.widthNs !== null && presetMatches(w, p.widthNs, range, epoch, floor);
