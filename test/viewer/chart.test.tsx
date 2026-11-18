@@ -2,7 +2,9 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const setTheme = vi.fn<(theme: unknown) => void>();
+const order: string[] = [];
+const dispatchAction = vi.fn<(action: unknown) => void>(() => void order.push('downplay'));
+const setTheme = vi.fn<(theme: unknown) => void>(() => void order.push('setTheme'));
 const resize = vi.fn<() => void>();
 const chartSize = { width: 0, height: 0 };
 // Mirrors ECharts: a synchronous setOption render emits `finished` before setOption returns.
@@ -16,6 +18,7 @@ vi.mock('echarts/core', () => ({
     initThemes.push(theme);
     return {
       setTheme,
+      dispatchAction,
       setOption: (...args: unknown[]) => {
         setOptionCalls.push(args);
         handlers.get('finished')?.();
@@ -86,6 +89,8 @@ afterEach(() => {
   window.localStorage.clear();
   document.documentElement.removeAttribute('data-theme');
   setTheme.mockClear();
+  dispatchAction.mockClear();
+  order.length = 0;
   resize.mockClear();
   handlers.clear();
   initThemes.length = 0;
@@ -117,6 +122,30 @@ describe('Chart theming', () => {
     expect(firstColor(setTheme.mock.calls.at(-1)?.[0])).toBe('#2a78d6');
     await act(async () => setter?.('dark'));
     expect(firstColor(setTheme.mock.calls.at(-1)?.[0])).toBe('#3987e5');
+  });
+
+  it('clears a hover blur before swapping the theme, which rebuilds the models that remember it', async () => {
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    vi.stubGlobal('matchMedia', () => ({
+      matches: false,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    window.localStorage.setItem('otel-html:theme', 'dark');
+    installTokens();
+    const host = document.createElement('div');
+    await act(async () => {
+      createRoot(host).render(
+        <ThemeProvider>
+          <Grab />
+          <Chart option={{}} ariaLabel="Latency over time" />
+        </ThemeProvider>,
+      );
+    });
+    order.length = 0;
+    await act(async () => setter?.('light'));
+    expect(dispatchAction).toHaveBeenCalledWith({ type: 'downplay' });
+    expect(order).toEqual(['downplay', 'setTheme']);
   });
 });
 

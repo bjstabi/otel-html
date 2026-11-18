@@ -119,6 +119,9 @@ export function Chart({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `resolved` triggers re-reading the CSS variables
   useEffect(() => {
+    // setTheme rebuilds the series models, and ECharts only leaves a blur a model remembers: a blur still on (a
+    // hover in progress) would stay on the kept elements for good. Cards that rebuild on their own clean up too.
+    chartRef.current?.dispatchAction({ type: 'downplay' });
     chartRef.current?.setTheme(buildEchartsTheme(readTokens()));
   }, [resolved]);
 
