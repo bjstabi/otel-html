@@ -23,12 +23,12 @@ export function useContextMenu(): {
   element: JSX.Element | null;
 } {
   const [state, setState] = useState<Open | null>(null);
+  const opener = useRef<HTMLElement | null>(null);
   const open = useCallback((at: At, title: string | null, items: readonly MenuItem[]) => {
     if (opener.current === null && document.activeElement instanceof HTMLElement)
       opener.current = document.activeElement;
     setState({ at, title, items });
   }, []);
-  const opener = useRef<HTMLElement | null>(null);
   const close = useCallback(() => {
     setState(null);
     opener.current?.focus();
@@ -137,6 +137,12 @@ function cancelPress(target: EventTarget): void {
   if (!p.fired) presses.delete(target);
 }
 
+// No click follows a cancel or a leave, so a fired press is forgotten at once.
+function endPress(target: EventTarget): void {
+  cancelPress(target);
+  presses.delete(target);
+}
+
 // After a long press opened the menu, the lift is followed by a click (and maybe a contextmenu) on
 // the target; swallow the click once and keep the `fired` mark until it is past.
 function suppressFollowUp(target: EventTarget): void {
@@ -190,7 +196,7 @@ export function menuTriggers(open: (at: At) => void): {
       cancelPress(target);
       if (fired) suppressFollowUp(target);
     },
-    onPointerLeave: (e) => cancelPress(e.currentTarget),
-    onPointerCancel: (e) => cancelPress(e.currentTarget),
+    onPointerLeave: (e) => endPress(e.currentTarget),
+    onPointerCancel: (e) => endPress(e.currentTarget),
   };
 }

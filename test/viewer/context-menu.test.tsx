@@ -186,4 +186,21 @@ describe('context menu', () => {
     key('Tab');
     expect(menu()).toBeNull();
   });
+
+  it('a fired press ended by pointercancel does not block a later contextmenu', () => {
+    vi.useFakeTimers();
+    down(target());
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(menu()).not.toBeNull();
+    key('Escape');
+    act(() => {
+      target().dispatchEvent(new Event('pointercancel', { bubbles: true }));
+    });
+    act(() => {
+      target().dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 7, clientY: 7 }));
+    });
+    expect(menu()).not.toBeNull();
+  });
 });
