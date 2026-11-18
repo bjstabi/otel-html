@@ -91,17 +91,23 @@ const BUTTON =
 function CustomRange({
   initial,
   epoch,
+  lowest,
   onApply,
 }: {
   initial: TimeWindow;
   epoch: bigint;
+  /** The earliest relative start the URL can state (0 unanchored). */
+  lowest: number;
   onApply: (w: TimeWindow) => void;
 }): JSX.Element {
-  const [from, setFrom] = useState(toLocalInput(initial.start, epoch));
-  const [to, setTo] = useState(toLocalInput(initial.end, epoch));
-  const start = fromLocalInput(from, epoch);
-  const end = fromLocalInput(to, epoch);
-  const valid = start < end;
+  const initialFrom = toLocalInput(initial.start, epoch);
+  const initialTo = toLocalInput(initial.end, epoch);
+  const [from, setFrom] = useState(initialFrom);
+  const [to, setTo] = useState(initialTo);
+  // Unedited inputs keep the original window (the inputs hold whole seconds); a start before `lowest` is clamped to it.
+  const start = from === initialFrom ? initial.start : Math.max(lowest, fromLocalInput(from, epoch));
+  const end = to === initialTo ? initial.end : fromLocalInput(to, epoch);
+  const valid = start < end && end <= 9e18 + lowest;
   const INPUT = 'rounded border border-hairline bg-page px-1 py-0.5 text-xs font-mono text-ink-2';
   return (
     <span className="flex flex-wrap items-center gap-1">
@@ -136,6 +142,7 @@ function CustomRange({
 
 export function TimeRange({ manifest }: { manifest: AnyManifest }): JSX.Element {
   const [custom, setCustom] = useState(false);
+  const anchor = useSelection((s) => s.anchor);
   const win = useSelection((s) => s.window);
   const setWindow = useSelection((s) => s.setWindow);
   const anchored = useSelection((s) => s.anchor !== null);
@@ -181,6 +188,7 @@ export function TimeRange({ manifest }: { manifest: AnyManifest }): JSX.Element 
         <CustomRange
           initial={shown}
           epoch={BigInt(manifest.epochUnixNano)}
+          lowest={anchor === null ? 0 : -Number(anchor)}
           onApply={(w) => {
             setWindow(w);
             setCustom(false);

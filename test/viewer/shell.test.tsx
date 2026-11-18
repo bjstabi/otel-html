@@ -294,6 +294,25 @@ describe('custom range', () => {
     expect((apply as HTMLButtonElement).disabled).toBe(false);
     await user.click(apply);
     expect(window.location.hash).toBe(`#/traces?t=${2 * HOUR}~${3 * HOUR}`);
+    expect(screen.queryByLabelText('Custom range from (UTC)')).toBeNull();
+  });
+
+  test('a from before the run start is clamped to the start, and Apply without edits keeps the window', async () => {
+    const user = userEvent.setup();
+    renderShell(`#/traces?t=${HOUR + 500_000_000}~${2 * HOUR + 700_000_000}`);
+    await user.click(screen.getByRole('button', { name: 'custom…' }));
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(window.location.hash).toBe(`#/traces?t=${HOUR + 500_000_000}~${2 * HOUR + 700_000_000}`);
+    await user.click(screen.getByRole('button', { name: 'custom…' }));
+    const iso = (rel: number): string =>
+      new Date(Number((BigInt(rel) + BigInt(baseManifest.epochUnixNano)) / 1_000_000n))
+        .toISOString()
+        .slice(0, 19);
+    const from = screen.getByLabelText('Custom range from (UTC)');
+    await user.clear(from);
+    await user.type(from, iso(-5 * HOUR));
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(window.location.hash).toBe(`#/traces?t=0~${2 * HOUR + 700_000_000}`);
   });
 });
 
