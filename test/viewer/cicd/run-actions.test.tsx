@@ -5,7 +5,11 @@ import type { Dashboard } from '../../../src/dashboards/schema.js';
 import { RunActionsProvider, RunRing, useRunActions } from '../../../src/viewer/cicd/run-actions.js';
 import type { CiJob, CiRun } from '../../../src/viewer/cicd/runs.js';
 import type { DataSource } from '../../../src/viewer/data/data-source.js';
-import { type DashboardPageState, EMPTY_DASHBOARD_STATE } from '../../../src/viewer/state/dashboard-state.js';
+import {
+  type DashboardPageState,
+  EMPTY_DASHBOARD_STATE,
+  withoutStaleRun,
+} from '../../../src/viewer/state/dashboard-state.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -117,11 +121,18 @@ afterEach(() => {
 });
 
 describe('openRun', () => {
-  it('writes d.run and d.sel.trace, keeping the last mode', () => {
+  it('writes d.run and d.sel.trace', () => {
     act(() => api.openRun(run()));
     expect(state.sel.trace).toBe(TRACE);
     expect(state.run).toEqual({ from: 'w9', mode: 'attached' });
-    state = { ...state, run: { from: 'w1', mode: 'panel' } };
+  });
+
+  it('keeps the last mode as page-session state, also after d.run was cleared', () => {
+    act(() => api.openRun(run()));
+    act(() => api.setMode('panel'));
+    expect(state.run?.mode).toBe('panel');
+    state = withoutStaleRun(state, { ...state, sel: { t: null, trace: null } });
+    expect(state.run).toBeNull();
     render();
     act(() => api.openRun(run()));
     expect(state.run).toEqual({ from: 'w9', mode: 'panel' });
@@ -155,6 +166,17 @@ describe('runMenu', () => {
     expect(labels()).not.toContain('Show main only');
   });
 
+  it('omits the Show only item when the dashboard has no matching quick filter', () => {
+    const saved = dashboard.quick;
+    (dashboard as { quick: unknown }).quick = [];
+    try {
+      act(() => api.runMenu(run(), { x: 1, y: 1 }));
+      expect(labels().some((l) => l.startsWith('Show '))).toBe(false);
+    } finally {
+      (dashboard as { quick: unknown }).quick = saved;
+    }
+  });
+
   it('applies the choices through the variables', () => {
     act(() => api.runMenu(run(), { x: 1, y: 1 }));
     act(() => item('Show main only').click());
@@ -168,7 +190,43 @@ describe('runMenu', () => {
   });
 });
 
+describe('withoutStaleRun', () => {
+  const open = {
+    ...EMPTY_DASHBOARD_STATE,
+    sel: { t: null, trace: TRACE as never },
+    run: { from: 'w1', mode: 'attached' as const },
+  };
+  it('clears run when the trace is removed or replaced by another path', () => {
+    expect(withoutStaleRun(open, { ...open, sel: { ...open.sel, trace: null } }).run).toBeNull();
+    expect(
+      withoutStaleRun(open, { ...open, sel: { ...open.sel, trace: 'b'.repeat(32) as never } }).run,
+    ).toBeNull();
+  });
+  it('keeps run when the trace is unchanged or openRun set a new run', () => {
+    expect(withoutStaleRun(open, { ...open, vars: { a: 'b' } }).run).toBe(open.run);
+    const reopened = { ...open, run: { from: 'w2', mode: 'attached' as const } };
+    expect(withoutStaleRun(open, reopened).run).toBe(reopened.run);
+  });
+});
+
 describe('Open on GitHub', () => {
+  it('refuses a url that is not http(s)', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    getTrace.mockResolvedValue(detail('javascript:alert(1)'));
+    act(() => api.runMenu(run(), { x: 1, y: 1 }));
+    await act(async () => item('Open on GitHub').click());
+    expect(open).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="status"]')?.textContent).toMatch(/no GitHub link/);
+  });
+
+  it('portals the notice to the body', async () => {
+    getTrace.mockResolvedValue(detail(null));
+    act(() => api.runMenu(run(), { x: 1, y: 1 }));
+    await act(async () => item('Open on GitHub').click());
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    expect(document.body.querySelector(':scope > [role="status"]')).not.toBeNull();
+  });
+
   it('resolves the run url from the root span resource and opens it', async () => {
     const open = vi.spyOn(window, 'open').mockReturnValue(null);
     getTrace.mockResolvedValue(detail('https://github.com/o/r/actions/runs/7'));

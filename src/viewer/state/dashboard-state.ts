@@ -69,3 +69,12 @@ export function isPristine(s: DashboardPageState): boolean {
     s.run === null
   );
 }
+
+/**
+ * `next` with `run` dropped when the trace selection changed and the change did not set a new run (`openRun` does):
+ * a run is open only while its trace is the selection.
+ */
+export function withoutStaleRun(prev: DashboardPageState, next: DashboardPageState): DashboardPageState {
+  if (next.sel.trace === prev.sel.trace || next.run !== prev.run) return next;
+  return next.run === null ? next : { ...next, run: null };
+}

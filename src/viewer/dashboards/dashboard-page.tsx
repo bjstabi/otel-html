@@ -16,7 +16,7 @@ import { CopyButton, PageChrome } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
 import { absoluteTime, activePreset } from '../shell/time-range.js';
 import type { UrlPatch } from '../state/carry.js';
-import { type DashboardPageState, EMPTY_DASHBOARD_STATE } from '../state/dashboard-state.js';
+import { type DashboardPageState, EMPTY_DASHBOARD_STATE, withoutStaleRun } from '../state/dashboard-state.js';
 import type { Page } from '../state/page-options.js';
 import { markLive } from '../state/selection.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
@@ -304,7 +304,8 @@ function DashboardView(props: {
   const change = useCallback(
     (fn: (s: DashboardPageState) => DashboardPageState, live = false): void => {
       const s = store.getState();
-      const next = fn(s.dashboard ?? EMPTY_DASHBOARD_STATE);
+      const prev = s.dashboard ?? EMPTY_DASHBOARD_STATE;
+      const next = withoutStaleRun(prev, fn(prev));
       s.setDashboard(live ? markLive(next) : next);
     },
     [store],

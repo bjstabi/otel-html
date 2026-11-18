@@ -1,4 +1,14 @@
-import { createContext, type JSX, type ReactNode, useCallback, useContext, useEffect, useState } from 'react';
+import {
+  createContext,
+  type JSX,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
+import { createPortal } from 'react-dom';
 import type { Dashboard, QuickFilter, Variable } from '../../dashboards/schema.js';
 import { parseTraceId } from '../../model/ids.js';
 import { type MenuItem, useContextMenu } from '../components/context-menu.js';
@@ -26,12 +36,18 @@ interface RunActionsContext {
   dataSource: DataSource;
 }
 
-const Ctx = createContext<RunActionsContext | null>(null);
+interface Shared extends RunActionsContext {
+  /** The pane mode last used on this page; it outlives `d.run`, which a trace change clears. */
+  mode: { current: 'attached' | 'panel' };
+}
+
+const Ctx = createContext<Shared | null>(null);
 
 /** Mount once per dashboard page, inside the page's state: the run actions read and write `d` through it. */
 export function RunActionsProvider(props: RunActionsContext & { children: ReactNode }): JSX.Element {
   const { children, ...value } = props;
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  const mode = useRef<'attached' | 'panel'>('attached');
+  return <Ctx.Provider value={{ ...value, mode }}>{children}</Ctx.Provider>;
 }
 
 /** The quick filter that moves away from the run's own kind: main for a pull request, else pull requests. */
@@ -67,6 +83,8 @@ async function runUrl(dataSource: DataSource, traceId: CiRun['traceId']): Promis
 
 export interface RunActions {
   openRun(run: CiRun): void;
+  /** Sets the pane mode for the open run and for the runs opened after it. */
+  setMode(mode: 'attached' | 'panel'): void;
   runMenu(run: CiRun, at: At): void;
   /** `openTrend` adds the "Open its trend" item (the jobs table passes it). */
   jobMenu(job: string, at: At, openTrend?: () => void): void;
@@ -83,7 +101,7 @@ export interface RunActions {
 export function useRunActions(widgetId: string): RunActions {
   const ctx = useContext(Ctx);
   if (ctx === null) throw new Error('useRunActions needs a RunActionsProvider');
-  const { dashboard, state, change, dataSource } = ctx;
+  const { dashboard, state, change, dataSource, mode } = ctx;
   const menu = useContextMenu();
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
@@ -110,15 +128,22 @@ export function useRunActions(widgetId: string): RunActions {
       change((s) => ({
         ...s,
         sel: { ...s.sel, trace: parseTraceId(run.traceId, 'trace') },
-        run: { from: widgetId, mode: s.run?.mode ?? 'attached' },
+        run: { from: widgetId, mode: mode.current },
       })),
-    [change, widgetId],
+    [change, widgetId, mode],
+  );
+  const setMode = useCallback(
+    (m: 'attached' | 'panel'): void => {
+      mode.current = m;
+      change((s) => (s.run === null ? s : { ...s, run: { ...s.run, mode: m } }));
+    },
+    [change, mode],
   );
 
   const openOnGithub = (run: CiRun): void => {
     const none = (): void => setNotice('This run has no GitHub link.');
     runUrl(dataSource, run.traceId).then((url) => {
-      if (url === null) none();
+      if (url === null || !/^https?:\/\//.test(url)) none();
       else window.open(url, '_blank', 'noopener');
     }, none);
   };
@@ -162,6 +187,7 @@ export function useRunActions(widgetId: string): RunActions {
 
   return {
     openRun,
+    setMode,
     runMenu,
     jobMenu,
     triggerMenu: (trigger, at) =>
@@ -172,14 +198,16 @@ export function useRunActions(widgetId: string): RunActions {
     element: (
       <>
         {menu.element}
-        {notice !== null && (
-          <div
-            role="status"
-            className="fixed right-4 bottom-4 z-50 rounded-card border border-hairline bg-surface px-3 py-2 text-sm text-ink shadow-lg"
-          >
-            {notice}
-          </div>
-        )}
+        {notice !== null &&
+          createPortal(
+            <div
+              role="status"
+              className="fixed right-4 bottom-4 z-50 rounded-card border border-hairline bg-surface px-3 py-2 text-sm text-ink shadow-lg"
+            >
+              {notice}
+            </div>,
+            document.body,
+          )}
       </>
     ),
   };
