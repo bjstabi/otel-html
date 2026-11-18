@@ -30,7 +30,7 @@ const FROZEN_TRACES = 80;
 /** Formats 7 and 8 are frozen from three inputs (`small`, `metrics`, `ci`), so their counts differ. */
 const WITH_CI: Readonly<Record<string, { spans: number; traces: number; metrics: number }>> = {
   'format-7': { spans: 3334, traces: 92, metrics: 14 },
-  'format-8': { spans: 9702, traces: 121, metrics: 14 },
+  'format-8': { spans: 9939, traces: 121, metrics: 14 },
 };
 const tracesOf = (name: string): number => WITH_CI[name]?.traces ?? FROZEN_TRACES;
 

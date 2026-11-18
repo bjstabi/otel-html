@@ -172,7 +172,7 @@ describe('host', () => {
     const h = start(['host', dir, '--port', '0']);
     open.push(h);
     const base = baseOf(await line(h));
-    expect(await count(base, 'spans')).toEqual([{ n: 9702n }]);
+    expect(await count(base, 'spans')).toEqual([{ n: 9939n }]);
     expect(await count(base, 'points')).toEqual([{ n: 1173n }]);
     h.fire('SIGINT');
     expect(await h.result).toBe(0);
