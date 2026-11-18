@@ -235,6 +235,7 @@
     "test/viewer/carry.test.ts": 0.6,
     "test/viewer/chart.test.tsx": 0.5,
     "test/viewer/cicd/runs.test.ts": 0.3,
+    "test/viewer/context-menu.test.tsx": 0.4,
     "test/viewer/copy-config.test.ts": 0.6,
     "test/viewer/copy-widget.test.ts": 0.6,
     "test/viewer/dashboard-facets.test.tsx": 2.3,
