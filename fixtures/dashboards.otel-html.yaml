@@ -16,6 +16,13 @@ dashboards:
       - key: deployment.environment.name
         label: environment
         default: ci
+    quick:
+      - label: Production
+        set:
+          deployment.environment.name: production
+      - label: Any service
+        set:
+          service.name: null
     widgets:
       - type: timeline
         x: 0
@@ -60,6 +67,22 @@ dashboards:
         h: 8
         signal: logs
         groupBy: service.name
+      - type: toplist
+        title: Spans by name
+        x: 0
+        y: 32
+        w: 3
+        h: 6
+        signal: spans
+        groupBy: span.name
+      - type: toplist
+        title: Logs by severity
+        x: 3
+        y: 32
+        w: 3
+        h: 6
+        signal: logs
+        groupBy: severity_text
 
   - id: ci
     title: CI

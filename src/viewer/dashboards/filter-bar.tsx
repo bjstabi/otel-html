@@ -171,7 +171,7 @@ export function FilterBar(props: {
     setPinned(!pinned);
   };
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="contents">
       <div ref={sentinel} aria-hidden className="h-px" />
       <fieldset
         data-testid="filter-bar"
@@ -183,7 +183,7 @@ export function FilterBar(props: {
             Page filters
           </span>
           {dashboard.quick.length > 0 && (
-            <fieldset className="flex gap-1">
+            <fieldset className="m-0 flex min-w-0 flex-wrap gap-1 border-0 p-0">
               <legend className="sr-only">Quick filters</legend>
               {dashboard.quick.map((q) => {
                 const on = matches(q, dashboard.variables, state);
