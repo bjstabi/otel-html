@@ -59,6 +59,9 @@ async function open(page: Page, reportUrl: (name: 'run-charts') => string, id = 
   await expect(host).toBeVisible();
   await expect.poll(async () => (await readRunChart(host)).lines.length).toBeGreaterThan(0);
   await layoutSettled(page, host);
+  // The page filter bar and its slider push the card's slider below the fold; the tests drag it with the mouse.
+  await host.scrollIntoViewIfNeeded();
+  await layoutSettled(page, host);
   return host;
 }
 
