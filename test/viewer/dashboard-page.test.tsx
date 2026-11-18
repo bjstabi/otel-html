@@ -650,6 +650,19 @@ describe('the slider on CI dashboards', () => {
     await waitFor(() => expect(screen.getByText(/all 1 run selected/)).toBeTruthy());
   });
 
+  test('no count shows while the variables load', async () => {
+    const cicdRows = vi.fn(() => Promise.resolve([runRow(2)]));
+    const withVar = DashboardSchema.parse({ ...CI, variables: ['service.name'] });
+    renderShell('#/dashboards/ci', {
+      ...dataSourceOf(manifestWith([withVar]), VALUES),
+      resourceValues: () => new Promise(() => undefined),
+      cicdRows,
+    });
+    await screen.findByText('Loading variables…');
+    expect(screen.queryByText(/\d runs?\b/)).toBeNull();
+    expect(cicdRows).not.toHaveBeenCalled();
+  });
+
   test('a page without a cicd widget has no ticks and never calls cicdRows', async () => {
     const cicdRows = vi.fn(() => Promise.resolve([]));
     renderShell('#/dashboards/plain', { ...dataSourceOf(manifestWith([PLAIN]), VALUES), cicdRows });

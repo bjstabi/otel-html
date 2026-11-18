@@ -138,14 +138,15 @@ export function useCicdPage(
     first !== undefined && vars !== null,
   );
   return useMemo((): CicdPage => {
-    if (first === undefined || result.status !== 'ready') return { ticks: [], count: null };
+    if (first === undefined || vars === null || result.status !== 'ready' || result.span === null)
+      return { ticks: [], count: null };
     const ticks = result.runs.map((r) => ({ t: r.start, color: TICK_COLOR[r.result] }));
     const count =
       zoom === null
         ? ticks.length
         : result.runs.filter((r) => r.start >= zoom[0] && r.start <= zoom[1]).length;
     return { ticks, count };
-  }, [first, result, zoom]);
+  }, [first, vars, result, zoom]);
 }
 
 function useCicdRuns(
