@@ -14,12 +14,13 @@ import type { DataSource } from '../data/data-source.js';
 import type { TimeWindow } from '../data/time-window.js';
 import { STATUS } from '../theme/palette.js';
 import { narrowJobs, splitPeriods } from './derive.js';
+import { CICD_BRANCH, CICD_JOB, CICD_RUNNER, CICD_TRIGGER } from './registrations.js';
 import type { CiRun } from './runs.js';
 
-const JOB_KEY = 'cicd.pipeline.task.name';
-const RUNNER_KEY = 'cicd.worker.labels';
+const JOB_KEY = CICD_JOB;
+const RUNNER_KEY = CICD_RUNNER;
 /** The run-level keys the fetch itself is narrowed by; every other binding is applied to the jobs after it. */
-const FETCH_KEYS = new Set(['vcs.ref.head.name', 'cicd.pipeline.trigger']);
+const FETCH_KEYS = new Set([CICD_BRANCH, CICD_TRIGGER]);
 
 type Entry =
   | { status: 'loading' }
@@ -237,8 +238,8 @@ function honoured(widget: Widget, scope: Pick<WidgetScope, 'vars'>, key: string)
 /** Which rows and which field each CI variable key lists (the distinct values over the page window's runs). */
 const VALUE_FIELDS: Readonly<Record<string, { kind: CicdRow['kind']; pick: (r: CicdRow) => string | null }>> =
   {
-    'vcs.ref.head.name': { kind: 'run', pick: (r) => r.branch },
-    'cicd.pipeline.trigger': { kind: 'run', pick: (r) => r.trigger },
+    [CICD_BRANCH]: { kind: 'run', pick: (r) => r.branch },
+    [CICD_TRIGGER]: { kind: 'run', pick: (r) => r.trigger },
     [JOB_KEY]: { kind: 'job', pick: (r) => r.task ?? r.name },
     [RUNNER_KEY]: { kind: 'job', pick: (r) => r.labels },
   };

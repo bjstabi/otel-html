@@ -16,6 +16,10 @@ import {
   fixedScope,
   following,
   honours,
+  opensRuns,
+  registerFixedScope,
+  registerHonours,
+  registerOpensRuns,
   resourcesMatching,
   runByKey,
   scopeFor,
@@ -425,26 +429,16 @@ describe('honours and fixedScope', () => {
     expect(honours(run, variable('service.name'))).toBe(true);
   });
 
-  test('a cicd view honours the variables of the CI keys per the spec table', () => {
-    const cicd = (view: string): Widget => ({ ...WIDGETS.timeline, type: 'cicd', view }) as unknown as Widget;
-    const job = variable('cicd.pipeline.task.name');
-    const runner = variable('cicd.worker.labels');
-    const branch = variable('vcs.ref.head.name');
-    const trigger = variable('cicd.pipeline.trigger');
-    expect(honours(cicd('runs'), job)).toBe(false);
-    expect(honours(cicd('runs'), runner)).toBe(false);
-    expect(honours(cicd('runs'), branch)).toBe(true);
-    expect(honours(cicd('triggers'), trigger)).toBe(true);
-    expect(honours(cicd('jobs'), job)).toBe(true);
-    expect(honours(cicd('failures'), job)).toBe(true);
-    expect(honours(cicd('failures'), runner)).toBe(false);
-    expect(honours(cicd('queue'), runner)).toBe(true);
-    expect(honours(cicd('runs'), variable('service.name'))).toBe(false);
-  });
-
-  test('the tests view has the fixed scope latest run; others none', () => {
-    const cicd = (view: string): Widget => ({ ...WIDGETS.timeline, type: 'cicd', view }) as unknown as Widget;
-    expect(fixedScope(cicd('tests'))).toBe('latest run');
-    expect(fixedScope(cicd('runs'))).toBeNull();
+  test('a registered honours, fixed scope and opens-runs flag apply to their widget type only', () => {
+    const table = { ...WIDGETS.table } as Widget;
+    expect(opensRuns(table)).toBe(false);
+    registerHonours('table', (_w, v) => v.key !== 'x');
+    registerFixedScope('table', () => 'fixed');
+    registerOpensRuns('table');
+    expect(honours(table, variable('x'))).toBe(false);
+    expect(honours(table, variable('y'))).toBe(true);
+    expect(fixedScope(table)).toBe('fixed');
+    expect(opensRuns(table)).toBe(true);
+    expect(honours(WIDGETS.logs as Widget, variable('x'))).toBe(true);
   });
 });

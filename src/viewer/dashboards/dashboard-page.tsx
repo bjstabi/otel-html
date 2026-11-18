@@ -43,6 +43,7 @@ import {
   fixedScope,
   following,
   honours,
+  opensRuns,
   PageShared,
   scopeFor,
   selectedOf,
@@ -493,7 +494,7 @@ function DashboardView(props: {
 
   // the open run: from a `cicd` widget that is still on the page, attached under it or in the trace panel
   const runFrom = state.run === null ? undefined : d.widgets.find((w) => w.id === state.run?.from);
-  const runWidget = runFrom?.type === 'cicd' ? runFrom : undefined;
+  const runWidget = runFrom !== undefined && opensRuns(runFrom) ? runFrom : undefined;
   const runScope = runWidget === undefined ? undefined : scopes.get(runWidget.id)?.scope;
   const openTrace = state.sel.trace;
   const closeRun = (): void => change((s) => ({ ...s, run: null, sel: { ...s.sel, trace: null } }));

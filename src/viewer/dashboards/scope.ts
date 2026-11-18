@@ -162,43 +162,52 @@ export const WIDGET_SCOPE: Record<
   cicd: { window: 'selection', band: false, trace: 'none' },
 };
 
-/**
- * Whether the widget's data is narrowed by the variable. Table-driven by widget type so a type that ignores some
- * variables (or all, see `fixedScope`) adds a row; every generic type honours every variable.
- */
-const CICD_BRANCH = 'vcs.ref.head.name';
-const CICD_TRIGGER = 'cicd.pipeline.trigger';
-const CICD_JOB = 'cicd.pipeline.task.name';
-const CICD_RUNNER = 'cicd.worker.labels';
-const CICD_RUN_LEVEL = new Set(['stat', 'runs-trend', 'runs', 'triggers']);
+type HonoursFn = (widget: Widget, variable: Variable) => boolean;
 
-/** Spec §6: run-level views honour branch and trigger, `failures` all but runner, the rest all four. */
-function honoursCicd(widget: Widget, variable: Variable): boolean {
-  if (widget.type !== 'cicd') return true;
-  if (variable.key === CICD_BRANCH || variable.key === CICD_TRIGGER) return true;
-  if (CICD_RUN_LEVEL.has(widget.view)) return false;
-  if (variable.key === CICD_JOB) return true;
-  return variable.key === CICD_RUNNER && widget.view !== 'failures';
-}
-
-const HONOURS: Partial<Record<WidgetType, (widget: Widget, variable: Variable) => boolean>> = {
+const HONOURS = new Map<WidgetType, HonoursFn>([
   // A run chart groups by its `runBy` key, so a variable on that very key is not applied to its query.
-  metric: (widget, variable) =>
-    widget.type !== 'metric' || widget.runBy === null || runByKey(widget.runBy) !== variable.key,
-  cicd: honoursCicd,
-};
+  [
+    'metric',
+    (widget, variable) =>
+      widget.type !== 'metric' || widget.runBy === null || runByKey(widget.runBy) !== variable.key,
+  ],
+]);
 
-export function honours(widget: Widget, variable: Variable): boolean {
-  return HONOURS[widget.type]?.(widget, variable) ?? true;
+/**
+ * A widget type that ignores some variables registers which (the module that knows the type does); a type with no
+ * entry honours every variable.
+ */
+export function registerHonours(type: WidgetType, fn: HonoursFn): void {
+  HONOURS.set(type, fn);
 }
 
-const FIXED_SCOPE: Partial<Record<WidgetType, (widget: Widget) => string | null>> = {
-  cicd: (widget) => (widget.type === 'cicd' && widget.view === 'tests' ? 'latest run' : null),
-};
+/** Whether the widget's data is narrowed by the variable. */
+export function honours(widget: Widget, variable: Variable): boolean {
+  return HONOURS.get(widget.type)?.(widget, variable) ?? true;
+}
+
+const FIXED_SCOPE = new Map<WidgetType, (widget: Widget) => string | null>();
+
+/** A widget type whose scope the page filters do not change registers the text its dashed chip shows. */
+export function registerFixedScope(type: WidgetType, fn: (widget: Widget) => string | null): void {
+  FIXED_SCOPE.set(type, fn);
+}
 
 /** A text for a widget whose scope the page filters do not change (shown as a dashed chip); null when none. */
 export function fixedScope(widget: Widget): string | null {
-  return FIXED_SCOPE[widget.type]?.(widget) ?? null;
+  return FIXED_SCOPE.get(widget.type)?.(widget) ?? null;
+}
+
+const OPENS_RUNS = new Set<WidgetType>();
+
+/** A widget type whose rows open a run (the page then attaches the run's trace to it) registers itself. */
+export function registerOpensRuns(type: WidgetType): void {
+  OPENS_RUNS.add(type);
+}
+
+/** Whether the widget can be the `from` of an open run. */
+export function opensRuns(widget: Widget): boolean {
+  return OPENS_RUNS.has(widget.type);
 }
 
 /** Whether the widget follows the selection: the URL override, else the config. The timeline never does. */
