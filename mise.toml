@@ -532,6 +532,7 @@ sources = [
   "test-support/fixture-ids.ts",
   "test-support/format6.ts",
   "fixtures/**",
+  ".github/otel-html-ci.yaml",
 ]
 outputs = ["e2e/.reports-site/**", "e2e/.reports/**"]
 run = "bun e2e/build-fixtures.ts"

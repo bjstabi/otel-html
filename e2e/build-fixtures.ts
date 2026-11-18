@@ -7,6 +7,7 @@ import { reviveDataJson, unwrapDataFile } from '../src/format/data-file.js';
 import { isPartitioned, parseAnyManifest } from '../src/format/manifest.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
 import {
+  CI_CONFIG,
   DASHBOARDS_CONFIG,
   DASHBOARDS_HOSTILE_DEFAULT,
   DASHBOARDS_HOSTILE_DESCRIPTION,
@@ -459,6 +460,8 @@ async function buildFixtureReports(): Promise<void> {
         reportDir(name),
         fixtureFiles(name).map((f) => fileURLToPath(f)),
         `${name} fixture`,
+        undefined,
+        name === 'ci' ? fileURLToPath(CI_CONFIG) : undefined,
       ),
     ),
   ]);
