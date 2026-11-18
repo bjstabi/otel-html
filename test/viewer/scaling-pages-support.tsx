@@ -65,14 +65,23 @@ function withMetric(value: unknown, metric: string): unknown {
   );
 }
 
+/** The two CI configs a page is measured with: the legacy copy, and the one the publish action ships (cicd widgets). */
+export const CI_CONFIGS = {
+  legacy: 'test-support/legacy-ci.otel-html.yaml',
+  shipped: '.github/actions/otel-html-publish/otel-html-ci.yaml',
+} as const;
+export type CiConfig = (typeof CI_CONFIGS)[keyof typeof CI_CONFIGS];
+
 /**
- * The shipped CI dashboard, with the statistics keys the writer adds for the variables of a dashboard and its metric
+ * The CI dashboard as the live site had it before the cicd widgets (the legacy copy: its page scans spans, which the scaling catalogue pins), with the statistics keys the writer adds for the variables of a dashboard and its metric
  * queries pointed at the metric of the generated report (a query of a metric the report lacks asks nothing).
  */
-export function manifestWithCi(base: ManifestV4, metric: string): ManifestV4 {
-  const config = ConfigSchema.parse(
-    withMetric(parse(readFileSync('.github/otel-html-ci.yaml', 'utf8')), metric),
-  );
+export function manifestWithCi(
+  base: ManifestV4,
+  metric: string,
+  file: CiConfig = CI_CONFIGS.legacy,
+): ManifestV4 {
+  const config = ConfigSchema.parse(withMetric(parse(readFileSync(file, 'utf8')), metric));
   const keys = config.dashboards.flatMap((d) =>
     (d.dashboard.variables ?? []).map((v) => `resource:${typeof v === 'string' ? v : v.key}`),
   );
@@ -94,10 +103,12 @@ export async function pageOn(
   live: ScalingReport,
   hash: string,
   threshold: number,
-): Promise<Cost & { batches: number }> {
+  config: CiConfig = CI_CONFIGS.legacy,
+  required: readonly string[] = PAGE_CALLS[hash] ?? [],
+): Promise<Cost & { batches: number; methods: string[] }> {
   const counting = await openCountingEngine(live.dir, live.manifest, { threshold });
   try {
-    const manifest = manifestWithCi(live.manifest, live.ids.metric);
+    const manifest = manifestWithCi(live.manifest, live.ids.metric, config);
     await counting.cold();
     let batches = 0;
     const send = counting.engine.queryBatch;
@@ -115,11 +126,11 @@ export async function pageOn(
         <Shell dataSource={recording.ds} history={createHashHistory(window)} />
       </ThemeProvider>,
     );
-    await recording.settled(PAGE_CALLS[hash] ?? []);
+    await recording.settled(required);
     const events = await counting.take();
     const cost = costWith(events, counting.prepared());
     cleanup();
-    return { ...cost, batches };
+    return { ...cost, batches, methods: recording.calls.map((c) => c.method) };
   } finally {
     cleanup();
     await counting.close();

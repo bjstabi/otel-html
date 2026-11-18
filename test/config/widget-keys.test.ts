@@ -9,7 +9,7 @@ import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 async function ciDashboards() {
   const fs = createMemoryFileSystem();
   await fs.mkdirp('/c');
-  await fs.writeTextAtomic('/c/ci.yaml', await readFile('.github/otel-html-ci.yaml', 'utf8'));
+  await fs.writeTextAtomic('/c/ci.yaml', await readFile('test-support/legacy-ci.otel-html.yaml', 'utf8'));
   const { config } = resolveConfig({
     file: await loadConfigFile(fs, '/c/ci.yaml'),
     env: {},

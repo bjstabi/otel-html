@@ -2,12 +2,12 @@
 // delay (a model of network latency), cold, three runs per page.
 //   bun scripts/measure-live.ts --out <dir> [--build <dist dir>] [--job <name>] [--from <dir>] [--no-rebuild]
 // Downloads the live report into <out>/live (or copies --from <dir> there; the source is never changed), merges it into
-// <out>/rebuilt with the build's CLI (the copy computes the indexes), prints the widget_traces share of the spans bytes,
-// serves <out>/rebuilt with a 14 ms delay and measures each page. `mise run measure:live`.
+// <out>/rebuilt with the build's CLI (the copy computes the indexes), prints the widget_traces and cicd shares of the spans bytes,
+// serves <out>/rebuilt with a 14 ms delay, measures each page and the slider's frame rate. `mise run measure:live`.
 import { spawnSync } from 'node:child_process';
 import { cp, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { chromium, type Request } from '@playwright/test';
+import { chromium, type Page, type Request } from '@playwright/test';
 import { serve } from '../e2e/static-server.js';
 import { unwrapDataFile } from '../src/format/data-file.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
@@ -43,7 +43,7 @@ interface ManifestFile {
 }
 interface Manifest {
   formatVersion: number;
-  partitions: { files: Record<string, ManifestFile> }[];
+  partitions: { cicd?: true; files: Record<string, ManifestFile> }[];
 }
 
 async function sizeOf(path: string): Promise<number | null> {
@@ -100,7 +100,14 @@ async function reportSize(dir: string): Promise<string> {
   const sum = (kind: string): number => m.partitions.reduce((a, p) => a + (p.files[kind]?.bytes ?? 0), 0);
   const w = sum('widget_traces');
   const s = sum('spans');
-  return `format ${m.formatVersion}: widget_traces ${w} bytes, spans ${s} bytes, ${s === 0 ? 0 : ((100 * w) / s).toFixed(3)} %`;
+  const c = sum('cicd');
+  const flagged = m.partitions.filter((p) => p.cicd === true).length;
+  if (flagged === 0) throw new Error('no partition carries cicd: true: the merge derived no cicd table');
+  const share = (n: number): string => (s === 0 ? '0' : ((100 * n) / s).toFixed(3));
+  return [
+    `format ${m.formatVersion}: widget_traces ${w} bytes, spans ${s} bytes, ${share(w)} %`,
+    `cicd ${c} bytes, spans ${s} bytes, ${share(c)} %; ${flagged} of ${m.partitions.length} partitions carry cicd: true`,
+  ].join('\n');
 }
 
 interface Sample {
@@ -109,7 +116,11 @@ interface Sample {
   settledMs: number;
 }
 
-async function measure(base: string, route: string): Promise<{ sample: Sample; hash: string }> {
+async function measure(
+  base: string,
+  route: string,
+  after?: (page: Page) => Promise<void>,
+): Promise<{ sample: Sample; hash: string }> {
   const prefix = base.slice(0, base.lastIndexOf('/') + 1);
   const browser = await chromium.launch();
   try {
@@ -142,13 +153,57 @@ async function measure(base: string, route: string): Promise<{ sample: Sample; h
         throw new Error(`${route}: not settled after ${TIMEOUT_MS} ms (${open.size} requests open)`);
       await new Promise((ok) => setTimeout(ok, 100));
     }
+    const sample = { requests, spans, settledMs: Math.round(lastDone) };
+    await after?.(page);
     return {
-      sample: { requests, spans, settledMs: Math.round(lastDone) },
+      sample,
       hash: await page.evaluate(() => location.hash),
     };
   } finally {
     await browser.close();
   }
+}
+
+const DRAG_MS = 2000;
+const DRAG_STEP_MS = 16;
+
+/** Frames per second over a 2 s scripted drag of the zoom slider's right handle toward the middle and back. */
+async function dragFps(page: Page): Promise<number> {
+  const handle = page.getByRole('slider', { name: 'Zoom end' });
+  const track = await page.getByTestId('range-slider').boundingBox();
+  const box = await handle.boundingBox();
+  if (track === null || box === null) throw new Error('the zoom slider is not on the page');
+  const y = box.y + box.height / 2;
+  const x0 = box.x + box.width / 2;
+  const x1 = track.x + track.width / 2;
+  await page.evaluate(() => {
+    const w = window as unknown as { __frames: number; __stop: boolean };
+    w.__frames = 0;
+    w.__stop = false;
+    const tick = (): void => {
+      w.__frames += 1;
+      if (!w.__stop) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  await page.mouse.move(x0, y);
+  await page.mouse.down();
+  const steps = Math.round(DRAG_MS / DRAG_STEP_MS);
+  const t0 = performance.now();
+  for (let i = 1; i <= steps; i += 1) {
+    const f = i <= steps / 2 ? i / (steps / 2) : (steps - i) / (steps / 2);
+    await page.mouse.move(x0 + (x1 - x0) * f, y);
+    const wait = t0 + i * DRAG_STEP_MS - performance.now();
+    if (wait > 0) await new Promise((ok) => setTimeout(ok, wait));
+  }
+  const seconds = (performance.now() - t0) / 1000;
+  const frames = await page.evaluate(() => {
+    const w = window as unknown as { __frames: number; __stop: boolean };
+    w.__stop = true;
+    return w.__frames;
+  });
+  await page.mouse.up();
+  return frames / seconds;
 }
 
 /** The route of the first trace of the traces list: opens the list, clicks its first row and reads the route (`&trace=<id>`). */
@@ -241,6 +296,15 @@ async function main(): Promise<void> {
         `| ${name} | ${median(col('requests'))} (${span(col('requests'))}) | ${median(col('spans'))} (${span(col('spans'))}) | ${median(col('settledMs'))} (${span(col('settledMs'))}) |`,
       );
     }
+    const fps: number[] = [];
+    for (let i = 0; i < RUNS; i += 1)
+      await measure(base, '#/dashboards/ci', async (page) => {
+        fps.push(await dragFps(page));
+      });
+    print();
+    print(
+      `slider drag on #/dashboards/ci (${DRAG_MS} ms, ${RUNS} fresh contexts): ${median(fps).toFixed(1)} fps median, range ${Math.min(...fps).toFixed(1)}-${Math.max(...fps).toFixed(1)}`,
+    );
   } finally {
     await server.close();
   }

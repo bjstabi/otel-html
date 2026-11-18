@@ -58,7 +58,7 @@ describe('parseUrlState', () => {
     const r = parseUrlState('tab=overview');
     expect(r.state).toEqual({});
     expect(r.errors).toEqual([
-      'tab: expected one of flame, waterfall, spans, services, logs, metrics, errors, got overview',
+      'tab: expected one of jobs, flame, waterfall, spans, services, logs, metrics, errors, got overview',
     ]);
   });
 

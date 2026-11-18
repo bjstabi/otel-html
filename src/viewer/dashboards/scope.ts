@@ -12,7 +12,7 @@ import {
   facetToken,
   tokensToOttl,
 } from '../components/filter-tokens.js';
-import type { ResourceValues } from '../data/data-source.js';
+import type { DataSource, ResourceValues } from '../data/data-source.js';
 import type { TimeWindow } from '../data/time-window.js';
 import type { DashboardPageState } from '../state/dashboard-state.js';
 
@@ -38,6 +38,43 @@ export async function variableValues(
   const all = await read(key, null);
   if (all.values.length === 0) return inWindow;
   return empty ? { ...inWindow, kind: all.kind, emptyInWindow: true } : { ...inWindow, kind: all.kind };
+}
+
+/** Page-lifetime state shared between the values sources and the widgets (one slot per token, made on first use). */
+export class PageShared {
+  private readonly slots = new Map<object, unknown>();
+
+  get<T>(token: object, make: () => T): T {
+    if (!this.slots.has(token)) this.slots.set(token, make());
+    return this.slots.get(token) as T;
+  }
+}
+
+/** What a values source is told about the page it serves. */
+export interface ValuesSourceContext {
+  widgets: readonly Widget[];
+  dataSource: DataSource;
+  shared: PageShared;
+}
+
+/** Answers a variable's values for a window (null is the whole report); null when the page cannot use this source. */
+export type ValuesSource = (
+  ctx: ValuesSourceContext,
+) => ((window: TimeWindow | null) => Promise<ResourceValues>) | null;
+
+const VALUES_SOURCES = new Map<string, ValuesSource>();
+
+/** A variable key's own values source, asked before `resourceValues` (the module that knows the key registers it). */
+export function registerValuesSource(key: string, source: ValuesSource): void {
+  VALUES_SOURCES.set(key, source);
+}
+
+/** The registered source for `key` as it applies to this page; null when there is none (use `resourceValues`). */
+export function valuesSourceFor(
+  key: string,
+  ctx: ValuesSourceContext,
+): ((window: TimeWindow | null) => Promise<ResourceValues>) | null {
+  return VALUES_SOURCES.get(key)?.(ctx) ?? null;
 }
 
 /** A variable's selected value: the URL's (`null` is all), else the config default; `null` when none is selected. */
@@ -122,27 +159,55 @@ export const WIDGET_SCOPE: Record<
   metric: { window: 'page', band: true, trace: 'resources' },
   toplist: { window: 'selection', band: false, trace: 'filter' },
   table: { window: 'selection', band: false, trace: 'filter' },
+  cicd: { window: 'selection', band: false, trace: 'none' },
 };
+
+type HonoursFn = (widget: Widget, variable: Variable) => boolean;
+
+const HONOURS = new Map<WidgetType, HonoursFn>([
+  // A run chart groups by its `runBy` key, so a variable on that very key is not applied to its query.
+  [
+    'metric',
+    (widget, variable) =>
+      widget.type !== 'metric' || widget.runBy === null || runByKey(widget.runBy) !== variable.key,
+  ],
+]);
 
 /**
- * Whether the widget's data is narrowed by the variable. Table-driven by widget type so a type that ignores some
- * variables (or all, see `fixedScope`) adds a row; every generic type honours every variable.
+ * A widget type that ignores some variables registers which (the module that knows the type does); a type with no
+ * entry honours every variable.
  */
-const HONOURS: Partial<Record<WidgetType, (widget: Widget, variable: Variable) => boolean>> = {
-  // A run chart groups by its `runBy` key, so a variable on that very key is not applied to its query.
-  metric: (widget, variable) =>
-    widget.type !== 'metric' || widget.runBy === null || runByKey(widget.runBy) !== variable.key,
-};
-
-export function honours(widget: Widget, variable: Variable): boolean {
-  return HONOURS[widget.type]?.(widget, variable) ?? true;
+export function registerHonours(type: WidgetType, fn: HonoursFn): void {
+  HONOURS.set(type, fn);
 }
 
-const FIXED_SCOPE: Partial<Record<WidgetType, (widget: Widget) => string | null>> = {};
+/** Whether the widget's data is narrowed by the variable. */
+export function honours(widget: Widget, variable: Variable): boolean {
+  return HONOURS.get(widget.type)?.(widget, variable) ?? true;
+}
+
+const FIXED_SCOPE = new Map<WidgetType, (widget: Widget) => string | null>();
+
+/** A widget type whose scope the page filters do not change registers the text its dashed chip shows. */
+export function registerFixedScope(type: WidgetType, fn: (widget: Widget) => string | null): void {
+  FIXED_SCOPE.set(type, fn);
+}
 
 /** A text for a widget whose scope the page filters do not change (shown as a dashed chip); null when none. */
 export function fixedScope(widget: Widget): string | null {
-  return FIXED_SCOPE[widget.type]?.(widget) ?? null;
+  return FIXED_SCOPE.get(widget.type)?.(widget) ?? null;
+}
+
+const OPENS_RUNS = new Set<WidgetType>();
+
+/** A widget type whose rows open a run (the page then attaches the run's trace to it) registers itself. */
+export function registerOpensRuns(type: WidgetType): void {
+  OPENS_RUNS.add(type);
+}
+
+/** Whether the widget can be the `from` of an open run. */
+export function opensRuns(widget: Widget): boolean {
+  return OPENS_RUNS.has(widget.type);
 }
 
 /** Whether the widget follows the selection: the URL override, else the config. The timeline never does. */
@@ -225,6 +290,8 @@ function signalOf(widget: Widget): FacetSignal | 'datapoint' {
     case 'toplist':
     case 'table':
       return widget.signal === 'logs' ? 'log' : 'span';
+    case 'cicd':
+      return 'span';
   }
 }
 
@@ -237,6 +304,7 @@ function ownQuery(widget: Widget): string | null {
       return widget.query;
     case 'timeline':
     case 'metric':
+    case 'cicd':
       return null;
   }
 }

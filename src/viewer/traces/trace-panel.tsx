@@ -50,6 +50,8 @@ export interface TracePanelProps {
    */
   traceIds?: readonly TraceId[];
   onClose(): void;
+  /** Fills the Jobs tab (the open CI run); without it the tab is not offered. */
+  renderJobs?: (detail: TraceDetail) => ReactNode;
   /** Replaces the span section (tests); the default is `SpanSection`. */
   renderSpanSection?: (props: SpanSectionProps) => ReactNode;
 }
@@ -271,7 +273,12 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
     [layout],
   );
 
-  const tabs = load.status === 'ready' ? availableTabs(load.value, { hasMetrics }) : [];
+  const tabs =
+    load.status === 'ready'
+      ? availableTabs(load.value, { hasMetrics }).filter(
+          (t) => t.id !== 'jobs' || props.renderJobs !== undefined,
+        )
+      : [];
   const wanted = sel.tabs.trace;
   const active: TraceTabId | null =
     tabs.length === 0 ? null : (tabs.find((t) => t.id === wanted)?.id ?? tabs[0]?.id ?? null);
@@ -302,6 +309,8 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
 
   const body = (detail: TraceDetail, tab: TraceTabId): JSX.Element => {
     switch (tab) {
+      case 'jobs':
+        return <>{props.renderJobs?.(detail)}</>;
       case 'flame':
         return (
           <FlameGraph detail={detail} selectedSpanId={sel.spanId} onSelect={selectSpan} colors={colors} />

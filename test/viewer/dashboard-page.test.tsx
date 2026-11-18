@@ -568,3 +568,107 @@ describe('navigation', () => {
     expect(widgetHeightPx(13)).toBe(380);
   });
 });
+
+describe('the slider on CI dashboards', () => {
+  const CI = DashboardSchema.parse({
+    id: 'ci',
+    title: 'CI',
+    widgets: [{ id: 'r', type: 'cicd', view: 'runs', x: 0, y: 0, w: 12, h: 8 }],
+  });
+  const PLAIN = DashboardSchema.parse({
+    id: 'plain',
+    title: 'Plain',
+    widgets: [{ type: 'timeline', x: 0, y: 0, w: 12, h: 6 }],
+  });
+  const runRow = (i: number) => ({
+    kind: 'run' as const,
+    traceId: i.toString(16).padStart(32, '0'),
+    spanId: null,
+    start: i * 1_000_000_000,
+    end: i * 1_000_000_000 + 500_000_000,
+    name: null,
+    result: i % 4 === 0 ? 'failure' : 'success',
+    pipeline: null,
+    runId: String(i),
+    attempt: 1,
+    trigger: 'push',
+    branch: 'main',
+    revision: null,
+    title: 't',
+    task: null,
+    taskId: null,
+    labels: null,
+    queuedNs: null,
+    needs: null,
+    condition: null,
+    failedStep: null,
+    tasksReplayed: null,
+    tasksRun: null,
+  });
+
+  test('a cicd widget gives the slider a tick per run, coloured by result, and "12 runs"', async () => {
+    const rows = Array.from({ length: 12 }, (_, i) => runRow(i + 1));
+    const cicdRows = vi.fn(() => Promise.resolve(rows));
+    renderShell('#/dashboards/ci', { ...dataSourceOf(manifestWith([CI]), VALUES), cicdRows });
+    expect(await screen.findByText(/all 12 runs selected/)).toBeTruthy();
+    expect(cicdRows).toHaveBeenCalledTimes(1);
+    const ticks = [...document.querySelectorAll<HTMLElement>('div.absolute.w-0\\.5')];
+    expect(ticks).toHaveLength(12);
+    expect(screen.getAllByText('12 runs')).toHaveLength(1);
+    const colours = new Set(ticks.map((t) => t.style.backgroundColor));
+    expect(colours.size).toBe(2);
+  });
+
+  test('a zoom counts the runs starting inside it, in the bar and in the slider header', async () => {
+    const rows = Array.from({ length: 12 }, (_, i) => runRow(i + 1));
+    const t = '3000000000~6000000000';
+    renderShell(`#/dashboards/ci?${dParam({ sel: { t, trace: null } })}`, {
+      ...dataSourceOf(manifestWith([CI]), VALUES),
+      cicdRows: () => Promise.resolve(rows),
+    });
+    await waitFor(() => expect(screen.getAllByText(/\b4 runs\b/)).toHaveLength(2));
+  });
+
+  test('one run reads "1 run"; two runs at the same start each get a tick', async () => {
+    const rows = [runRow(2), { ...runRow(2), traceId: 'b'.repeat(32), runId: '9' }];
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    renderShell('#/dashboards/ci', {
+      ...dataSourceOf(manifestWith([CI]), VALUES),
+      cicdRows: () => Promise.resolve(rows),
+    });
+    await screen.findByText(/all 2 runs selected/);
+    expect(document.querySelectorAll('div.absolute.w-0\\.5')).toHaveLength(2);
+    expect(err.mock.calls.flat().join(' ')).not.toMatch(/same key/);
+  });
+
+  test('a single run reads "1 run"', async () => {
+    renderShell('#/dashboards/ci', {
+      ...dataSourceOf(manifestWith([CI]), VALUES),
+      cicdRows: () => Promise.resolve([runRow(2)]),
+    });
+    await waitFor(() => expect(screen.getAllByText('1 run')).toHaveLength(1));
+    await waitFor(() => expect(screen.getByText(/all 1 run selected/)).toBeTruthy());
+  });
+
+  test('no count shows while the variables load', async () => {
+    const cicdRows = vi.fn(() => Promise.resolve([runRow(2)]));
+    const withVar = DashboardSchema.parse({ ...CI, variables: ['service.name'] });
+    renderShell('#/dashboards/ci', {
+      ...dataSourceOf(manifestWith([withVar]), VALUES),
+      resourceValues: () => new Promise(() => undefined),
+      cicdRows,
+    });
+    await screen.findByText('Loading variables…');
+    expect(screen.queryByText(/\d runs?\b/)).toBeNull();
+    expect(cicdRows).not.toHaveBeenCalled();
+  });
+
+  test('a page without a cicd widget has no ticks and never calls cicdRows', async () => {
+    const cicdRows = vi.fn(() => Promise.resolve([]));
+    renderShell('#/dashboards/plain', { ...dataSourceOf(manifestWith([PLAIN]), VALUES), cicdRows });
+    await screen.findByRole('heading', { name: 'Plain', level: 1 });
+    expect(document.querySelectorAll('div.absolute.w-0\\.5')).toHaveLength(0);
+    expect(screen.queryByText(/runs/)).toBeNull();
+    expect(cicdRows).not.toHaveBeenCalled();
+  });
+});

@@ -11,6 +11,7 @@ const TYPE_TITLES: Record<WidgetType, string> = {
   metric: 'Metrics',
   toplist: 'Top list',
   table: 'Table',
+  cicd: 'CI',
 };
 
 /** The widget's own title, else its type's. */
@@ -89,6 +90,8 @@ export interface WidgetFrameProps {
   editing: boolean;
   /** The page filters as this widget sees them; hidden under 768 px. */
   echo?: FilterEcho;
+  /** Drawn over the card (the open run's connector). */
+  overlay?: ReactNode;
   children: ReactNode;
 }
 
@@ -101,9 +104,9 @@ export function WidgetFrame(props: WidgetFrameProps): JSX.Element {
     <section
       aria-labelledby={titleId}
       data-widget={widget.id}
-      className="flex h-full min-h-0 flex-col overflow-hidden rounded-card border border-hairline bg-surface"
+      className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-card border border-hairline bg-surface"
     >
-      <header className="flex items-center gap-2 border-b border-hairline px-3 py-1.5">
+      <header className="@container flex items-center gap-2 border-b border-hairline px-3 py-1.5">
         {props.editing && (
           <button
             type="button"
@@ -116,18 +119,25 @@ export function WidgetFrame(props: WidgetFrameProps): JSX.Element {
         <h2 id={titleId} className="text-sm font-semibold">
           {title}
         </h2>
-        <span className="min-w-0 flex-1 truncate text-xs text-muted">{props.subtitle}</span>
+        <span className="min-w-0 flex-1 truncate text-xs text-muted">
+          {/* below the breakpoint the subtitle stays for assistive technology only (the page bar shows the window) */}
+          <span data-subtitle className="sr-only @[22rem]:not-sr-only">
+            {props.subtitle}
+          </span>
+        </span>
         {props.echo !== undefined && <EchoChips echo={props.echo} />}
         {following !== null && (
           <button
             type="button"
             aria-pressed={following}
+            aria-label="follows selection"
             onClick={() => props.onFollow(!following)}
             title={following ? 'Follows the selection' : 'Ignores the selection'}
             className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs text-ink-2 hover:bg-hairline aria-pressed:bg-ink aria-pressed:text-page"
           >
             <Link2 size={12} aria-hidden />
-            follows selection
+            {/* a narrow header (a small tile) shows the icon only; the name and title carry the words */}
+            <span className="hidden @[22rem]:inline">follows selection</span>
           </button>
         )}
         {openIn !== null && (
@@ -144,6 +154,7 @@ export function WidgetFrame(props: WidgetFrameProps): JSX.Element {
       <div className="min-h-0 flex-1 overflow-auto p-2">
         <WidgetBoundary resetKey={props.resetKey}>{props.children}</WidgetBoundary>
       </div>
+      {props.overlay}
     </section>
   );
 }

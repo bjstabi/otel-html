@@ -48,7 +48,7 @@ describe('conditionId', () => {
 
 describe('widgetTraceConditions', () => {
   test('the CI config indexes its Runs query once, on one line or three, under its three variables', async () => {
-    const spec = widgetTraceConditions(await dashboardsOf('.github/otel-html-ci.yaml'));
+    const spec = widgetTraceConditions(await dashboardsOf('test-support/legacy-ci.otel-html.yaml'));
     expect(spec.conditions).toHaveLength(1);
     const [only] = spec.conditions;
     expect(only?.id).toMatch(/^[0-9a-f]{16}$/);
@@ -68,10 +68,7 @@ describe('widgetTraceConditions', () => {
       .flatMap((d) => d.dashboard.widgets)
       .filter((w) => w.type === 'traces' && w.query === null);
     expect(queryless.length).toBeGreaterThan(0);
-    const spec = widgetTraceConditions(dashboards);
-    expect(spec.conditions.map((c) => c.source)).toEqual([
-      expect.stringContaining('instrumentation_scope.name == "otel-html-ci"'),
-    ]);
+    expect(widgetTraceConditions(dashboards).conditions).toEqual([]);
     expect(widgetTraceConditions(dashboardWith([{ type: 'traces' }], [{ key: 'k' }]))).toEqual({
       conditions: [],
       variables: [],

@@ -328,3 +328,24 @@ describe('quick filters', () => {
     expect(DashboardSchema.safeParse({ ...base, quick }).success).toBe(false);
   });
 });
+
+describe('the cicd widget', () => {
+  const ci = (over: Record<string, unknown>): WidgetInput =>
+    ({ type: 'cicd', x: 0, y: 0, w: 2, h: 6, ...over }) as WidgetInput;
+  it('needs stat for view stat and refuses it otherwise', () => {
+    expect(DashboardSchema.safeParse(dash([ci({ view: 'stat' })])).success).toBe(false);
+    expect(DashboardSchema.safeParse(dash([ci({ view: 'stat', stat: 'cache' })])).success).toBe(true);
+    expect(DashboardSchema.safeParse(dash([ci({ view: 'runs', stat: 'cache' })])).success).toBe(false);
+  });
+  it('takes by only for minutes, defaulting to trigger', () => {
+    const r = DashboardSchema.safeParse(dash([ci({ view: 'minutes', by: 'job' })]));
+    expect(r.success).toBe(true);
+    const d = DashboardSchema.parse(dash([ci({ view: 'minutes' })]));
+    expect(d.widgets[0]).toMatchObject({ by: 'trigger', follow: true });
+    expect(DashboardSchema.safeParse(dash([ci({ view: 'runs', by: 'job' })])).success).toBe(false);
+  });
+  it('takes no query and refuses an unknown view', () => {
+    expect(DashboardSchema.safeParse(dash([ci({ view: 'runs', query: 'x == 1' })])).success).toBe(false);
+    expect(DashboardSchema.safeParse(dash([ci({ view: 'nope' })])).success).toBe(false);
+  });
+});

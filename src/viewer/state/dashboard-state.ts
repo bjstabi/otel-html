@@ -15,6 +15,8 @@ export interface DashboardPageState {
   follow: Record<string, boolean>;
   /** Per-widget overrides of the Logs widget's view. */
   logView: Record<string, LogViewMode>;
+  /** The open CI run: the widget it was opened from and how the pane shows (null when none is open). */
+  run: { from: string; mode: 'attached' | 'panel' } | null;
 }
 
 export const EMPTY_DASHBOARD_STATE: DashboardPageState = {
@@ -22,6 +24,7 @@ export const EMPTY_DASHBOARD_STATE: DashboardPageState = {
   sel: { t: null, trace: null },
   follow: {},
   logView: {},
+  run: null,
 };
 
 export const DashboardPageStateSchema: z.ZodType<DashboardPageState> = z.strictObject({
@@ -34,9 +37,13 @@ export const DashboardPageStateSchema: z.ZodType<DashboardPageState> = z.strictO
     .default({ t: null, trace: null }),
   follow: z.record(z.string(), z.boolean()).default({}),
   logView: z.record(z.string(), z.enum(['matches', 'context'], 'one of matches, context')).default({}),
+  run: z
+    .strictObject({ from: z.string(), mode: z.enum(['attached', 'panel'], 'one of attached, panel') })
+    .nullable()
+    .default(null),
 });
 
-/** The URL key `d`: JSON text to a state, or one error line naming the offending path (`d.sel.t`). */
+/** The URL key `d`: JSON text to a state (a `run` with no `sel.trace` to open is dropped), or one error line naming the offending path (`d.sel.t`). */
 export function parseDashboardParam(
   raw: string,
 ): { ok: true; state: DashboardPageState } | { ok: false; error: string } {
@@ -47,7 +54,11 @@ export function parseDashboardParam(
     return { ok: false, error: `d: expected a JSON object, got ${shown(raw)}` };
   }
   const r = DashboardPageStateSchema.safeParse(json);
-  if (r.success) return { ok: true, state: r.data };
+  if (r.success)
+    return {
+      ok: true,
+      state: r.data.run !== null && r.data.sel.trace === null ? { ...r.data, run: null } : r.data,
+    };
   return { ok: false, error: paramError('d', json, r.error.issues[0]) };
 }
 
@@ -58,6 +69,16 @@ export function isPristine(s: DashboardPageState): boolean {
     s.sel.t === null &&
     s.sel.trace === null &&
     Object.keys(s.follow).length === 0 &&
-    Object.keys(s.logView).length === 0
+    Object.keys(s.logView).length === 0 &&
+    s.run === null
   );
+}
+
+/**
+ * `next` with `run` dropped when the trace selection changed and the change did not set a new run (`openRun` does):
+ * a run is open only while its trace is the selection.
+ */
+export function withoutStaleRun(prev: DashboardPageState, next: DashboardPageState): DashboardPageState {
+  if (next.sel.trace === prev.sel.trace || next.run !== prev.run) return next;
+  return next.run === null ? next : { ...next, run: null };
 }

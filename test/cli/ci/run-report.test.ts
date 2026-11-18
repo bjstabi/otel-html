@@ -89,7 +89,7 @@ const ju = (update: UpdateJson, dir = `/u/${update.sequence}`): JobUpdate => ({ 
 const first = (): UpdateJson =>
   push(1, [
     part('job:7#flush:0', 'partitions/0/spans.parquet', 3, '10', '20', true, {
-      'resource:cicd.pipeline.run.id': ['42'],
+      'resource:cicd.pipeline.trigger': ['push'],
       extra: ['x'],
     }),
     part('job:7#flush:1', 'partitions/1/spans.parquet', 4, '15', '30'),
@@ -127,7 +127,7 @@ describe('newRunManifest', () => {
       format: 'site',
       assetsBase: '../../../assets/0.4.0/',
     });
-    expect(m.statisticsKeys.spans).toContain('resource:cicd.pipeline.run.id');
+    expect(m.statisticsKeys.spans).toContain('resource:cicd.pipeline.trigger');
     expect(m.partitions).toEqual([]);
     expect(m.range).toBeNull();
   });
@@ -140,14 +140,14 @@ describe('planSync statistics', () => {
       ju(
         push(1, [
           part('job:7#flush:0', 'partitions/0/spans.parquet', 3, '10', '20', true, {
-            'resource:cicd.pipeline.run.id': null,
+            'resource:cicd.pipeline.trigger': null,
           }),
         ]),
       ),
     ]);
     const values = plan.manifest.partitions[0]?.files.spans?.values;
-    expect(values?.['resource:cicd.pipeline.run.id']).toBeNull();
-    expect(values && 'resource:cicd.pipeline.name' in values).toBe(false);
+    expect(values?.['resource:cicd.pipeline.trigger']).toBeNull();
+    expect(values && 'resource:vcs.ref.head.name' in values).toBe(false);
   });
 });
 
@@ -185,10 +185,12 @@ describe('planSync', () => {
     expect(plan.manifest.complete).toBe(false);
     expect(plan.manifest.updatedAt).toBe(NOW);
     const v = plan.manifest.partitions[0]?.files.spans?.values;
-    expect(Object.keys(v ?? {})).toEqual(['resource:cicd.pipeline.run.id']); // keys the job computed; the rest stay absent
-    expect(v?.['resource:cicd.pipeline.run.id']).toEqual(['42']);
+    expect(Object.keys(v ?? {})).toEqual(['resource:cicd.pipeline.trigger']); // keys the job computed; the rest stay absent
+    expect(v?.['resource:cicd.pipeline.trigger']).toEqual(['push']);
     expect(v).not.toHaveProperty('extra');
-    expect(plan.manifest.partitions[1]?.files.spans?.values['resource:cicd.pipeline.run.id']).toBeUndefined();
+    expect(
+      plan.manifest.partitions[1]?.files.spans?.values['resource:cicd.pipeline.trigger'],
+    ).toBeUndefined();
     const back = parseAnyManifest(manifestForWrite(plan.manifest));
     expect(isPartitioned(back) ? back.partitions : null).toEqual(plan.manifest.partitions);
   });

@@ -363,7 +363,7 @@ describe('setter validation and bind errors', () => {
     expect(() => s.setCondition('a ==')).toThrow(/condition/);
     expect(() => s.setGroupBy('')).toThrow(/groupBy/);
     expect(() => s.setTab('trace', '')).toThrow(/tabs.trace/);
-    expect(() => s.setTab('trace', 'bogus')).toThrow(/tabs.trace[\s\S]*one of flame/);
+    expect(() => s.setTab('trace', 'bogus')).toThrow(/tabs.trace[\s\S]*one of jobs, flame/);
     expect(() => s.setTab('log', 'flame')).toThrow(/tabs.log[\s\S]*one of attributes/);
   });
 });

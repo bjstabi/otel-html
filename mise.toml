@@ -790,9 +790,10 @@ depends = ["build"]
 description = """Measure the CI dashboard and other pages on a local rebuild of the live site's data, at 14 ms per request
 Downloads the live report (https://bjstabi.github.io/otel-html/branch/main/, about 140 MB; `-- --from <dir>` copies a
 downloaded report instead), merges it with this build's CLI into `<out>/rebuilt` (format 7 computes the indexes; about a
-minute), prints the `widget_traces` bytes against the spans bytes, serves it with a 14 ms delay and loads six pages cold
-three times each in Chromium (about 3 minutes): root, the CI dashboard with and without `-- --job <name>` bound, the
-traces list, logs and a trace open. Prints the median and range of requests, `spans.parquet` requests and settled time.
+minute), prints the `widget_traces` and `cicd` bytes against the spans bytes (and how many partitions carry `cicd: true`), serves
+it with a 14 ms delay and loads six pages cold three times each in Chromium (about 3 minutes): root, the CI dashboard with and without `-- --job <name>` bound, the
+traces list, logs and a trace open. Prints the median and range of requests, `spans.parquet` requests and settled time, then the frames per second of three
+scripted 2 s drags of the CI dashboard's zoom slider (about 20 s more).
 `-- --out <dir>` is required (`-- --from` must not be `<dir>`, inside it or above it); `-- --job <name>` defaults to `check`; `-- --build <dist>` measures another build; `-- --no-rebuild` serves `<out>/live` as is."""
 shell = "bash -c"
 usage = 'arg "[args]" var=#true'

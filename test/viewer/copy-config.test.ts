@@ -177,7 +177,9 @@ describe('dashboardToYaml', () => {
         widgets: [
           type === 'toplist' || type === 'table'
             ? { type, x: 0, y: 0, w: 6, h: 6, signal: 'spans', groupBy: 'service.name' }
-            : { type, x: 0, y: 0, w: 6, h: 6 },
+            : type === 'cicd'
+              ? { type, x: 0, y: 0, w: 6, h: 6, view: 'runs' }
+              : { type, x: 0, y: 0, w: 6, h: 6 },
         ],
       });
       const [w] = d.widgets;

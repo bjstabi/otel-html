@@ -121,7 +121,7 @@ const job = (result: string, over: Made = {}): Made => ({
 async function ciIndex() {
   const fs = createMemoryFileSystem();
   await fs.mkdirp('/c');
-  await fs.writeTextAtomic('/c/ci.yaml', await readFile('.github/otel-html-ci.yaml', 'utf8'));
+  await fs.writeTextAtomic('/c/ci.yaml', await readFile('test-support/legacy-ci.otel-html.yaml', 'utf8'));
   const { config } = resolveConfig({
     file: await loadConfigFile(fs, '/c/ci.yaml'),
     env: {},

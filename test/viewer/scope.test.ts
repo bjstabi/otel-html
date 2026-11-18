@@ -16,6 +16,10 @@ import {
   fixedScope,
   following,
   honours,
+  opensRuns,
+  registerFixedScope,
+  registerHonours,
+  registerOpensRuns,
   resourcesMatching,
   runByKey,
   scopeFor,
@@ -32,6 +36,20 @@ const TRACE = 'c'.repeat(32) as TraceId;
 const PAGE = { start: 100, end: 200 };
 
 const WIDGETS: Record<WidgetType, Widget> = {
+  cicd: {
+    type: 'cicd',
+    id: 'w7',
+    title: null,
+    x: 0,
+    y: 0,
+    w: 6,
+    h: 6,
+    follow: true,
+    view: 'runs',
+    stat: null,
+    by: 'trigger',
+    pipeline: null,
+  },
   timeline: { type: 'timeline', id: 'w1', title: null, x: 0, y: 0, w: 12, h: 6 },
   traces: {
     type: 'traces',
@@ -396,7 +414,7 @@ describe('resourcesMatching', () => {
 describe('honours and fixedScope', () => {
   const variable = (key: string) => ({ key, label: key, default: null });
   test('every generic widget honours every variable and has no fixed scope', () => {
-    for (const w of Object.values(WIDGETS)) {
+    for (const w of Object.values(WIDGETS).filter((x) => x.type !== 'cicd')) {
       expect(honours(w, variable('service.name'))).toBe(true);
       expect(fixedScope(w)).toBeNull();
     }
@@ -409,5 +427,18 @@ describe('honours and fixedScope', () => {
     } as Widget;
     expect(honours(run, variable('run'))).toBe(false);
     expect(honours(run, variable('service.name'))).toBe(true);
+  });
+
+  test('a registered honours, fixed scope and opens-runs flag apply to their widget type only', () => {
+    const table = { ...WIDGETS.table } as Widget;
+    expect(opensRuns(table)).toBe(false);
+    registerHonours('table', (_w, v) => v.key !== 'x');
+    registerFixedScope('table', () => 'fixed');
+    registerOpensRuns('table');
+    expect(honours(table, variable('x'))).toBe(false);
+    expect(honours(table, variable('y'))).toBe(true);
+    expect(fixedScope(table)).toBe('fixed');
+    expect(opensRuns(table)).toBe(true);
+    expect(honours(WIDGETS.logs as Widget, variable('x'))).toBe(true);
   });
 });

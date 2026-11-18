@@ -33,6 +33,7 @@ export const WIDGET_DEFAULTS: Record<WidgetType, Readonly<Record<string, unknown
   },
   toplist: { title: null, follow: true, query: null, text: '', echarts: null },
   table: { title: null, follow: true, query: null, text: '' },
+  cicd: { title: null, follow: true, stat: null, by: 'trigger', pipeline: null },
 };
 
 /** The grid size (columns × rows) a widget of each type gets when copied out of an explorer. */
@@ -43,6 +44,7 @@ export const WIDGET_DEFAULT_SIZE: Record<WidgetType, { w: number; h: number }> =
   metric: { w: 6, h: 8 },
   toplist: { w: 4, h: 8 },
   table: { w: 4, h: 8 },
+  cicd: { w: 6, h: 8 },
 };
 
 /** Fields written first, in this order, so the YAML reads type, title, position, then the rest. */
