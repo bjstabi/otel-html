@@ -29,15 +29,18 @@ function snap(v: number, [e0, e1]: Range): number {
   return v;
 }
 
+/** Whole nanoseconds: a window in the URL is integers, and a pixel is rarely a whole number of them. */
+const whole = ([a, b]: Range): Range => [Math.round(a), Math.round(b)];
+
 /** The new zoom after dragging `handle` to `at` (body: by `delta` from `from`), clamped to the extent. */
 function dragged(handle: Handle, from: Range, at: number, delta: number, extent: Range): Range {
   const [e0, e1] = extent;
   const gap = (e1 - e0) * MIN_SHARE;
-  if (handle === 'start') return [snap(Math.max(e0, Math.min(at, from[1] - gap)), extent), from[1]];
-  if (handle === 'end') return [from[0], snap(Math.min(e1, Math.max(at, from[0] + gap)), extent)];
+  if (handle === 'start') return whole([snap(Math.max(e0, Math.min(at, from[1] - gap)), extent), from[1]]);
+  if (handle === 'end') return whole([from[0], snap(Math.min(e1, Math.max(at, from[0] + gap)), extent)]);
   const width = from[1] - from[0];
   const start = Math.max(e0, Math.min(from[0] + delta, e1 - width));
-  return [snap(start, extent), snap(start + width, extent)];
+  return whole([snap(start, extent), snap(start + width, extent)]);
 }
 
 /**
@@ -48,6 +51,15 @@ export function RangeSlider(props: RangeSliderProps): JSX.Element {
   const { extent, zoom, ticks, onZoom, onRelease } = props;
   const [draft, setDraft] = useState<Range | null>(null);
   const drag = useRef<{ handle: Handle; from: Range; x0: number } | null>(null);
+  // the last zoom this slider emitted, until the caller's `zoom` catches up (key repeats within one frame build on it)
+  const emitted = useRef<Range | null>(null);
+  useEffect(() => {
+    emitted.current = null; // every render of the caller's state ends the wait (a new `zoom` arrives with it)
+  });
+  const emit = (next: Range): void => {
+    emitted.current = next;
+    onZoom(next[0] === extent[0] && next[1] === extent[1] ? null : next);
+  };
   const shown = draft ?? zoom ?? extent;
   const span = extent[1] - extent[0];
   const x = (t: number): number => (span === 0 ? 0 : ((t - extent[0]) / span) * WIDTH);
@@ -70,7 +82,7 @@ export function RangeSlider(props: RangeSliderProps): JSX.Element {
     const { at, delta } = valueAt(e);
     const next = dragged(d.handle, d.from, at, delta, extent);
     setDraft(next);
-    onZoom(next[0] === extent[0] && next[1] === extent[1] ? null : next);
+    emit(next);
   };
   const end = () => {
     if (drag.current === null) return;
@@ -83,10 +95,9 @@ export function RangeSlider(props: RangeSliderProps): JSX.Element {
     if (dir === 0) return;
     e.preventDefault();
     const step = span * (e.shiftKey ? 0.1 : 0.01) * dir;
-    const from = zoom ?? extent;
+    const from = emitted.current ?? zoom ?? extent;
     const at = (handle === 'start' ? from[0] : from[1]) + step;
-    const next = dragged(handle, from, at, 0, extent);
-    onZoom(next[0] === extent[0] && next[1] === extent[1] ? null : next);
+    emit(dragged(handle, from, at, 0, extent));
   };
 
   const [s0, s1] = [x(shown[0]), x(shown[1])];

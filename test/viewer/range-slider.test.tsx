@@ -66,7 +66,7 @@ test('arrow keys move a handle by 1 %, shift by 10 %', () => {
   fireEvent.keyDown(start, { key: 'ArrowRight' });
   expect(onZoom).toHaveBeenLastCalledWith([260, 750]);
   fireEvent.keyDown(screen.getByLabelText('Zoom end'), { key: 'ArrowLeft', shiftKey: true });
-  expect(onZoom).toHaveBeenLastCalledWith([250, 650]);
+  expect(onZoom).toHaveBeenLastCalledWith([260, 650]);
 });
 
 test('the writer writes once per frame and flushes the last value on release', () => {

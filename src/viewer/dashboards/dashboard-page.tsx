@@ -128,6 +128,16 @@ function presetOf(w: TimeWindow | null, manifest: DataSource['manifest'], floor:
   return label === 'Entire run' ? 'all' : label;
 }
 
+/**
+ * The URL text of a slider zoom: whole nanoseconds (a pointer rarely lands on one), the start no earlier than the URL
+ * can state (0 unanchored, the anchor's own zero otherwise).
+ */
+function zoomText(z: readonly [number, number], anchor: bigint | null): string {
+  const lowest = anchor === null ? 0 : -Number(anchor);
+  const start = Math.max(lowest, Math.round(z[0]));
+  return formatWindow({ start, end: Math.max(start, Math.round(z[1])) }, anchor ?? undefined);
+}
+
 function windowText(w: TimeWindow | null, epoch: ReturnType<typeof parseUnixNanos>): string {
   return w === null ? 'entire run' : `${absoluteTime(w.start, epoch)} – ${absoluteTime(w.end, epoch)}`;
 }
@@ -483,7 +493,7 @@ function DashboardView(props: {
                 ...s,
                 sel: {
                   ...s.sel,
-                  t: z === null ? null : formatWindow({ start: z[0], end: z[1] }, anchor ?? undefined),
+                  t: z === null ? null : zoomText(z, anchor),
                 },
               }))
             }
