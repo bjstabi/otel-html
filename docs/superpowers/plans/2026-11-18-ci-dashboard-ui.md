@@ -866,3 +866,17 @@ is from the previous push run. Attributes and resource attributes are JSON text 
 - **Consequence for the plan.** The `cache` tile and hollow marks can key on `mise.task.skipped = true` (bool, present
   only when skipped). Test spans carry no `cicd.pipeline.task.name`/`run.id` on the resource: attribute them to a CI run
   and job through `trace_id` shared with the mise spans of the same job, not through their own resource.
+
+### PR 2 amendments (2026-11-18)
+
+What PR 3 builds on, changed from the task text by the branch review:
+- **FilterBar** takes `count?: ReactNode` (the run-count slot) and `ticks` (threaded to `ZoomRow`/`RangeSlider`);
+  Task 24 passes them instead of filling an empty slot.
+- **The slider header line of spec §5.2** (extent; "all N selected · drag to zoom" or "from – to · duration · N runs")
+  and drawing a new range on the bare track are built in PR 2. `count` supplies the N and the "· N runs" part.
+- **A preset, custom range or step clears `sel.t`**; slider writes are whole nanoseconds; URL writes during a drag
+  are throttled (`markLive`, at most one per 250 ms, the final value on release).
+- **`useContextMenu`** renders through a portal to `document.body`; `element` is `JSX.Element | null`.
+- **`honours`** is false for a metric widget's `runBy` variable (the run chart ignores it); PR 3 adds the `cicd` rows.
+- **The shell sidebar** folds into a drawer under 768 px (every page scrolled sideways at 390 px before).
+- The 30 fps drag figure is still measured in Task 25 (ruling R14).
