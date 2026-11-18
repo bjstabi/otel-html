@@ -147,7 +147,8 @@ export function FilterBar(props: {
   bound: VariableBindings | null;
   state: DashboardPageState;
   onVars(vars: DashboardPageState['vars']): void;
-  onZoom(zoom: [number, number] | null): void;
+  /** `live` is true for the steps of a drag (the URL write may wait), false for the last one and for a click. */
+  onZoom(zoom: [number, number] | null, live?: boolean): void;
   slider: FilterBarSlider | null;
   /** The run count shown at the bar's right edge (empty until the CI widgets). */
   count?: ReactNode;

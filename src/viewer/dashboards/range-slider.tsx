@@ -181,17 +181,24 @@ export function RangeSlider(props: RangeSliderProps): JSX.Element {
   );
 }
 
-/** A writer that calls `write` with the latest value at most once per animation frame, and `flush` to write it now. */
-function useFrameWriter<T>(write: (v: T) => void): { write: (v: T) => void; flush: () => void } {
+/**
+ * A writer that calls `write(v, true)` with the latest value at most once per animation frame (a live step), and
+ * `flush` to write the last value now, as `write(v, false)`: the commit that ends a drag.
+ */
+function useFrameWriter<T>(write: (v: T, live: boolean) => void): {
+  write: (v: T) => void;
+  flush: () => void;
+} {
   const latest = useRef(write);
   latest.current = write;
   const pending = useRef<{ v: T } | null>(null);
+  const last = useRef<{ v: T } | null>(null);
   const frame = useRef<number | null>(null);
   const run = useCallback(() => {
     frame.current = null;
     const p = pending.current;
     pending.current = null;
-    if (p !== null) latest.current(p.v);
+    if (p !== null) latest.current(p.v, true);
   }, []);
   useEffect(
     () => () => {
@@ -202,14 +209,19 @@ function useFrameWriter<T>(write: (v: T) => void): { write: (v: T) => void; flus
   const put = useCallback(
     (v: T) => {
       pending.current = { v };
+      last.current = { v };
       if (frame.current === null) frame.current = requestAnimationFrame(run);
     },
     [run],
   );
   const flush = useCallback(() => {
     if (frame.current !== null) cancelAnimationFrame(frame.current);
-    run();
-  }, [run]);
+    frame.current = null;
+    pending.current = null;
+    const l = last.current;
+    last.current = null;
+    if (l !== null) latest.current(l.v, false);
+  }, []);
   return { write: put, flush };
 }
 
@@ -219,14 +231,14 @@ export function ZoomRow(props: {
   zoom: Range | null;
   preset: string | null;
   epoch: bigint;
-  onZoom(zoom: Range | null): void;
+  onZoom(zoom: Range | null, live?: boolean): void;
   /** False where the range dropdown beside it already says it (the filter bar). */
   label?: boolean;
   ticks?: readonly { t: number; color: string }[];
   /** How many runs are selected: "all <count> selected" unzoomed, "· <count>" after the zoom's duration. */
   count?: ReactNode;
 }): JSX.Element {
-  const frames = useFrameWriter(props.onZoom);
+  const frames = useFrameWriter<Range | null>(props.onZoom);
   const l = rangeLabel(props);
   const { count } = props;
   const has = count !== undefined && count !== null && count !== false;

@@ -15,6 +15,7 @@ import { absoluteTime, activePreset } from '../shell/time-range.js';
 import type { UrlPatch } from '../state/carry.js';
 import { type DashboardPageState, EMPTY_DASHBOARD_STATE } from '../state/dashboard-state.js';
 import type { Page } from '../state/page-options.js';
+import { markLive } from '../state/selection.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
 import { formatWindow, parseWindow, windowParam } from '../state/url-state.js';
 import { type KeyedState, useKeyedAsync } from '../state/use-keyed-async.js';
@@ -296,9 +297,10 @@ function DashboardView(props: {
 
   /** Applies `fn` to the state as it is now, so two quick changes never overwrite each other. */
   const change = useCallback(
-    (fn: (s: DashboardPageState) => DashboardPageState): void => {
+    (fn: (s: DashboardPageState) => DashboardPageState, live = false): void => {
       const s = store.getState();
-      s.setDashboard(fn(s.dashboard ?? EMPTY_DASHBOARD_STATE));
+      const next = fn(s.dashboard ?? EMPTY_DASHBOARD_STATE);
+      s.setDashboard(live ? markLive(next) : next);
     },
     [store],
   );

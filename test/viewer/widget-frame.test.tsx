@@ -31,3 +31,30 @@ test('the header shows a filled chip, an "ignores" chip and the fixed scope', ()
   expect(screen.getByText('ignores run')).toBeTruthy();
   expect(screen.getByText('last 30 runs')).toBeTruthy();
 });
+
+test('the chips clip inside their own group; the header actions never shrink', () => {
+  if (widget === undefined) throw new Error('no widget');
+  render(
+    <WidgetFrame
+      resetKey="k"
+      widget={widget}
+      subtitle="s"
+      following={true}
+      onFollow={() => undefined}
+      openIn={{ label: 'Open in Logs', onOpen: () => undefined }}
+      editing={false}
+      echo={{
+        honoured: ['job = a-very-long-job-name', 'runner = a-very-long-runner-name'],
+        ignored: ['a-long-label'],
+        scope: null,
+      }}
+    >
+      <div />
+    </WidgetFrame>,
+  );
+  const group = screen.getByTestId('echo');
+  for (const cls of ['min-w-0', 'shrink', 'overflow-hidden']) expect(group.className).toContain(cls);
+  for (const chip of Array.from(group.children)) expect(chip.className).toContain('shrink-0');
+  expect(screen.getByRole('button', { name: /follows selection/ }).className).toContain('shrink-0');
+  expect(screen.getByRole('button', { name: /Open in Logs/ }).className).toContain('shrink-0');
+});

@@ -56,11 +56,12 @@ export interface FilterEcho {
 function EchoChips({ echo }: { echo: FilterEcho }): JSX.Element | null {
   const stacked = useStacked();
   if (stacked) return null;
-  const filled = 'rounded-full bg-hairline px-2 py-0.5 text-xs text-ink-2 whitespace-nowrap';
+  const filled = 'shrink-0 rounded-full bg-hairline px-2 py-0.5 text-xs text-ink-2 whitespace-nowrap';
   const dashed =
-    'rounded-full border border-dashed border-hairline px-2 py-0.5 text-xs text-muted whitespace-nowrap';
+    'shrink-0 rounded-full border border-dashed border-hairline px-2 py-0.5 text-xs text-muted whitespace-nowrap';
+  // the group gives way (clipped) before the actions beside it do
   return (
-    <>
+    <div data-testid="echo" className="flex min-w-0 shrink items-center gap-2 overflow-hidden">
       {echo.honoured.map((t) => (
         <span key={`h:${t}`} className={filled}>
           {t}
@@ -72,7 +73,7 @@ function EchoChips({ echo }: { echo: FilterEcho }): JSX.Element | null {
         </span>
       ))}
       {echo.scope !== null && <span className={dashed}>{echo.scope}</span>}
-    </>
+    </div>
   );
 }
 
@@ -123,7 +124,7 @@ export function WidgetFrame(props: WidgetFrameProps): JSX.Element {
             aria-pressed={following}
             onClick={() => props.onFollow(!following)}
             title={following ? 'Follows the selection' : 'Ignores the selection'}
-            className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-ink-2 hover:bg-hairline aria-pressed:bg-ink aria-pressed:text-page"
+            className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs text-ink-2 hover:bg-hairline aria-pressed:bg-ink aria-pressed:text-page"
           >
             <Link2 size={12} aria-hidden />
             follows selection
@@ -133,7 +134,7 @@ export function WidgetFrame(props: WidgetFrameProps): JSX.Element {
           <button
             type="button"
             onClick={openIn.onOpen}
-            className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-accent hover:bg-hairline"
+            className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs text-accent hover:bg-hairline"
           >
             {openIn.label}
             <ArrowUpRight size={12} aria-hidden />

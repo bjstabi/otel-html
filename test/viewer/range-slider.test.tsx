@@ -85,7 +85,7 @@ test('the writer writes once per frame and flushes the last value on release', (
   expect(write).not.toHaveBeenCalled();
   fireEvent.pointerUp(svg);
   expect(write).toHaveBeenCalledTimes(1);
-  expect(write).toHaveBeenCalledWith([250, 1000]);
+  expect(write).toHaveBeenCalledWith([250, 1000], false);
   vi.unstubAllGlobals();
 });
 

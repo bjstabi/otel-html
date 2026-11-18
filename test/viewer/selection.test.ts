@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import type { SpanId, TraceId } from '../../src/model/ids.js';
 import {
@@ -12,6 +12,7 @@ import {
   bindUrl,
   createSelectionStore,
   type HistoryPort,
+  markLive,
   selectionToUrlState,
 } from '../../src/viewer/state/selection.js';
 import { formatWindow, parseUrlState } from '../../src/viewer/state/url-state.js';
@@ -194,6 +195,75 @@ describe('bindUrl', () => {
       { s: `t=1~11&trace=${TRACE}`, mode: 'replace' },
       { s: `t=1~11&trace=${TRACE}&span=${SPAN}`, mode: 'push' },
     ]);
+  });
+
+  describe('live changes (a slider drag)', () => {
+    afterEach(() => vi.useRealTimers());
+    const step = (store: ReturnType<typeof createSelectionStore>, t: string): void => {
+      const d = store.getState().dashboard;
+      store.getState().setDashboard(
+        markLive({
+          ...(d ?? { vars: {}, follow: {}, logView: {}, sel: { t: null, trace: null } }),
+          sel: { t, trace: null },
+        } as never),
+      );
+    };
+
+    test('the store updates every step, the URL at most every 250 ms, and the last step is written', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000);
+      const store = createSelectionStore({});
+      const h = fakeHistory('');
+      bindUrl(store, h, () => undefined);
+      step(store, '1~9');
+      expect(h.writes).toHaveLength(1); // the first goes at once
+      for (let i = 2; i <= 40; i++) {
+        vi.advanceTimersByTime(10);
+        step(store, `${i}~9`);
+        expect(store.getState().dashboard?.sel.t).toBe(`${i}~9`);
+      }
+      expect(h.writes.length).toBeLessThanOrEqual(3); // 400 ms: the first, one per 250 ms
+      vi.advanceTimersByTime(300);
+      expect(h.writes[h.writes.length - 1]?.s).toContain(encodeURIComponent('40~9'));
+    });
+
+    test('a commit (a change that is not live) writes the last value at once', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000);
+      const store = createSelectionStore({});
+      const h = fakeHistory('');
+      bindUrl(store, h, () => undefined);
+      step(store, '1~9');
+      step(store, '2~9');
+      expect(h.writes).toHaveLength(1);
+      const d = store.getState().dashboard;
+      if (d === null) throw new Error('no dashboard');
+      store.getState().setDashboard({ ...d });
+      expect(h.writes).toHaveLength(2);
+      expect(h.writes[1]?.s).toContain(encodeURIComponent('2~9'));
+      vi.advanceTimersByTime(1000);
+      expect(h.writes).toHaveLength(2);
+    });
+
+    test('unbinding writes what was waiting; a URL change from outside drops it', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000);
+      const store = createSelectionStore({});
+      const h = fakeHistory('');
+      const unbind = bindUrl(store, h, () => undefined);
+      step(store, '1~9');
+      step(store, '2~9');
+      unbind();
+      expect(h.writes).toHaveLength(2);
+      const other = createSelectionStore({});
+      const h2 = fakeHistory('');
+      bindUrl(other, h2, () => undefined);
+      step(other, '1~9');
+      step(other, '2~9');
+      h2.external('');
+      vi.advanceTimersByTime(1000);
+      expect(h2.writes).toHaveLength(1);
+    });
   });
 
   test('external URL changes update the store without writing back', () => {
