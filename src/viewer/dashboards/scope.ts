@@ -128,10 +128,14 @@ export const WIDGET_SCOPE: Record<
  * Whether the widget's data is narrowed by the variable. Table-driven by widget type so a type that ignores some
  * variables (or all, see `fixedScope`) adds a row; every generic type honours every variable.
  */
-const HONOURS: Partial<Record<WidgetType, (variable: Variable) => boolean>> = {};
+const HONOURS: Partial<Record<WidgetType, (widget: Widget, variable: Variable) => boolean>> = {
+  // A run chart groups by its `runBy` key, so a variable on that very key is not applied to its query.
+  metric: (widget, variable) =>
+    widget.type !== 'metric' || widget.runBy === null || runByKey(widget.runBy) !== variable.key,
+};
 
 export function honours(widget: Widget, variable: Variable): boolean {
-  return HONOURS[widget.type]?.(variable) ?? true;
+  return HONOURS[widget.type]?.(widget, variable) ?? true;
 }
 
 const FIXED_SCOPE: Partial<Record<WidgetType, (widget: Widget) => string | null>> = {};

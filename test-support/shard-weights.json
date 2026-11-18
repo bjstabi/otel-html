@@ -323,6 +323,7 @@
     "test/viewer/views-menu.test.tsx": 2.3,
     "test/viewer/views.test.ts": 0.9,
     "test/viewer/waterfall.test.tsx": 1.7,
+    "test/viewer/widget-frame.test.tsx": 1,
     "test/writer/append.test.ts": 0.9,
     "test/writer/assets-cleanup.test.ts": 0.6,
     "test/writer/attribute-keys-paths.test.ts": 0.5,

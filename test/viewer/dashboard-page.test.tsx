@@ -29,6 +29,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -121,7 +122,6 @@ describe('the filter echo in widget headers', () => {
     );
     await waitFor(() => expect(main().getAllByRole('region')).toHaveLength(4));
     expect(within(metricFrame()).queryByText('service.name = web')).toBeNull();
-    vi.unstubAllGlobals();
   });
 });
 
