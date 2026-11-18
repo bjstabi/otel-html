@@ -12,6 +12,7 @@ import { honours, type WidgetScope } from '../dashboards/scope.js';
 import type { CicdQuery, CicdRow } from '../data/cicd-query.js';
 import type { DataSource } from '../data/data-source.js';
 import type { TimeWindow } from '../data/time-window.js';
+import { STATUS } from '../theme/palette.js';
 import { narrowJobs, splitPeriods } from './derive.js';
 import type { CiRun } from './runs.js';
 
@@ -104,14 +105,62 @@ function fetchWindow(extent: TimeWindow): TimeWindow {
  * before it, joined per period. A view that honours the `job` and `runner` bindings (`honours`) has its jobs narrowed.
  */
 export function useCicd(widget: Widget, scope: Pick<WidgetScope, 'window' | 'vars'>): CicdResult {
+  return useCicdRuns(widget, scope, true);
+}
+
+/** What the page's slider shows of the CI runs: a tick per run in the page window, and the runs inside the zoom. */
+export interface CicdPage {
+  ticks: { t: number; color: string }[];
+  /** The runs inside `zoom` (all of them unzoomed); null while there is nothing to count (no `cicd` widget, loading). */
+  count: number | null;
+}
+
+const TICK_COLOR: Record<CiRun['result'], string> = {
+  success: STATUS.good,
+  failure: STATUS.critical,
+  cancelled: STATUS.warning,
+};
+
+/**
+ * The page's ticks and run count, from the same shared fetch as the widgets: the first `cicd` widget's pipeline and
+ * the page's bindings (the run-level ones decide the fetch; job and runner narrowing is that widget's own, so the
+ * page counts every run). Without a `cicd` widget it makes no request.
+ */
+export function useCicdPage(
+  widgets: readonly Widget[],
+  vars: WidgetScope['vars'] | null,
+  zoom: readonly [number, number] | null,
+): CicdPage {
+  const first = widgets.find((w) => w.type === 'cicd');
+  const result = useCicdRuns(
+    first ?? widgets[0],
+    { window: null, vars: vars ?? [] },
+    first !== undefined && vars !== null,
+  );
+  return useMemo((): CicdPage => {
+    if (first === undefined || result.status !== 'ready') return { ticks: [], count: null };
+    const ticks = result.runs.map((r) => ({ t: r.start, color: TICK_COLOR[r.result] }));
+    const count =
+      zoom === null
+        ? ticks.length
+        : result.runs.filter((r) => r.start >= zoom[0] && r.start <= zoom[1]).length;
+    return { ticks, count };
+  }, [first, result, zoom]);
+}
+
+function useCicdRuns(
+  widget: Widget | undefined,
+  scope: Pick<WidgetScope, 'window' | 'vars'>,
+  enabled: boolean,
+): CicdResult {
   const ctx = useContext(Ctx);
   if (ctx === null) throw new Error('useCicd needs a CicdProvider');
   const { store, extent } = ctx;
-  const pipeline = widget.type === 'cicd' ? widget.pipeline : null;
+  const pipeline = widget?.type === 'cicd' ? widget.pipeline : null;
   const fetchBindings = scope.vars
     .filter((v) => FETCH_KEYS.has(v.key))
     .map((v) => ({ key: v.key, value: v.value }));
-  const fetchWin = extent === null ? null : fetchWindow(extent);
+  const fetchWin = extent === null || !enabled ? null : fetchWindow(extent);
   const key = JSON.stringify([fetchWin, fetchBindings, pipeline]);
   useEffect(() => {
     const [window, bindings, pipe] = JSON.parse(key) as [
@@ -127,8 +176,8 @@ export function useCicd(widget: Widget, scope: Pick<WidgetScope, 'window' | 'var
   const span = scope.window ?? extent;
   const spanStart = span?.start ?? null;
   const spanEnd = span?.end ?? null;
-  const job = honoured(widget, scope, JOB_KEY);
-  const runner = honoured(widget, scope, RUNNER_KEY);
+  const job = widget === undefined ? null : honoured(widget, scope, JOB_KEY);
+  const runner = widget === undefined ? null : honoured(widget, scope, RUNNER_KEY);
   return useMemo((): CicdResult => {
     if (entry.status === 'error')
       return { status: 'error', runs: NONE, previous: NONE, span: null, error: entry.error };

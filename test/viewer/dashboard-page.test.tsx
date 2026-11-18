@@ -568,3 +568,62 @@ describe('navigation', () => {
     expect(widgetHeightPx(13)).toBe(380);
   });
 });
+
+describe('the slider on CI dashboards', () => {
+  const CI = DashboardSchema.parse({
+    id: 'ci',
+    title: 'CI',
+    widgets: [{ id: 'r', type: 'cicd', view: 'runs', x: 0, y: 0, w: 12, h: 8 }],
+  });
+  const PLAIN = DashboardSchema.parse({
+    id: 'plain',
+    title: 'Plain',
+    widgets: [{ type: 'timeline', x: 0, y: 0, w: 12, h: 6 }],
+  });
+  const runRow = (i: number) => ({
+    kind: 'run' as const,
+    traceId: i.toString(16).padStart(32, '0'),
+    spanId: null,
+    start: i * 1_000_000_000,
+    end: i * 1_000_000_000 + 500_000_000,
+    name: null,
+    result: i % 4 === 0 ? 'failure' : 'success',
+    pipeline: null,
+    runId: String(i),
+    attempt: 1,
+    trigger: 'push',
+    branch: 'main',
+    revision: null,
+    title: 't',
+    task: null,
+    taskId: null,
+    labels: null,
+    queuedNs: null,
+    needs: null,
+    condition: null,
+    failedStep: null,
+    tasksReplayed: null,
+    tasksRun: null,
+  });
+
+  test('a cicd widget gives the slider a tick per run, coloured by result, and "12 runs"', async () => {
+    const rows = Array.from({ length: 12 }, (_, i) => runRow(i + 1));
+    const cicdRows = vi.fn(() => Promise.resolve(rows));
+    renderShell('#/dashboards/ci', { ...dataSourceOf(manifestWith([CI]), VALUES), cicdRows });
+    expect(await screen.findByText(/all 12 runs selected/)).toBeTruthy();
+    expect(cicdRows).toHaveBeenCalledTimes(1);
+    const ticks = [...document.querySelectorAll<HTMLElement>('div.absolute.w-0\\.5')];
+    expect(ticks).toHaveLength(12);
+    const colours = new Set(ticks.map((t) => t.style.backgroundColor));
+    expect(colours.size).toBe(2);
+  });
+
+  test('a page without a cicd widget has no ticks and never calls cicdRows', async () => {
+    const cicdRows = vi.fn(() => Promise.resolve([]));
+    renderShell('#/dashboards/plain', { ...dataSourceOf(manifestWith([PLAIN]), VALUES), cicdRows });
+    await screen.findByRole('heading', { name: 'Plain', level: 1 });
+    expect(document.querySelectorAll('div.absolute.w-0\\.5')).toHaveLength(0);
+    expect(screen.queryByText(/runs/)).toBeNull();
+    expect(cicdRows).not.toHaveBeenCalled();
+  });
+});

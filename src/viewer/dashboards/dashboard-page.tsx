@@ -1,11 +1,19 @@
 import { Menu } from '@base-ui/react/menu';
 import { ChevronDown, Copy, LayoutDashboard, Pencil } from 'lucide-react';
-import { type JSX, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import {
+  type ComponentProps,
+  type JSX,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import type { RunControls, Variable, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import { RunActionsProvider } from '../cicd/run-actions.js';
 import { OpenRunBody, RunConnector, RunPane } from '../cicd/run-pane.js';
-import { CicdProvider } from '../cicd/use-cicd.js';
+import { CicdProvider, useCicdPage } from '../cicd/use-cicd.js';
 import { CicdWidget } from '../cicd/widget.js';
 import type { DataSource } from '../data/data-source.js';
 import { manifestRange } from '../data/manifest-range.js';
@@ -26,7 +34,7 @@ import { type KeyedState, useKeyedAsync } from '../state/use-keyed-async.js';
 import { TracePanel } from '../traces/trace-panel.js';
 import { dashboardToYaml } from './copy-config.js';
 import { DashboardLink } from './dashboard-link.js';
-import { FilterBar } from './filter-bar.js';
+import { FilterBar, type FilterBarSlider } from './filter-bar.js';
 import { DashboardGrid, useStacked } from './grid.js';
 import { type DashboardEntry, dashboardsOf, findDashboard } from './registry.js';
 import { useRunSession } from './run-session.js';
@@ -271,6 +279,26 @@ function NotFound(props: { id: string; manifest: DataSource['manifest'] }): JSX.
 }
 
 type ValuesByKey = Readonly<Record<string, VariableValues>>;
+
+/**
+ * The filter bar with the CI runs on its slider: a tick per run and "N runs" (those inside the zoom), from the
+ * widgets' shared fetch. A page with no `cicd` widget gets none and makes no request.
+ */
+function CicdFilterBar(
+  props: ComponentProps<typeof FilterBar> & { widgets: readonly Widget[] },
+): JSX.Element {
+  const { widgets, slider, bound, ...rest } = props;
+  const cicd = useCicdPage(widgets, bound?.bindings ?? null, slider?.zoom ?? null);
+  const withRuns: FilterBarSlider | null =
+    slider === null
+      ? null
+      : {
+          ...slider,
+          ticks: cicd.ticks,
+          ...(cicd.count === null ? {} : { count: `${cicd.count} runs` }),
+        };
+  return <FilterBar {...rest} bound={bound} slider={withRuns} />;
+}
 
 function DashboardView(props: {
   entry: DashboardEntry;
@@ -520,7 +548,8 @@ function DashboardView(props: {
                 Loading variables…
               </p>
             )}
-            <FilterBar
+            <CicdFilterBar
+              widgets={d.widgets}
               dashboard={d}
               manifest={manifest}
               values={values.status === 'ready' ? values.value : null}
