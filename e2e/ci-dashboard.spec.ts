@@ -21,7 +21,7 @@ async function openCi(page: Page, url: string): Promise<void> {
   await page.goto(`${url}/index.html#/dashboards/ci`);
   await expect(page.getByRole('heading', { level: 1, name: 'CI' })).toBeVisible();
   await expect(
-    widget(page, VIEW_IDS.grid).getByRole('img', { name: 'Job results over the last runs' }),
+    widget(page, VIEW_IDS.grid).getByRole('group', { name: 'Job results over the last runs' }),
   ).toBeVisible();
 }
 
@@ -70,6 +70,23 @@ test('a status-grid cell opens the run under the grid, its caret over the cell; 
   await expect(page.getByRole('tab', { name: 'Jobs' })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByTestId('run-gantt')).toBeVisible();
   expect(problems).toEqual([]);
+});
+
+test('the status grid is reachable by keyboard: Tab lands on a run dot, the arrows move, Space opens', async ({
+  page,
+  reportUrl,
+}) => {
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await openCi(page, reportUrl('ci'));
+  const grid = widget(page, VIEW_IDS.grid);
+  const first = grid.locator('[data-run-dot][tabindex="0"]');
+  await expect(first).toHaveCount(1);
+  await expect(grid.locator('[data-cell][tabindex]')).toHaveCount(0);
+  await first.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(grid.locator('[data-run-dot][tabindex="0"]')).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(page.getByTestId('run-pane')).toBeVisible();
 });
 
 test('Filter the page by job sets the chip; the runs view ignores it, the jobs view echoes it', async ({
