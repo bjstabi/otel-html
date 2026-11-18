@@ -50,6 +50,10 @@ describe('the page filter bar', () => {
     expect(currentD()?.vars).toEqual({ [REF]: 'main' }); // a null equal to the default is no override
     expect(b.getByRole('button', { name: 'main' }).getAttribute('aria-pressed')).toBe('true');
     expect(b.getByRole('button', { name: 'all' }).getAttribute('aria-pressed')).toBe('false');
+    expect(b.getByRole('button', { name: 'pull requests' }).getAttribute('aria-pressed')).toBe('false');
+    await user.click(b.getByRole('button', { name: 'pull requests' }));
+    expect(b.getByRole('button', { name: 'pull requests' }).getAttribute('aria-pressed')).toBe('true');
+    expect(b.getByRole('button', { name: 'main' }).getAttribute('aria-pressed')).toBe('false');
     await user.click(b.getByRole('button', { name: 'all' }));
     expect(currentD()?.vars ?? {}).toEqual({});
     expect(b.getByRole('button', { name: 'all' }).getAttribute('aria-pressed')).toBe('true');
@@ -138,6 +142,35 @@ describe('the page filter bar', () => {
       act(() => notify(false));
       await waitFor(() => expect(screen.queryByTestId('zoom-row')).toBeNull());
     });
+  });
+
+  test('the bar keeps previous, next and zoom out beside the range dropdown', async () => {
+    const user = userEvent.setup();
+    show();
+    const b = await bar();
+    await user.click(b.getByRole('button', { name: 'Time range' }));
+    await user.click(await screen.findByRole('menuitem', { name: '1h' }));
+    expect(b.getByRole('button', { name: 'Next window' }).hasAttribute('disabled')).toBe(true);
+    const prev = b.getByRole('button', { name: 'Previous window' });
+    expect(prev.hasAttribute('disabled')).toBe(false);
+    await user.click(prev);
+    await waitFor(() => expect(window.location.hash).toContain('t='));
+    expect(b.getByRole('button', { name: 'Next window' }).hasAttribute('disabled')).toBe(false);
+    expect(b.getByRole('button', { name: 'Zoom out' }).hasAttribute('disabled')).toBe(false);
+  });
+
+  test('the bar says percentiles are approximate over a long window', async () => {
+    const day = 86_400_000_000_000;
+    const long = {
+      ...manifest,
+      range: {
+        start: manifest.range?.start ?? '0',
+        end: String(BigInt(manifest.range?.start ?? '0') + BigInt(30 * day)),
+      },
+    };
+    renderShell('#/dashboards/ci?t=all', dataSourceOf(long, VALUES));
+    const b = await bar();
+    expect(b.getByText('percentiles approximate')).toBeTruthy();
   });
 
   test('the shell header has no second range control on a dashboard page', async () => {

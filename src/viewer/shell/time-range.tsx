@@ -267,6 +267,9 @@ export function RangeMenu({
   const range = manifestRange(manifest);
   if (range === null) return null;
   const epoch = BigInt(manifest.epochUnixNano);
+  const prev = win === null ? null : stepWindow(win, range, -1);
+  const next = win === null ? null : stepWindow(win, range, 1);
+  const wider = win === null ? null : zoomOutWindow(win, range);
   const item = 'rounded-md px-3 py-1.5 text-sm data-[highlighted]:bg-hairline';
   return (
     <span className="flex flex-wrap items-center gap-1">
@@ -307,6 +310,44 @@ export function RangeMenu({
             setCustom(false);
           }}
         />
+      )}
+      <Tip label="Previous window">
+        <button
+          type="button"
+          aria-label="Previous window"
+          disabled={prev === null}
+          onClick={() => prev !== null && setWindow(prev)}
+          className={BUTTON}
+        >
+          <ChevronLeft size={16} aria-hidden />
+        </button>
+      </Tip>
+      <Tip label="Next window">
+        <button
+          type="button"
+          aria-label="Next window"
+          disabled={next === null}
+          onClick={() => next !== null && setWindow(next)}
+          className={BUTTON}
+        >
+          <ChevronRight size={16} aria-hidden />
+        </button>
+      </Tip>
+      <Tip label="Zoom out ×2">
+        <button
+          type="button"
+          aria-label="Zoom out"
+          disabled={win === null}
+          onClick={() => win !== null && setWindow(wider)}
+          className={BUTTON}
+        >
+          <ZoomOut size={16} aria-hidden />
+        </button>
+      </Tip>
+      {isLongWindow(win, range) && (
+        <span title={APPROXIMATE_TITLE} className="text-xs text-muted">
+          percentiles approximate
+        </span>
       )}
     </span>
   );

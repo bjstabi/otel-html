@@ -311,6 +311,18 @@ describe('quick filters', () => {
     expect(r.success).toBe(false);
     expect(issuePaths(r)).toContain('quick.0.set.zzz');
   });
+  it('rejects an empty set and a repeated label', () => {
+    const empty = DashboardSchema.safeParse({ ...base, quick: [{ label: 'x', set: {} }] });
+    expect(empty.success).toBe(false);
+    const dup = DashboardSchema.safeParse({
+      ...base,
+      quick: [
+        { label: 'x', set: { a: '1' } },
+        { label: 'x', set: { b: '1' } },
+      ],
+    });
+    expect(issuePaths(dup)).toContain('quick.1.label');
+  });
   it('allows at most six', () => {
     const quick = Array.from({ length: 7 }, (_, i) => ({ label: `q${i}`, set: { a: null } }));
     expect(DashboardSchema.safeParse({ ...base, quick }).success).toBe(false);

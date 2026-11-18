@@ -465,7 +465,14 @@ const buildDashboardSchema = (compiled: boolean): z.ZodType<Dashboard, Dashboard
       description: z.string().default(''),
       variables: z.array(VariableSchema).max(MAX_VARIABLES, `at most ${MAX_VARIABLES} variables`).default([]),
       quick: z
-        .array(z.strictObject({ label: z.string().min(1), set: z.record(z.string(), z.string().nullable()) }))
+        .array(
+          z.strictObject({
+            label: z.string().min(1),
+            set: z
+              .record(z.string(), z.string().nullable())
+              .refine((r) => Object.keys(r).length > 0, 'sets at least one variable'),
+          }),
+        )
         .max(MAX_QUICK, `at most ${MAX_QUICK} quick filters`)
         .default([]),
       widgets: z.array(buildWidgetSchema(compiled)).min(1).max(MAX_WIDGETS, `at most ${MAX_WIDGETS} widgets`),
@@ -483,6 +490,14 @@ const buildDashboardSchema = (compiled: boolean): z.ZodType<Dashboard, Dashboard
         }
       });
       d.quick.forEach((q, i) => {
+        if (d.quick.findIndex((o) => o.label === q.label) !== i) {
+          ctx.issues.push({
+            code: 'custom',
+            input: q,
+            path: ['quick', i, 'label'],
+            message: 'unique labels',
+          });
+        }
         for (const key of Object.keys(q.set)) {
           if (!d.variables.some((v) => v.key === key)) {
             ctx.issues.push({
