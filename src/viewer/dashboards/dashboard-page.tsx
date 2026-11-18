@@ -386,7 +386,7 @@ function DashboardView(props: {
       selectWindow: (win) =>
         change((s) => ({
           ...s,
-          sel: { ...s.sel, t: win === null ? null : formatWindow(win, anchor ?? undefined) },
+          sel: { ...s.sel, t: win === null ? null : zoomText([win.start, win.end], anchor) },
         })),
       selectTrace: (id) => change((s) => ({ ...s, sel: { ...s.sel, trace: id } })),
       openIn: (target, route, patch) => goTo(target, route, patch),

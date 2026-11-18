@@ -258,6 +258,16 @@ describe('statusGrid', () => {
   });
 });
 
+describe('rerunsAndCancelled', () => {
+  test('rerunRuns are the runs whose latest attempt is above 1, as many as reruns', () => {
+    const runs = [run(0), run(DAY, { attempt: 2, attempts: 1 }), run(2 * DAY, { attempt: 1, attempts: 2 })];
+    const r = rerunsAndCancelled(runs);
+    expect(r.reruns).toBe(1);
+    expect(r.rerunRuns).toHaveLength(r.reruns);
+    expect(r.rerunRuns[0]).toBe(runs[1]);
+  });
+});
+
 describe('failures', () => {
   test('the latest failed runs first, limited', () => {
     const runs = twelve();

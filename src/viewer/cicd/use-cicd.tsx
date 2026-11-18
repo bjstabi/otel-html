@@ -87,6 +87,8 @@ interface CicdResult {
   status: 'loading' | 'ready' | 'error';
   runs: CiRun[];
   previous: CiRun[];
+  /** The span the runs were taken from (the previous period has the same length); null without a time range. */
+  span: readonly [number, number] | null;
   error?: Error;
 }
 
@@ -128,12 +130,15 @@ export function useCicd(widget: Widget, scope: Pick<WidgetScope, 'window' | 'var
   const job = honoured(widget, scope, JOB_KEY);
   const runner = honoured(widget, scope, RUNNER_KEY);
   return useMemo((): CicdResult => {
-    if (entry.status === 'error') return { status: 'error', runs: NONE, previous: NONE, error: entry.error };
-    if (entry.status === 'loading') return { status: 'loading', runs: NONE, previous: NONE };
-    if (spanStart === null || spanEnd === null) return { status: 'ready', runs: NONE, previous: NONE };
+    if (entry.status === 'error')
+      return { status: 'error', runs: NONE, previous: NONE, span: null, error: entry.error };
+    if (entry.status === 'loading') return { status: 'loading', runs: NONE, previous: NONE, span: null };
+    if (spanStart === null || spanEnd === null)
+      return { status: 'ready', runs: NONE, previous: NONE, span: null };
     const split = splitPeriods(entry.rows, [spanStart, spanEnd]);
     return {
       status: 'ready',
+      span: [spanStart, spanEnd],
       runs: narrowJobs(split.runs, job, runner),
       previous: narrowJobs(split.previous, job, runner),
     };

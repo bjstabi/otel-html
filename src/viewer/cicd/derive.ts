@@ -586,7 +586,7 @@ export function rerunsAndCancelled(runs: readonly CiRun[]): {
   cancelled: number;
   cancelledRuns: CiRun[];
 } {
-  const rerunRuns = runs.filter((r) => r.attempts > 1);
+  const rerunRuns = runs.filter((r) => r.attempt > 1);
   const cancelledRuns = runs.filter((r) => r.result === 'cancelled');
   return { reruns: rerunsOf(runs), rerunRuns, cancelled: cancelledRuns.length, cancelledRuns };
 }
