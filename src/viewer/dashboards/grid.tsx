@@ -162,6 +162,7 @@ export function DashboardGrid(props: DashboardGridProps): JSX.Element {
   const stacked = useStacked();
   const { width, containerRef, mounted } = useContainerWidth();
   const base = widgets.map((widget, i) => ({ widget, at: layout[i] ?? widget }));
+  const baseAt = new Map(base.map(({ widget, at }) => [widget.id, at]));
   const put =
     insert === undefined
       ? null
@@ -173,7 +174,10 @@ export function DashboardGrid(props: DashboardGridProps): JSX.Element {
   const placed = put === null ? base : base.map((p, i) => ({ ...p, at: put.layout[i] ?? p.at }));
 
   if (stacked) {
-    const ordered = [...placed].sort((a, b) => byPosition(a.at, b.at));
+    // the page's own order: the shifted layout makes room for the pane and can swap neighbours
+    const ordered = [...placed].sort((a, b) =>
+      byPosition(baseAt.get(a.widget.id) ?? a.at, baseAt.get(b.widget.id) ?? b.at),
+    );
     const spans = stackedSpans(ordered.map(({ at }) => at.w));
     const source = insert === undefined ? -1 : ordered.findIndex(({ widget }) => widget.id === insert.after);
     // the pane follows the whole stacked row that holds its source: a pair stays together

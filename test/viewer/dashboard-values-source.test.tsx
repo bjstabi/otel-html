@@ -2,6 +2,7 @@ import { cleanup, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { DashboardSchema } from '../../src/dashboards/schema.js';
 import type { CicdRow } from '../../src/viewer/data/cicd-query.js';
+import { manifestRange } from '../../src/viewer/data/manifest-range.js';
 import { dataSourceOf, manifestWith, renderShell } from './dashboard-shell.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -80,6 +81,22 @@ describe('the variables of a page with a cicd widget', () => {
     await new Promise((r) => setTimeout(r, 200));
     expect(resourceValues).not.toHaveBeenCalled();
     expect(cicdRows).toHaveBeenCalledTimes(1);
+  });
+
+  test("share the widgets' fetch key when the page window is null (the manifest range)", async () => {
+    const cicdRows = vi.fn((_q: { window: { start: number; end: number } | null }) => Promise.resolve(ROWS));
+    const manifest = manifestWith([CI]);
+    const ds = { ...dataSourceOf(manifest), cicdRows };
+    renderShell('#/dashboards/ci', ds);
+    await waitFor(() => expect(cicdRows).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 200));
+    const extent = manifestRange(manifest);
+    expect(extent).not.toBeNull();
+    expect(cicdRows).toHaveBeenCalledTimes(1);
+    expect(cicdRows.mock.calls[0]?.[0].window).toEqual({
+      start: (extent?.start ?? 0) - ((extent?.end ?? 0) - (extent?.start ?? 0)),
+      end: extent?.end,
+    });
   });
 
   test('keep a page without a cicd widget on resourceValues and never call cicdRows', async () => {

@@ -64,6 +64,8 @@ class CicdStore {
         (e: unknown) => {
           const error = e instanceof Error ? e : new Error(String(e));
           this.set(key, { status: 'error', error });
+          // forgotten, so a later render asks again
+          this.pending.delete(key);
           throw error;
         },
       );
@@ -136,7 +138,7 @@ function fetchWindow(extent: TimeWindow): TimeWindow {
  * before it, joined per period. A view that honours the `job` and `runner` bindings (`honours`) has its jobs narrowed.
  */
 export function useCicd(widget: Widget, scope: Pick<WidgetScope, 'window' | 'vars'>): CicdResult {
-  return useCicdRuns(widget, scope, true);
+  return useCicdRuns(widget, scope, true, true);
 }
 
 /** What the page's slider shows of the CI runs: a tick per run in the page window, and the runs inside the zoom. */
@@ -167,6 +169,7 @@ export function useCicdPage(
     first ?? widgets[0],
     { window: null, vars: vars ?? [] },
     first !== undefined && vars !== null,
+    false,
   );
   return useMemo((): CicdPage => {
     if (first === undefined || vars === null || result.status !== 'ready' || result.span === null)
@@ -184,6 +187,7 @@ function useCicdRuns(
   widget: Widget | undefined,
   scope: Pick<WidgetScope, 'window' | 'vars'>,
   enabled: boolean,
+  narrow: boolean,
 ): CicdResult {
   const ctx = useContext(Ctx);
   if (ctx === null) throw new Error('useCicd needs a CicdProvider');
@@ -208,8 +212,8 @@ function useCicdRuns(
   const span = scope.window ?? extent;
   const spanStart = span?.start ?? null;
   const spanEnd = span?.end ?? null;
-  const job = widget === undefined ? null : honoured(widget, scope, JOB_KEY);
-  const runner = widget === undefined ? null : honoured(widget, scope, RUNNER_KEY);
+  const job = widget === undefined || !narrow ? null : honoured(widget, scope, JOB_KEY);
+  const runner = widget === undefined || !narrow ? null : honoured(widget, scope, RUNNER_KEY);
   return useMemo((): CicdResult => {
     if (entry.status === 'error')
       return { status: 'error', runs: NONE, previous: NONE, span: null, error: entry.error };
@@ -249,30 +253,55 @@ const VALUE_FIELDS: Readonly<Record<string, { kind: CicdRow['kind']; pick: (r: C
  * widget's pipeline, as `useCicdPage` takes it), so in the default state the lists cost no request of their own.
  * A page without a `cicd` widget has no source and reads `resourceValues`.
  */
+const LAST_ROWS = {};
+
+/** The values of `kind` in `rows` (`inWindow` limits them to the runs that started in it), sorted. */
+function valuesOf(
+  rows: readonly CicdRow[],
+  kind: CicdRow['kind'],
+  pick: (r: CicdRow) => string | null,
+  window: TimeWindow | null,
+): string[] {
+  const inWindow = new Set<string>();
+  for (const r of rows)
+    if (r.kind === 'run' && (window === null || (r.start >= window.start && r.start <= window.end)))
+      inWindow.add(r.traceId);
+  const values = new Set<string>();
+  for (const r of rows) {
+    if (r.kind !== kind || !inWindow.has(r.traceId)) continue;
+    const v = pick(r);
+    if (v !== null) values.add(v);
+  }
+  return [...values].sort();
+}
+
+/**
+ * A read without a window (the page's "whole report" read for a selection outside the window, R43) never fetches:
+ * it lists the values of the last window read's fetch, which reaches one period further back, so a selection from the
+ * previous period stays known and a window with no runs still tells the key apart from one the report lacks.
+ */
 for (const [key, { kind, pick }] of Object.entries(VALUE_FIELDS)) {
   registerValuesSource(key, ({ widgets, dataSource, shared }) => {
     const first = widgets.find((w) => w.type === 'cicd');
     if (first === undefined) return null;
     const pipeline = first.type === 'cicd' ? first.pipeline : null;
     const store = storeOf(shared, dataSource);
+    const last = shared.get(LAST_ROWS, () => new Map<string | null, readonly CicdRow[]>());
     return async (window) => {
-      const fetchWin = window === null ? null : fetchWindow(window);
+      if (window === null)
+        return {
+          values: valuesOf(last.get(pipeline) ?? [], kind, pick, null),
+          kind: 'string',
+          capped: false,
+        };
+      const fetchWin = fetchWindow(window);
       const rows = await store.load(fetchKey(fetchWin, [], pipeline), {
         window: fetchWin,
         bindings: [],
         pipeline,
       });
-      const inWindow = new Set<string>();
-      for (const r of rows)
-        if (r.kind === 'run' && (window === null || (r.start >= window.start && r.start <= window.end)))
-          inWindow.add(r.traceId);
-      const values = new Set<string>();
-      for (const r of rows) {
-        if (r.kind !== kind || !inWindow.has(r.traceId)) continue;
-        const v = pick(r);
-        if (v !== null) values.add(v);
-      }
-      return { values: [...values].sort(), kind: 'string', capped: false };
+      last.set(pipeline, rows);
+      return { values: valuesOf(rows, kind, pick, window), kind: 'string', capped: false };
     };
   });
 }

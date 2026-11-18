@@ -52,3 +52,28 @@ test('a lone w: 3 widget between two w: 12 widgets takes a full row', () => {
 test('the odd one out of a run of small widgets takes a full row', () => {
   expect(spans([3, 3, 3, 12].map((w) => ({ w })))).toEqual(['span 1', 'span 1', 'span 2', 'span 2']);
 });
+
+test('the stacked order follows the page layout, not the layout shifted for the open run', () => {
+  const layout = [
+    { id: 'a', x: 0, y: 0, w: 4, h: 6 },
+    { id: 'b', x: 4, y: 0, w: 4, h: 10 },
+    { id: 'd', x: 8, y: 6, w: 4, h: 6 },
+    { id: 'e', x: 0, y: 10, w: 4, h: 2 },
+  ];
+  const widgets: readonly Widget[] = DashboardSchema.parse({
+    id: 'd',
+    title: 'D',
+    widgets: layout.map((l) => ({ ...l, type: 'timeline' })),
+  }).widgets;
+  render(
+    <DashboardGrid
+      widgets={widgets}
+      layout={layout.map(({ x, y, w, h }) => ({ x, y, w, h }))}
+      editing={false}
+      onLayout={() => undefined}
+      insert={{ after: 'a', rows: 5, render: () => <p>pane</p> }}
+      render={(w) => <span data-testid="cell">{w.id}</span>}
+    />,
+  );
+  expect(screen.getAllByTestId('cell').map((c) => c.textContent)).toEqual(['a', 'b', 'd', 'e']);
+});

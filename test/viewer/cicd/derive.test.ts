@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   bucketOf,
   failures,
+  jobStatus,
   jobsTable,
   minutesPerDay,
   narrowJobs,
@@ -325,6 +326,25 @@ describe('queue', () => {
       { label: 'ubuntu', p50: 3.5 * SEC, p95: 5.75 * SEC, max: 6 * SEC, n: 6 },
     ]);
     expect(queue(twelve().slice(0, 4))).toEqual([]);
+  });
+
+  test('a label with several hundred thousand waits does not overflow the argument list', () => {
+    const jobs = Array.from({ length: 300_000 }, (_, i) => job(`j${i}`, 0, 1, { queuedNs: i + 1 }));
+    expect(queue([run(0, { jobs })])[0]).toMatchObject({ n: 300_000, max: 300_000 });
+  });
+});
+
+describe('jobStatus', () => {
+  test.each([
+    ['success', 'success'],
+    ['neutral', 'success'],
+    ['Neutral', 'success'],
+    ['cancelled', 'cancelled'],
+    ['skipped', null],
+    ['failure', 'failure'],
+    ['timed_out', 'failure'],
+  ])('%s reads as %s', (result, status) => {
+    expect(jobStatus(job('a', 0, 1, { result }))).toBe(status);
   });
 });
 

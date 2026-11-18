@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import { DashboardSchema, type Widget } from '../../../src/dashboards/schema.js';
 import '../../../src/viewer/cicd/use-cicd.js';
-import { PageShared, valuesSourceFor } from '../../../src/viewer/dashboards/scope.js';
+import { PageShared, valuesSourceFor, variableValues } from '../../../src/viewer/dashboards/scope.js';
 import type { CicdRow } from '../../../src/viewer/data/cicd-query.js';
 import type { DataSource } from '../../../src/viewer/data/data-source.js';
 
@@ -58,5 +58,36 @@ describe('the CI values sources', () => {
     const ctx = { widgets: [], dataSource: {} as DataSource, shared: new PageShared() };
     expect(valuesSourceFor('vcs.ref.head.name', ctx)).toBeNull();
     expect(valuesSourceFor('service.name', { ...ctx, widgets })).toBeNull();
+  });
+
+  test('never fetch the whole report for a selection outside the window (R43)', async () => {
+    const cicdRows = vi.fn((_q: { window: unknown }) => Promise.resolve(rows));
+    const ctx = { widgets, dataSource: { cicdRows } as unknown as DataSource, shared: new PageShared() };
+    const read = async (key: string, window: { start: number; end: number } | null) => {
+      const source = valuesSourceFor(key, ctx);
+      if (source === null) throw new Error('no source');
+      return source(window);
+    };
+    const win = { start: 0, end: 1000 };
+    const got = await variableValues('vcs.ref.head.name', win, read, 'release/9');
+    expect(got.values).toEqual(['main']);
+    expect(got.kind).toBe('string');
+    expect(cicdRows).toHaveBeenCalledTimes(1);
+    expect(cicdRows.mock.calls.every(([q]) => q.window !== null)).toBe(true);
+  });
+
+  test('tell a window with no runs from a report without the key, without a second fetch', async () => {
+    const cicdRows = vi.fn((_q: { window: unknown }) => Promise.resolve(rows));
+    const ctx = { widgets, dataSource: { cicdRows } as unknown as DataSource, shared: new PageShared() };
+    const read = async (key: string, window: { start: number; end: number } | null) => {
+      const source = valuesSourceFor(key, ctx);
+      if (source === null) throw new Error('no source');
+      return source(window);
+    };
+    // the fetch reaches one period back (the window's own length), so runs before the window are known
+    const got = await variableValues('vcs.ref.head.name', { start: 5100, end: 5200 }, read, null);
+    expect(got.values).toEqual([]);
+    expect(got.emptyInWindow).toBe(true);
+    expect(cicdRows).toHaveBeenCalledTimes(1);
   });
 });

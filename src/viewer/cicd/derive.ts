@@ -50,7 +50,7 @@ export function jobStatus(j: CiJob): CiStatus | null {
 /** A job or step result as a status; null when it did not run (skipped). */
 export function resultStatus(result: string): CiStatus | null {
   const r = result.toLowerCase();
-  if (r === 'success') return 'success';
+  if (r === 'success' || r === 'neutral') return 'success';
   if (r === 'cancellation' || r === 'cancelled' || r === 'canceled') return 'cancelled';
   if (r.startsWith('skip')) return null;
   return 'failure';
@@ -543,7 +543,9 @@ export function queue(runs: readonly CiRun[]): QueueRow[] {
     const p50 = quantile(waits, 0.5);
     const p95 = quantile(waits, 0.95);
     if (waits.length < 5 || p50 === null || p95 === null) continue;
-    rows.push({ label, p50, p95, max: Math.max(...waits), n: waits.length });
+    let max = waits[0] ?? 0;
+    for (const w of waits) if (w > max) max = w;
+    rows.push({ label, p50, p95, max, n: waits.length });
   }
   return rows.sort((a, b) => b.p95 - a.p95 || (a.label < b.label ? -1 : 1));
 }
