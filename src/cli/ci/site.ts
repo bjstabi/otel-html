@@ -18,6 +18,10 @@ export type SiteRun = {
   /** The run's workflow name (`ci`, `load`); absent in entries written before it was recorded. */
   workflow?: string;
 };
+/** Where a report at the site-relative folder `reportPath` loads the shared viewer files from: the site's flat `assets/`. */
+export const assetsBaseFor = (reportPath: string): string =>
+  `${'../'.repeat(reportPath.split('/').filter((x) => x !== '').length)}assets/`;
+
 /** The index entry of `run`, whose report is at `reportPath`. */
 export const siteRunOf = (run: ApiRun, reportPath: string): SiteRun => ({
   runId: run.id,

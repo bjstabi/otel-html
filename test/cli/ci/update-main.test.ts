@@ -438,7 +438,7 @@ describe('runUpdateRun', () => {
     expect(u.kind).toBe('run');
     const manifest = await readRunManifest(deps.fs, join(folder, 'report'));
     expect(manifest?.engine.format).toBe('site');
-    expect(manifest?.engine.assetsBase).toBe(`../../../../assets/${VERSION}/`);
+    expect(manifest?.engine.assetsBase).toBe('../../../../assets/');
     expect(manifest?.partitions).toHaveLength(1);
     expect(existsSync(join(folder, 'report/assets'))).toBe(false);
     expect(existsSync(join(folder, 'report/data/state'))).toBe(false);

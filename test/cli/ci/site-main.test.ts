@@ -14,7 +14,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { createReportWith, resolveDeps } from '../../../src/api/report.js';
 import type { ApiPull, ApiRun } from '../../../src/cli/ci/github-api.js';
 import { channelFor, siteRunOf } from '../../../src/cli/ci/site.js';
-import { pruneAssets, removePaths } from '../../../src/cli/ci/site-io.js';
+import { pruneAssets } from '../../../src/cli/ci/site-assets.js';
+import { removePaths } from '../../../src/cli/ci/site-io.js';
 import { placeFinishedRun, removePullRequest } from '../../../src/cli/ci/site-main.js';
 import type { CliIo } from '../../../src/cli/io.js';
 import type { WriterDeps } from '../../../src/writer/session.js';
@@ -132,19 +133,34 @@ const publish = async (
 
 const manifestText = (folder: string): string => readFileSync(join(folder, 'data/manifest.js'), 'utf8');
 
+const secondBuild = (): WriterDeps => {
+  const base = fakeViewerAssets();
+  return {
+    ...deps,
+    viewerAssets: {
+      entry: () => ({ script: 'assets/viewer.def456.js', style: 'assets/viewer.def456.css' }),
+      async files(format) {
+        return (await base.files(format)).map((f) => ({ ...f, path: f.path.replace('abc123', 'def456') }));
+      },
+    },
+  };
+};
+
 describe('placeFinishedRun in site format', () => {
-  test('the rolling report and the run report load the shared assets of this version', async () => {
+  test('the rolling report and the run report load the flat shared assets', async () => {
     await publish(await runReport('a', 1), 1);
     const rolling = manifestText(join(site, 'branch/main'));
     expect(rolling).toContain('"format":"site"');
-    expect(rolling).toContain(`"assetsBase":"../../assets/${VERSION}/"`);
+    expect(rolling).toContain('"assetsBase":"../../assets/"');
     const runManifest = manifestText(join(site, 'branch/main/runs/1'));
-    expect(runManifest).toContain(`"assetsBase":"../../../../assets/${VERSION}/"`);
-    expect(readFileSync(join(site, 'branch/main/index.html'), 'utf8')).toContain(`../../assets/${VERSION}/`);
+    expect(runManifest).toContain('"assetsBase":"../../../../assets/"');
+    expect(readFileSync(join(site, 'branch/main/index.html'), 'utf8')).toContain(
+      '../../assets/viewer.abc123.js',
+    );
     // every base resolves, from the folder that names it, to the shared folder
     for (const folder of ['branch/main', 'branch/main/runs/1']) {
       const base = /"assetsBase":"([^"]+)"/.exec(manifestText(join(site, folder)))?.[1] ?? '';
-      expect(resolve(site, folder, base)).toBe(join(site, 'assets', VERSION));
+      expect(resolve(site, folder, base)).toBe(join(site, 'assets'));
     }
     expect(existsSync(join(site, 'branch/main/assets'))).toBe(false);
     expect(existsSync(join(site, 'branch/main/runs/1/assets'))).toBe(false);
@@ -155,7 +171,7 @@ describe('placeFinishedRun in site format', () => {
 
   test('the shared folder holds the viewer and the plain engine files, and a second publish leaves them', async () => {
     await publish(await runReport('a', 1), 1);
-    const shared = join(site, 'assets', VERSION);
+    const shared = join(site, 'assets');
     const names = readdirSync(shared).sort();
     expect(names).toContain('viewer.abc123.js');
     expect(names).toContain('duckdb.1.32.0.wasm');
@@ -170,7 +186,7 @@ describe('placeFinishedRun in site format', () => {
 
   test('a second build of one version adds its viewer files; both reports open and nothing is rewritten', async () => {
     await publish(await runReport('a', 1), 1);
-    const shared = join(site, 'assets', VERSION);
+    const shared = join(site, 'assets');
     const oldMtime = statSync(join(shared, 'viewer.abc123.js')).mtimeMs;
     const base = fakeViewerAssets();
     const second: WriterDeps = {
@@ -202,53 +218,54 @@ describe('placeFinishedRun in site format', () => {
     await publish(report, 1);
     const run = join(site, 'branch/main/runs/1');
     expect(manifestText(run)).toContain('"format":"site"');
-    expect(manifestText(run)).toContain(`"assetsBase":"../../../../assets/${VERSION}/"`);
+    expect(manifestText(run)).toContain('"assetsBase":"../../../../assets/"');
     expect(existsSync(join(run, 'assets'))).toBe(false);
   });
 
-  test('a version no report references is pruned; the referenced one stays', async () => {
+  test('a viewer file no report references is scheduled for removal; the referenced ones are not', async () => {
     mkdirSync(join(site, 'assets', '0.0.1'), { recursive: true });
+    writeFileSync(join(site, 'assets', '0.0.1', 'viewer.z.js'), 'x');
+    writeFileSync(join(site, 'assets', 'viewer.old.js'), 'x');
     await publish(await runReport('a', 1), 1);
-    expect(readdirSync(join(site, 'assets'))).toEqual([VERSION]);
+    expect(existsSync(join(site, 'assets', 'viewer.old.js'))).toBe(false);
+    expect(existsSync(join(site, 'assets', '0.0.1', 'viewer.z.js'))).toBe(false);
+    expect(existsSync(join(site, 'assets', 'viewer.abc123.js'))).toBe(true);
+    expect(existsSync(join(site, 'assets', 'duckdb.1.32.0.wasm'))).toBe(true);
   });
 
-  test('an older version that a retained run still references is kept', async () => {
-    const old = await resolveDeps({ viewerAssets: fakeViewerAssets(), version: '0.0.1' });
-    await publish(await runReport('a', 1), 1, old);
-    await publish(await runReport('b', 2), 2);
-    expect(readdirSync(join(site, 'assets')).sort()).toEqual(['0.0.1', VERSION]);
-  });
-
-  test('removing a pull request prunes the versions only it used', async () => {
-    const old = await resolveDeps({ viewerAssets: fakeViewerAssets(), version: '0.0.1' });
+  test('removing a pull request schedules the viewer files only it used', async () => {
     await publish(await runReport('a', 1), 1);
-    await publish(await runReport('p', 7), 7, old);
-    expect(readdirSync(join(site, 'assets')).sort()).toEqual(['0.0.1', VERSION]);
-    expect(await removePullRequest(site, 5, 'o/r', deps, io(), removePaths)).toBe(true);
-    expect(readdirSync(join(site, 'assets'))).toEqual([VERSION]);
+    await publish(await runReport('p', 7), 7, secondBuild());
+    expect(readdirSync(join(site, 'assets'))).toEqual(
+      expect.arrayContaining(['viewer.abc123.js', 'viewer.def456.js']),
+    );
+    const removed: string[] = [];
+    expect(
+      await removePullRequest(site, 5, 'o/r', deps, io(), async (s, paths) => {
+        removed.push(...paths);
+        await removePaths(s, paths);
+      }),
+    ).toBe(true);
+    expect(removed).toContain('assets/viewer.def456.js');
+    expect(removed).not.toContain('assets/viewer.abc123.js');
   });
 
-  test('a scratch folder a crashed publish left under assets/ is swept', async () => {
+  test('a scratch file a crashed publish left under assets/ is swept', async () => {
     mkdirSync(join(site, 'assets', '.9.9.9.tmp-1234'), { recursive: true });
     writeFileSync(join(site, 'assets', '.9.9.9.tmp-1234', 'viewer.old.js'), 'x');
-    mkdirSync(join(site, 'assets', '.0.0.1.tmp-77'), { recursive: true });
+    writeFileSync(join(site, 'assets', 'viewer.abc123.js.tmp-77'), 'x');
     await publish(await runReport('a', 1), 1);
-    expect(readdirSync(join(site, 'assets'))).toEqual([VERSION]);
-  });
-
-  test('an empty version folder is not a complete version and is filled', async () => {
-    mkdirSync(join(site, 'assets', VERSION), { recursive: true });
-    await publish(await runReport('a', 1), 1);
-    expect(readdirSync(join(site, 'assets', VERSION))).toContain('viewer.abc123.js');
+    expect(readdirSync(join(site, 'assets')).some((n) => n.includes('.tmp-'))).toBe(false);
   });
 
   test('an unreadable manifest prunes nothing and warns', async () => {
-    mkdirSync(join(site, 'assets', '0.0.1'), { recursive: true });
+    mkdirSync(join(site, 'assets'), { recursive: true });
+    writeFileSync(join(site, 'assets', 'viewer.old.js'), 'x');
     mkdirSync(join(site, 'pr/3/data'), { recursive: true });
     writeFileSync(join(site, 'pr/3/data/manifest.js'), 'not a manifest');
     const warnings: string[] = [];
     expect(await pruneAssets(site, deps, (m) => warnings.push(m))).toEqual([]);
-    expect(existsSync(join(site, 'assets', '0.0.1'))).toBe(true);
+    expect(existsSync(join(site, 'assets', 'viewer.old.js'))).toBe(true);
     expect(warnings.join()).toContain(join('pr', '3'));
   });
 });
@@ -262,18 +279,17 @@ const asFormat4 = (report: string, assetsBase?: string): void => {
 };
 
 describe('a format-4 report on the site', () => {
-  test('pruning still runs: the format-4 report keeps its assets, an unreferenced version goes, no warning', async () => {
+  test('pruning still runs: the format-4 report keeps its versioned folder, an unreferenced file goes, no warning', async () => {
     await publish(await runReport('a', 1), 1);
-    const old = await resolveDeps({ viewerAssets: fakeViewerAssets(), version: '0.0.1' });
-    await publish(await runReport('p', 7), 7, old);
-    mkdirSync(join(site, 'assets', '0.0.2'), { recursive: true });
-    // the pull request's rolling report and its run report both reference 0.0.1, and both are format 4
-    asFormat4(join(site, 'pr/5'));
-    asFormat4(join(site, 'pr/5/runs/7'));
+    mkdirSync(join(site, 'assets', '0.0.1'), { recursive: true });
+    writeFileSync(join(site, 'assets', '0.0.1', 'viewer.old.js'), 'x');
+    writeFileSync(join(site, 'assets', 'viewer.unused.js'), 'x');
+    asFormat4(join(site, 'branch/main/runs/1'), '../../../../assets/0.0.1/');
     const warnings: string[] = [];
-    expect(await pruneAssets(site, deps, (m) => warnings.push(m))).toEqual(['0.0.2']);
+    const pruned = await pruneAssets(site, deps, (m) => warnings.push(m));
+    expect(pruned).toContain('assets/viewer.unused.js');
+    expect(pruned).not.toContain('assets/0.0.1/viewer.old.js');
     expect(warnings).toEqual([]);
-    expect(readdirSync(join(site, 'assets')).sort()).toEqual(['0.0.1', VERSION]);
   });
 
   test('the rolling report is built from the format-5 run, with a skipping warning and no stub', async () => {

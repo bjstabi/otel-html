@@ -300,7 +300,7 @@ describe('push', () => {
     expect(existsSync(join(site, RUN42, 'data/partitions/000000/spans.parquet'))).toBe(true);
     const run = indexOf().channels[MAIN]?.runs[0];
     expect(run).toMatchObject({ runId: 42, conclusion: 'in_progress', reportPath: RUN42 });
-    expect(existsSync(join(site, 'assets/9.9.9'))).toBe(true);
+    expect(existsSync(join(site, 'assets/viewer.abc123.js'))).toBe(true);
     const state = await stateOf();
     expect(state.runs.runs[RUN42]?.next).toBe(3);
     expect(state.applied.updates[p.id]?.outcome).toBe('applied');
@@ -553,7 +553,7 @@ describe('run', () => {
     const m = await manifestOf(RUN42);
     expect(m.complete).toBe(true);
     expect(m.partitions.map((p) => p.n)).toEqual(closed.manifest.partitions.map((_, i) => 3 + i));
-    expect(m.engine.assetsBase).toBe('../../../../assets/9.9.9/');
+    expect(m.engine.assetsBase).toBe('../../../../assets/');
     for (const [i, p] of old.entries())
       expect(readFileSync(join(site, p)).equals(bytes[i] ?? Buffer.alloc(0))).toBe(true);
     const state = await stateOf();

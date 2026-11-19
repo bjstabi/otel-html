@@ -18,8 +18,9 @@ import {
   readRunManifest,
   writeRunReport,
 } from './run-report.js';
-import { type Channel, IN_PROGRESS, placeRun, type SiteRun } from './site.js';
-import { ensureSharedAssets, readSiteIndex, removePaths, writeSite } from './site-io.js';
+import { assetsBaseFor, type Channel, IN_PROGRESS, placeRun, type SiteRun } from './site.js';
+import { ensureSharedAssets } from './site-assets.js';
+import { readSiteIndex, removePaths, writeSite } from './site-io.js';
 import { placeFinishedRun, removePullRequest } from './site-main.js';
 import {
   DELETION_GRACE_MS,
@@ -400,7 +401,7 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
         ...known,
         next: Math.max(known.next, await diskNext(runDir)),
       };
-      const assetsBase = `${'../'.repeat(reportPath.split('/').length)}assets/${deps.version}/`;
+      const assetsBase = assetsBaseFor(reportPath);
       let manifest = indexed === undefined ? null : await readRunManifest(fs, runDir);
       if (manifest === null) {
         resolved ??= await resolveApiConfig(deps, o.config, undefined, { format: 'site', assetsBase });
@@ -551,7 +552,7 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
   }
 
   // (8) record
-  if (changed) await ensureSharedAssets(o.site, deps.version, deps);
+  if (changed) await ensureSharedAssets(o.site, deps);
   const noBase = pending.base.deploymentId === undefined;
   if (!changed && consumed === 0)
     return { changed, consumed, deployed: false, previews, pendingJobs, rejected };

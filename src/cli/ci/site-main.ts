@@ -8,6 +8,7 @@ import { messageOf, say, warning } from './github-api.js';
 import { mergeSkippingBad, mergeWithConfig } from './publish-io.js';
 import {
   applyRetention,
+  assetsBaseFor,
   type Channel,
   dropWorkflowChannels,
   placeRun,
@@ -17,14 +18,8 @@ import {
   type SiteIndex,
   type SiteRun,
 } from './site.js';
-import {
-  ensureSharedAssets,
-  placeRunReport,
-  pruneAssets,
-  readSiteIndex,
-  writeBadges,
-  writeSite,
-} from './site-io.js';
+import { ensureSharedAssets, pruneAssets } from './site-assets.js';
+import { placeRunReport, readSiteIndex, writeBadges, writeSite } from './site-io.js';
 
 /** `<site>/<key>/index.html`: a stub forwarding to the channel's newest run. */
 async function writeStub(site: string, key: string, index: SiteIndex): Promise<void> {
@@ -35,15 +30,6 @@ async function writeStub(site: string, key: string, index: SiteIndex): Promise<v
 }
 
 const RUNS = 'runs';
-
-/** The `../` steps from a site-relative folder back to the site root. */
-const up = (folder: string): string => '../'.repeat(folder.split('/').filter((x) => x !== '').length);
-
-/** Where the rolling report at `<site>/<key>/` (`branch/<slug>`, `pr/<n>`: two folders deep) loads the shared viewer files from. */
-const rollingAssetsBase = (key: string, version: string): string => `${up(key)}assets/${version}/`;
-/** Where a run report at `<site>/<key>/runs/<id>/` loads them from. */
-export const runAssetsBase = (reportPath: string, version: string): string =>
-  `${up(reportPath)}assets/${version}/`;
 
 const PREVIEW = /^preview-.*\.png$/;
 
@@ -79,7 +65,7 @@ async function rebuildRolling(
     await mergeSkippingBad({
       merge: mergeWithConfig(deps, config, {
         format: 'site',
-        assetsBase: rollingAssetsBase(key, deps.version),
+        assetsBase: assetsBaseFor(key),
         compact: true,
       }),
       required: [],
@@ -142,12 +128,12 @@ export async function placeFinishedRun(
     deps,
     report,
     join(site, reportPath),
-    runAssetsBase(reportPath, deps.version),
+    assetsBaseFor(reportPath),
     o.renumberFrom === undefined ? undefined : { renumberFrom: o.renumberFrom },
   );
   await o.remove(site, [...migrated.remove, ...remove]);
   // after the removals: a legacy channel named `assets` is the shared folder's path
-  await ensureSharedAssets(site, deps.version, deps);
+  await ensureSharedAssets(site, deps);
   if (migrated.remove.length > 0)
     say(io, `removed the per-workflow channels ${migrated.remove.join(', ')}; see branch/ and pr/`);
   const rolling = await rebuildRolling(site, placed.key, index, o.config, deps, io);
@@ -155,7 +141,7 @@ export async function placeFinishedRun(
   const channel = index.channels[placed.key];
   if (channel !== undefined) await writeBadges(site, placed.key, channel);
   await writeSite(site, index, o.repository);
-  await pruneAssets(site, deps, (m) => warning(io, 'site', m));
+  await o.remove(site, await pruneAssets(site, deps, (m) => warning(io, 'site', m)));
   return { rolling };
 }
 
@@ -180,7 +166,7 @@ export async function removePullRequest(
   const removed = removeChannel(current, key);
   await remove(site, [...removed.remove, key]);
   await writeSite(site, removed.index, repository);
-  await pruneAssets(site, deps, (m) => warning(io, 'cleanup', m));
+  await remove(site, await pruneAssets(site, deps, (m) => warning(io, 'cleanup', m)));
   say(io, `removed ${key} from the site`);
   return true;
 }

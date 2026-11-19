@@ -21,8 +21,7 @@ import { FAILURE_MARK, LOG_FILE, PID_FILE, readLedger, STOP_FILE, writeLedger } 
 import { parseJobContext } from './publish.js';
 import { mergeWithConfig } from './publish-io.js';
 import { buildPushUpdate, ciSpansFromApi } from './push-update.js';
-import { channelFor, reportUrl } from './site.js';
-import { runAssetsBase } from './site-main.js';
+import { assetsBaseFor, channelFor, reportUrl } from './site.js';
 import { parseUpdateName, readUpdate, UPDATE_FILE, type UpdateJson, updateName } from './update.js';
 
 const API_TIMEOUT_MS = 15_000;
@@ -331,7 +330,7 @@ export async function runUpdateRun(
   const reportOut = join(folder, 'report');
   await mergeWithConfig(deps, o.config, {
     format: 'site',
-    assetsBase: runAssetsBase(reportPath, deps.version),
+    assetsBase: assetsBaseFor(reportPath),
     compact: true,
   })([o.report], reportOut, false);
   await deps.fs.removeDir(join(reportOut, 'data', 'state'));
