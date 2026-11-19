@@ -1,10 +1,11 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { type JSX, useMemo, useRef, useState } from 'react';
 import { parseTraceId, parseUnixNanos, type RelNanos, type SpanId } from '../../model/ids.js';
-import { formatDuration, formatTime } from '../../semconv/formatters.js';
+import { formatTime } from '../../semconv/formatters.js';
 import type { DataSource, TraceDetail } from '../data/data-source.js';
 import type { TraceNode } from '../data/trace-tree.js';
 import { jobStatus, resultStatus } from './derive.js';
+import { durationText } from './format.js';
 import type { CiJob, CiRun } from './runs.js';
 
 const STEP_RESULT = 'cicd.pipeline.task.step.result';
@@ -101,7 +102,7 @@ function SummaryLine(props: { run: CiRun; epoch: ReturnType<typeof parseUnixNano
     run.trigger ?? 'no trigger',
     formatTime(run.start as RelNanos, epoch),
     run.result,
-    formatDuration(run.duration),
+    durationText(run.duration),
     `${run.jobs.length} ${run.jobs.length === 1 ? 'job' : 'jobs'}`,
     `${run.minutes.toFixed(1)} CI min`,
     counted === 0 ? 'no cache data' : `${run.replayed} of ${counted} tasks replayed`,
@@ -389,7 +390,7 @@ function GanttLine(props: { line: Line; pct: (t: number) => number }): JSX.Eleme
           data-bar
           data-result={l.status}
           data-last={l.last === true ? 'true' : undefined}
-          title={`${l.label}: ${formatDuration(Math.max(0, l.end - l.start))}`}
+          title={`${l.label}: ${durationText(Math.max(0, l.end - l.start))}`}
           className={`absolute top-1.5 bottom-1.5 rounded-sm ${l.hatched ? 'text-accent' : color} ${l.last === true ? 'outline-2 outline-offset-1 outline-ink' : ''}`}
           style={{
             left: `${left}%`,

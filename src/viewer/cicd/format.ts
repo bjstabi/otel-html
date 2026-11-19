@@ -1,11 +1,36 @@
 import type { UnixNanos } from '../../model/ids.js';
 import { formatDuration } from '../../semconv/formatters.js';
+import { formatTick, niceAxis } from '../components/run-chart-format.js';
 import { shortTime } from '../shell/time-range.js';
 
 export { shortTime };
 
-/** A duration for the CI views: zero reads `0 s` (the shared formatter would say `0 ns`). */
-export const durationText = (ns: number): string => (ns === 0 ? '0 s' : formatDuration(ns));
+/**
+ * A duration for the CI views: zero reads `0 s`, under a minute as the shared formatter, from a minute
+ * `4 min 12 s`, from an hour `1 h 5 min` (whole numbers; rounded seconds carry into the minute).
+ */
+export function durationText(ns: number): string {
+  if (!Number.isFinite(ns)) return formatDuration(ns);
+  if (ns === 0) return '0 s';
+  if (ns < 0) return `-${durationText(-ns)}`;
+  if (ns < 60e9) return formatDuration(ns);
+  const total = Math.round(ns / 1e9);
+  const tail = (n: number, unit: string): string => (n === 0 ? '' : ` ${n} ${unit}`);
+  if (total < 3600) return `${Math.floor(total / 60)} min${tail(total % 60, 's')}`;
+  const minutes = Math.round(ns / 60e9);
+  return `${Math.floor(minutes / 60)} h${tail(minutes % 60, 'min')}`;
+}
+
+/** A duration axis tick in the run charts' compact form: `0s`, `30s`, `5m`, `1h 30m`. */
+export function tickText(ns: number): string {
+  return formatTick(ns / 1e9, 's');
+}
+
+/** The y axis for durations in ns: round steps of seconds, minutes and hours (see `niceAxis`). */
+export function durationAxis(maxNs: number, maxTicks = 5): { max: number; interval: number } {
+  const { max, interval } = niceAxis(maxNs / 1e9, 's', maxTicks);
+  return { max: max * 1e9, interval: interval * 1e9 };
+}
 
 const DAY_NS = 24 * 3_600_000 * 1_000_000;
 

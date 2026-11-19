@@ -125,6 +125,7 @@ async function show(w: Widget, rows: CicdRow[]): Promise<void> {
   const dataSource = {
     cicdRows: () => Promise.resolve(rows),
     manifest: { epochUnixNano: '1700000000000000000' },
+    resourceValues: () => Promise.resolve({ values: [] }),
     getTrace: () => Promise.reject(new Error('no trace')),
   } as unknown as DataSource;
   subtitles = [];
@@ -140,6 +141,7 @@ async function show(w: Widget, rows: CicdRow[]): Promise<void> {
               state = fn(state);
             }}
             dataSource={dataSource}
+            window={null}
           >
             <CicdWidget
               widget={w}
@@ -230,6 +232,19 @@ describe('jobs', () => {
     await show(widget('jobs'), runs(12, ['build', 'test']));
     await act(async () => q<HTMLElement>('[data-job="test"] button[aria-label="Job menu"]').click());
     expect(menuLabels()).toEqual(['Filter the page by job', 'Open its trend']);
+  });
+
+  it('puts the trend axis on a round step that covers the longest job point', async () => {
+    const rows = runs(12, ['build']).map((r, i) =>
+      r.kind === 'job' ? { ...r, end: r.start + (40 + i * 7) * SEC } : r,
+    );
+    const longest = Math.max(...rows.filter((r) => r.kind === 'job').map((r) => r.end - r.start));
+    await show(widget('jobs'), rows);
+    await act(async () => q<HTMLElement>('[data-job="build"]').click());
+    const y = (lastChart().option as unknown as { yAxis: { max: number; interval: number } }).yAxis;
+    expect(y.interval).toBeGreaterThan(0);
+    expect(y.max).toBeGreaterThanOrEqual(longest);
+    expect(y.max % y.interval).toBe(0);
   });
 
   it('rings the open run in the expanded trend, faint or full', async () => {

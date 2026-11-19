@@ -59,6 +59,20 @@ describe('the page filter bar', () => {
     expect(b.getByRole('button', { name: 'all' }).getAttribute('aria-pressed')).toBe('true');
   });
 
+  test('pressing a pressed pill clears its variables', async () => {
+    const user = userEvent.setup();
+    renderShell(
+      `#/dashboards/ci?d=${encodeURIComponent(JSON.stringify({ vars: { [REF]: 'dev' } }))}`,
+      dataSourceOf(manifest, VALUES),
+    );
+    const b = await bar();
+    await user.click(b.getByRole('button', { name: 'pull requests' }));
+    expect(currentD()?.vars).toEqual({ [REF]: 'dev', [TRIGGER]: 'pull_request' });
+    await user.click(b.getByRole('button', { name: 'pull requests' }));
+    expect(currentD()?.vars).toEqual({ [REF]: 'dev' });
+    expect(b.getByRole('button', { name: 'pull requests' }).getAttribute('aria-pressed')).toBe('false');
+  });
+
   test('a set variable is a chip whose x clears it; an unset one is a + button', async () => {
     const user = userEvent.setup();
     show();

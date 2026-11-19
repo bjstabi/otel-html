@@ -98,7 +98,7 @@ describe('stat', () => {
     const prev = [run(0, { duration: 100 * SEC })];
     const s = stat('median-run', runs, prev);
     // durations without the cancelled 90 s: 10..80, 100, 110, 120 -> median of 11 values is the 6th = 60
-    expect(s.value).toBe('60 s');
+    expect(s.value).toBe('1m');
     expect(s.delta).toEqual({ text: '−40%', better: true });
     expect(s.spark?.length).toBeGreaterThanOrEqual(2);
   });
@@ -117,6 +117,8 @@ describe('stat', () => {
     const runs = twelve();
     expect(stat('minutes', runs, []).value).toBe('12 min');
     expect(stat('queue-p95', runs, []).value).toBe('11.4 s');
+    const long = [{ ...runs[0], duration: 255 * SEC }] as typeof runs;
+    expect(stat('median-run', long, []).value).toBe('4m 15s');
     const again = [run(0, { attempts: 3, attempt: 3 }), run(1), run(2, { result: 'cancelled' })];
     const s = stat('reruns', again, [run(0)]);
     expect(s.value).toBe('1');

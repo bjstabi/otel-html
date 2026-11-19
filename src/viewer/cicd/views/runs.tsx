@@ -2,7 +2,7 @@ import { type JSX, useMemo } from 'react';
 import { Chart } from '../../components/chart.js';
 import type { WidgetRenderer } from '../../dashboards/dashboard-page.js';
 import { useTheme } from '../../theme/theme-provider.js';
-import { durationText } from '../format.js';
+import { durationAxis, durationText, tickText } from '../format.js';
 import { useRunActions } from '../run-actions.js';
 import type { CiRun } from '../runs.js';
 import { useCicd } from '../use-cicd.js';
@@ -31,10 +31,11 @@ export const RunsView: WidgetRenderer = ({ widget, scope, height }): JSX.Element
   const { openRun, runMenu, selectedTraceId, isSource } = actions;
   const open = runs.findIndex((r) => r.traceId === selectedTraceId);
   const keys = useRunKeys(runs, actions, PLOT);
-  const maxDuration = Math.max(1, ...runs.map((r) => r.duration));
+  const maxDuration = Math.max(0, ...runs.map((r) => r.duration));
 
-  const option = useMemo(
-    () => ({
+  const option = useMemo(() => {
+    const axis = durationAxis(maxDuration * 1.08);
+    return {
       animation: false,
       grid: { left: PLOT.left, right: PLOT.right, top: 8, bottom: 8 },
       tooltip: {
@@ -47,8 +48,9 @@ export const RunsView: WidgetRenderer = ({ widget, scope, height }): JSX.Element
       xAxis: { type: 'category', data: runs.map((r) => r.runId), show: false },
       yAxis: {
         type: 'value',
-        max: maxDuration * 1.08,
-        axisLabel: { formatter: (v: number) => durationText(v) },
+        max: axis.max,
+        interval: axis.interval,
+        axisLabel: { formatter: (v: number) => tickText(v) },
       },
       series: [
         {
@@ -70,9 +72,8 @@ export const RunsView: WidgetRenderer = ({ widget, scope, height }): JSX.Element
           ? []
           : [currentSeries([keys.current, runs[keys.current]?.duration ?? 0], colors.ink)]),
       ],
-    }),
-    [runs, colors, open, isSource, maxDuration, keys.current],
-  );
+    };
+  }, [runs, colors, open, isSource, maxDuration, keys.current]);
   const onEvents = useMemo(
     () => ({
       click: (p: unknown) => {

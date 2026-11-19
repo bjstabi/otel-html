@@ -6,7 +6,7 @@ import { useEpoch } from '../../dashboards/widgets/layout.js';
 import { useSubtitle } from '../../dashboards/widgets/subtitle.js';
 import { useTheme } from '../../theme/theme-provider.js';
 import { type JobRow, jobsTable } from '../derive.js';
-import { axisTime, durationText } from '../format.js';
+import { axisTime, durationAxis, durationText, tickText } from '../format.js';
 import { useRunActions } from '../run-actions.js';
 import { useCicd } from '../use-cicd.js';
 import {
@@ -21,7 +21,7 @@ import {
 } from './body.js';
 import { useRunKeys } from './run-keys.js';
 
-const COLUMNS = 'grid-cols-[minmax(8rem,1fr)_120px_4.5rem_4.5rem_9rem_4.5rem_1.75rem]';
+const COLUMNS = 'grid-cols-[minmax(8rem,1fr)_120px_5.5rem_5.5rem_9rem_4.5rem_1.75rem]';
 const SPARK_W = 120;
 const SPARK_H = 24;
 const PLOT = { left: 52, right: 12 };
@@ -152,7 +152,11 @@ export const JobsView: WidgetRenderer = ({
         data: trend.points.map((p) => axisTime(p.run.start, epoch, 0)),
         axisLabel: { hideOverlap: true },
       },
-      yAxis: { type: 'value', axisLabel: { formatter: (v: number) => durationText(v) } },
+      yAxis: {
+        type: 'value',
+        ...durationAxis(Math.max(0, ...trend.points.map((p) => p.duration))),
+        axisLabel: { formatter: (v: number) => tickText(v) },
+      },
       series: [
         {
           type: 'line',
@@ -239,8 +243,12 @@ export const JobsView: WidgetRenderer = ({
                         {row.name}
                       </button>
                       <JobSpark row={row} />
-                      <span className="text-right font-mono text-xs">{durationText(row.latest)}</span>
-                      <span className="text-right font-mono text-xs">{durationText(row.median)}</span>
+                      <span className="whitespace-nowrap text-right font-mono text-xs">
+                        {durationText(row.latest)}
+                      </span>
+                      <span className="whitespace-nowrap text-right font-mono text-xs">
+                        {durationText(row.median)}
+                      </span>
                       <DeltaCell row={row} />
                       <span
                         className={`text-right font-mono text-xs ${row.failed[0] > 0 ? 'text-critical' : 'text-muted'}`}

@@ -44,6 +44,23 @@ async function centreX(l: Locator): Promise<number> {
   return b.x + b.width / 2;
 }
 
+test('main and pull requests exclude each other and release', HTTP, async ({ page, reportUrl }) => {
+  await openCi(page, reportUrl('ci'));
+  const bar = page.getByTestId('filter-bar');
+  const main = bar.getByRole('button', { name: 'main', exact: true });
+  const prs = bar.getByRole('button', { name: 'pull requests', exact: true });
+  await prs.click();
+  await expect(prs).toHaveAttribute('aria-pressed', 'true');
+  await main.click();
+  await expect(main).toHaveAttribute('aria-pressed', 'true');
+  await expect(prs).toHaveAttribute('aria-pressed', 'false');
+  await expect(bar.getByRole('combobox', { name: 'trigger' })).toContainText('+ trigger');
+  await expect(bar.getByRole('combobox', { name: 'branch' })).toContainText('branch = main');
+  await main.click();
+  await expect(main).toHaveAttribute('aria-pressed', 'false');
+  await expect(bar.getByRole('combobox', { name: 'branch' })).toContainText('+ branch');
+});
+
 test('a status-grid cell opens the run under the grid, its caret over the cell; side panel opens Jobs', async ({
   page,
   reportUrl,
@@ -203,4 +220,44 @@ test('on a phone nothing scrolls sideways, stats pair, the run pane follows its 
   expect(p.width).toBeLessThanOrEqual(390);
   await noSideScroll();
   expect(problems).toEqual([]);
+});
+
+test("Open on GitHub goes to the run's page", HTTP, async ({ page, reportUrl }) => {
+  // The page guard fails any request off this machine, so the tab is not really opened: window.open is recorded.
+  await page.addInitScript(() => {
+    const calls: unknown[][] = [];
+    (window as unknown as { opened: unknown[][] }).opened = calls;
+    window.open = (...args: unknown[]) => {
+      calls.push(args);
+      return null;
+    };
+  });
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await openCi(page, reportUrl('ci'));
+  const cell = widget(page, VIEW_IDS.grid).locator('[data-cell]').nth(3);
+  await cell.scrollIntoViewIfNeeded();
+  await cell.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: /Open on GitHub/ }).click();
+  // the repository may still be loading at the click: the blank tab (recorded as ['', '_blank']) comes first then
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { opened: unknown[][] }).opened.at(-1)))
+    .toEqual([
+      expect.stringMatching(/^https:\/\/github\.com\/example\/otel-html\/actions\/runs\/\d+$/),
+      '_blank',
+      'noopener',
+    ]);
+  // the repository is read by now: a second click is the synchronous direct path, one call and no blank tab first
+  const opened = (): Promise<unknown[][]> =>
+    page.evaluate(() => (window as unknown as { opened: unknown[][] }).opened.map((c) => [...c]));
+  const before = await opened();
+  await cell.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: /Open on GitHub/ }).click();
+  const after = await opened();
+  expect(after).toHaveLength(before.length + 1);
+  expect(after.at(-1)).toEqual([
+    expect.stringMatching(/^https:\/\/github\.com\/example\/otel-html\/actions\/runs\/\d+$/),
+    '_blank',
+    'noopener',
+  ]);
+  expect(after.slice(before.length).some((c) => c[0] === '')).toBe(false);
 });

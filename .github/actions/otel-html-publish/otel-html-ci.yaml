@@ -19,8 +19,10 @@ dashboards:
       - label: main
         set:
           vcs.ref.head.name: main
+          cicd.pipeline.trigger: null
       - label: pull requests
         set:
+          vcs.ref.head.name: null
           cicd.pipeline.trigger: pull_request
       - label: all
         set:

@@ -371,6 +371,11 @@ test('Checkout: a quick filter sets a chip and its × clears it', async ({ page,
   await bar.getByRole('button', { name: 'Clear environment' }).click();
   await expect(env).toContainText('+ environment');
   await expect(production).toHaveAttribute('aria-pressed', 'false');
+  await production.click();
+  await expect(production).toHaveAttribute('aria-pressed', 'true');
+  await production.click();
+  await expect(production).toHaveAttribute('aria-pressed', 'false');
+  await expect(env).toContainText('+ environment');
   expect(problems).toEqual([]);
 });
 

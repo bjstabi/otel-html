@@ -39,7 +39,7 @@ export const StatView: WidgetRenderer = ({ widget, scope }): JSX.Element => {
           const before = data.span === null ? null : lengthText(data.span[1] - data.span[0]);
           return (
             <div className="flex flex-col gap-1 p-3">
-              <div className="font-mono text-3xl text-ink">{s.value}</div>
+              <div className="whitespace-nowrap font-mono text-3xl text-ink">{s.value}</div>
               {s.delta !== null && (
                 <div className={`text-sm ${tone}`}>
                   {arrow}

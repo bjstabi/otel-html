@@ -116,6 +116,7 @@ const sourceOf = (rows: CicdRow[]): DataSource => {
     ds = {
       cicdRows: () => Promise.resolve(rows),
       manifest: { epochUnixNano: '1700000000000000000' },
+      resourceValues: () => Promise.resolve({ values: [] }),
     } as unknown as DataSource;
     sources.set(rows, ds);
   }
@@ -133,7 +134,13 @@ async function show(w: Widget, rows: CicdRow[], extent = { start: 0, end: 14 * D
     root.render(
       <ThemeProvider>
         <CicdProvider dataSource={dataSource} extent={extent}>
-          <RunActionsProvider dashboard={dashboard} state={state} change={change} dataSource={dataSource}>
+          <RunActionsProvider
+            dashboard={dashboard}
+            state={state}
+            change={change}
+            dataSource={dataSource}
+            window={null}
+          >
             <CicdWidget
               widget={w}
               scope={
@@ -232,13 +239,25 @@ describe('runs-trend', () => {
     await show(widget('runs-trend'), sevenDays());
     const o = lastChart().option as unknown as {
       xAxis: { data: string[] };
-      yAxis: { axisLabel: { formatter(v: number): string } }[];
+      yAxis: { max: number; interval: number; axisLabel: { formatter(v: number): string } }[];
     };
     expect(o.xAxis.data.length).toBeGreaterThan(0);
     for (const l of o.xAxis.data) expect(l).not.toMatch(/\d{4}-\d\d-\d\dT|\.\d{3}Z/);
     // two-day buckets: the date only
     expect(o.xAxis.data[0]).not.toMatch(/\d:\d\d/);
-    expect(o.yAxis[0]?.axisLabel.formatter(0)).toBe('0 s');
+    expect(o.yAxis[0]?.axisLabel.formatter(0)).toBe('0s');
+    // the duration axis steps by a round interval and covers every p95
+    const { max, interval } = o.yAxis[0] ?? { max: 0, interval: 0 };
+    expect(interval).toBeGreaterThan(0);
+    const plotted = (
+      lastChart().option as unknown as { series: { type: string; data: (number | null)[] }[] }
+    ).series
+      .filter((x) => x.type === 'line')
+      .flatMap((x) => x.data)
+      .filter((v): v is number => v !== null);
+    expect(plotted.length).toBeGreaterThan(0);
+    expect(max).toBeGreaterThanOrEqual(Math.max(...plotted));
+    expect(max % interval).toBe(0);
   });
 
   it('offers "Zoom the slider to this bucket", which writes whole nanoseconds', async () => {
@@ -328,6 +347,19 @@ describe('runs', () => {
     await act(async () => on('click')?.({ dataIndex: 2 }));
     expect(state.sel.trace).toBe(TRACE(3));
     expect(state.run?.from).toBe('w1');
+  });
+
+  it('puts the y axis on a round duration step that covers the longest run', async () => {
+    const rows = sevenDays().map((r, i) =>
+      r.kind === 'run' ? { ...r, end: r.start + (30 + i * 20) * SEC } : r,
+    );
+    const longest = Math.max(...rows.filter((r) => r.kind === 'run').map((r) => r.end - r.start));
+    await show(widget('runs'), rows);
+    const y = (lastChart().option as unknown as { yAxis: { max: number; interval: number } }).yAxis;
+    expect(y.interval).toBeGreaterThan(0);
+    expect(y.max).toBeGreaterThanOrEqual(longest);
+    expect(y.max % y.interval).toBe(0);
+    expect(y.interval % SEC).toBe(0);
   });
 
   it('opens the run menu on a right-click', async () => {
