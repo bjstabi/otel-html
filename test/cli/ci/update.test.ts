@@ -118,6 +118,12 @@ describe('UpdateJsonSchema', () => {
     expect(UpdateJsonSchema.safeParse({ ...rec, kind: 'remove-pr', pr: 1 }).success).toBe(false);
   });
 
+  test('reportUrl is allowed in a run update and refused in a push update', () => {
+    expect(ok({ ...base, kind: 'run', reportUrl: 'https://x/branch/main/#/dashboards/ci' })).toBe(true);
+    expect(ok({ ...push(), reportUrl: 'https://x/' })).toBe(false);
+    expect(ok({ ...base, kind: 'run', reportUrl: 'x'.repeat(2049) })).toBe(false);
+  });
+
   test('rejects', () => {
     expect(ok({ ...push(), extra: 1 })).toBe(false);
     const { sequence: _s, ...noSeq } = push();

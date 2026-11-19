@@ -1,3 +1,4 @@
+import type { ResolvedConfig } from '../../config/schema.js';
 import type { SiteRun } from './site.js';
 
 /** Links into the one CI report: the viewer's URL (`#/dashboards/<id>?t=…&d=…`) for a branch and a window. */
@@ -34,3 +35,48 @@ export function runsWindow(runs: readonly SiteRun[]): Window | null {
   }
   return start === undefined || end === undefined ? null : { start: start - HOUR_NS, end: end + HOUR_NS };
 }
+
+/** The default dashboard, and the id of its first `cicd` widget of view `runs` (the one that opens a run). */
+export function dashboardIds(config: ResolvedConfig): { dashboard: string; runsWidget: string | undefined } {
+  const dashboard = config.viewer.defaultDashboard;
+  const widgets = config.dashboards.find((d) => d.dashboard.id === dashboard)?.dashboard.widgets ?? [];
+  const runs = widgets.find((w) => w.type === 'cicd' && w.view === 'runs');
+  return { dashboard, runsWidget: runs?.id };
+}
+
+/** `config` with the `BRANCH_KEY` variable of every dashboard defaulting to `branch`. */
+export function withBranchDefault(config: ResolvedConfig, branch: string): ResolvedConfig {
+  return {
+    ...config,
+    dashboards: config.dashboards.map((d) => ({
+      ...d,
+      dashboard: {
+        ...d.dashboard,
+        variables: d.dashboard.variables.map((v) => (v.key === BRANCH_KEY ? { ...v, default: branch } : v)),
+      },
+    })),
+  };
+}
+
+const DAY_NS = 86_400_000_000_000n;
+
+/** The run opened in `dashboard`: its trace selected, the run pane open from `runsWidget`, a week before to an hour after it. */
+export function runLink(
+  base: string,
+  ids: { dashboard: string; runsWidget: string | undefined },
+  run: { traceId: string; range: Window },
+): string {
+  const q = new URLSearchParams();
+  q.set('t', windowText({ start: run.range.start - 7n * DAY_NS, end: run.range.end + HOUR_NS }));
+  q.set(
+    'd',
+    JSON.stringify({
+      sel: { trace: run.traceId },
+      ...(ids.runsWidget === undefined ? {} : { run: { from: ids.runsWidget, mode: 'panel' } }),
+    }),
+  );
+  return `${base}#/dashboards/${ids.dashboard}?${q.toString().replaceAll('%7E', '~')}`;
+}
+
+/** The `<id>` of `#/dashboards/<id>` in `url`. */
+export const dashboardIdOf = (url: string): string | undefined => /#\/dashboards\/([^?#/]+)/.exec(url)?.[1];

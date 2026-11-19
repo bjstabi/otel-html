@@ -432,7 +432,7 @@ describe('runUpdateRun', () => {
     const o = outputs();
     expect(o.name).toBe('otel-html-update-run-42-1');
     expect(o.channel).toBe('pr/5');
-    expect(o['report-url']).toBe('https://x/pr/5/runs/42/');
+    expect(o['report-url']).toMatch(/^https:\/\/x\/branch\/main\/#\/dashboards\/fusion\?t=/);
     const folder = join(dir, 'u', o.name ?? '');
     const u = await readUpdate(deps.fs, folder);
     expect(u.kind).toBe('run');
@@ -444,6 +444,21 @@ describe('runUpdateRun', () => {
     expect(existsSync(join(folder, 'report/data/state'))).toBe(false);
     const all = readdirSync(folder, { recursive: true }).map(String);
     expect(all.some((f) => f.endsWith('.parquet.js'))).toBe(false);
+  });
+
+  test('report-url and update.reportUrl open the run in branch/main with the CI dashboard config', async () => {
+    const report = await runReportDir();
+    await runUpdateRun(
+      { ...runOpts(report), config: '.github/otel-html-ci.yaml' },
+      ioOf({ GITHUB_TOKEN: 't' }),
+      deps,
+      api,
+    );
+    const url = outputs()['report-url'] ?? '';
+    expect(url.startsWith('https://x/branch/main/#/dashboards/ci?t=')).toBe(true);
+    expect(url).toContain('w8');
+    const u = await readUpdate(deps.fs, join(dir, 'u', outputs().name ?? ''));
+    expect(u.reportUrl).toBe(url);
   });
 
   test('every file the run report lists is in the update, rollup files included', async () => {
