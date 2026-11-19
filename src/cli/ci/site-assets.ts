@@ -165,13 +165,15 @@ async function filesUnder(dir: string, deps: WriterDeps, prefix: string): Promis
 /**
  * The site-relative paths of the files under `assets/` (any depth) that no report references, by path or by a
  * referenced folder prefix. Removes nothing: the deployer schedules the deletion. `[]` when a report cannot be read.
+ * `known` is the result of `referencedAssets` when the caller already has it.
  */
 export async function pruneAssets(
   site: string,
   deps: WriterDeps,
   warn: (message: string) => void = () => {},
+  known?: Set<string> | null,
 ): Promise<string[]> {
-  const referenced = await referencedAssets(site, deps, warn);
+  const referenced = known === undefined ? await referencedAssets(site, deps, warn) : known;
   if (referenced === null) return [];
   const prefixes = [...referenced].filter((p) => p.endsWith('/'));
   return (await filesUnder(join(site, SHARED), deps, `${SHARED}/`)).filter(

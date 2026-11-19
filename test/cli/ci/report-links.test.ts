@@ -72,6 +72,23 @@ test('dashboardIds of .github/otel-html-ci.yaml is ci / w8; of the built-in conf
   expect(dashboardIds(await configOf()).runsWidget).toBeUndefined();
 });
 
+test('dashboardIds with a workflow picks a runs widget that lists it', async () => {
+  const c = await configOf('.github/otel-html-ci.yaml');
+  expect(dashboardIds(c, 'ci').runsWidget).toBe('w8');
+  expect(dashboardIds(c, 'load').runsWidget).toBeUndefined();
+});
+
+test('runLink carries the variables it is given', () => {
+  const url = runLink(
+    'b/',
+    { dashboard: 'ci', runsWidget: 'w8' },
+    { traceId: '0123456789abcdef0123456789abcdef', range: { start: 1n, end: 2n } },
+    { [BRANCH_KEY]: 'feat' },
+  );
+  const d = parseDashboardParam(new URLSearchParams(url.slice(url.indexOf('?') + 1)).get('d') ?? '');
+  expect(d.ok && d.state.vars).toEqual({ [BRANCH_KEY]: 'feat' });
+});
+
 test('withBranchDefault sets the branch variable default and nothing else', async () => {
   const c = await configOf('.github/otel-html-ci.yaml');
   const r = withBranchDefault(c, 'main');

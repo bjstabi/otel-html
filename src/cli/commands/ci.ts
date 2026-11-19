@@ -423,7 +423,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
       'slim pull request runs kept per workflow across all pull requests',
       '100',
     )
-    .option('--config <file>', 'the dashboard config file for the rolling reports')
+    .option('--config <file>', 'the dashboard config file for the one report')
     .option('--pass-run-id <n>', 'this deployer run id (default: $GITHUB_RUN_ID)')
     .option('--pass-run-attempt <n>', 'this deployer run attempt (default: $GITHUB_RUN_ATTEMPT, else 1)')
     .option('--trust-updates', 'TEST ONLY: apply every update folder under --updates without pending.json')

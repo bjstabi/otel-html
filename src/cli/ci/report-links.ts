@@ -36,11 +36,22 @@ export function runsWindow(runs: readonly SiteRun[]): Window | null {
   return start === undefined || end === undefined ? null : { start: start - HOUR_NS, end: end + HOUR_NS };
 }
 
-/** The default dashboard, and the id of its first `cicd` widget of view `runs` (the one that opens a run). */
-export function dashboardIds(config: ResolvedConfig): { dashboard: string; runsWidget: string | undefined } {
+/**
+ * The default dashboard, and the id of its first `cicd` widget of view `runs` (the one that opens a run). With
+ * `workflow`, only a widget that lists that workflow's runs (no `pipeline` filter, or the filter equals it).
+ */
+export function dashboardIds(
+  config: ResolvedConfig,
+  workflow?: string,
+): { dashboard: string; runsWidget: string | undefined } {
   const dashboard = config.viewer.defaultDashboard;
   const widgets = config.dashboards.find((d) => d.dashboard.id === dashboard)?.dashboard.widgets ?? [];
-  const runs = widgets.find((w) => w.type === 'cicd' && w.view === 'runs');
+  const runs = widgets.find(
+    (w) =>
+      w.type === 'cicd' &&
+      w.view === 'runs' &&
+      (workflow === undefined || w.pipeline === undefined || w.pipeline === null || w.pipeline === workflow),
+  );
   return { dashboard, runsWidget: runs?.id };
 }
 
@@ -60,17 +71,19 @@ export function withBranchDefault(config: ResolvedConfig, branch: string): Resol
 
 const DAY_NS = 86_400_000_000_000n;
 
-/** The run opened in `dashboard`: its trace selected, the run pane open from `runsWidget`, a week before to an hour after it. */
+/** The run opened in `dashboard` (with the variables `vars` set, so the default does not hide it): its trace selected, the run pane open from `runsWidget`, a week before to an hour after it. */
 export function runLink(
   base: string,
   ids: { dashboard: string; runsWidget: string | undefined },
   run: { traceId: string; range: Window },
+  vars?: Record<string, string>,
 ): string {
   const q = new URLSearchParams();
   q.set('t', windowText({ start: run.range.start - 7n * DAY_NS, end: run.range.end + HOUR_NS }));
   q.set(
     'd',
     JSON.stringify({
+      ...(vars === undefined ? {} : { vars }),
       sel: { trace: run.traceId },
       ...(ids.runsWidget === undefined ? {} : { run: { from: ids.runsWidget, mode: 'panel' } }),
     }),

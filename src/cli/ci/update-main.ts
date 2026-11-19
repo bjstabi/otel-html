@@ -23,7 +23,7 @@ import { FAILURE_MARK, LOG_FILE, PID_FILE, readLedger, STOP_FILE, writeLedger } 
 import { parseJobContext } from './publish.js';
 import { mergeWithConfig } from './publish-io.js';
 import { buildPushUpdate, ciSpansFromApi } from './push-update.js';
-import { dashboardIds, runLink } from './report-links.js';
+import { BRANCH_KEY, dashboardIds, runLink } from './report-links.js';
 import { readRunManifest } from './run-report.js';
 import { assetsBaseFor, channelFor, slug } from './site.js';
 import { parseUpdateName, readUpdate, UPDATE_FILE, type UpdateJson, updateName } from './update.js';
@@ -348,11 +348,15 @@ export async function runUpdateRun(
       : { start: BigInt(manifest.range.start), end: BigInt(manifest.range.end) };
   const link = runLink(
     `${o.baseUrl.replace(/\/+$/, '')}/branch/${slug(defaultBranch)}/`,
-    dashboardIds(await resolveApiConfig(deps, o.config, undefined)),
+    dashboardIds(await resolveApiConfig(deps, o.config, undefined), run.name),
     {
       traceId: traceIdOf(runKey({ repository: o.repository, runId: run.id, runAttempt: run.run_attempt })),
       range,
     },
+    // the deployer defaults the branch variable to the default branch: any other run names its own
+    run.head_branch === null || run.head_branch === defaultBranch
+      ? undefined
+      : { [BRANCH_KEY]: run.head_branch },
   );
   update.reportUrl = link;
   await deps.fs.writeTextAtomic(join(folder, UPDATE_FILE), JSON.stringify(update));

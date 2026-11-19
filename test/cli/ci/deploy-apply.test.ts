@@ -27,7 +27,7 @@ import { mergeWithConfig } from '../../../src/cli/ci/publish-io.js';
 import { BRANCH_KEY } from '../../../src/cli/ci/report-links.js';
 import { readRunManifest } from '../../../src/cli/ci/run-report.js';
 import type { SiteIndex, SiteRun } from '../../../src/cli/ci/site.js';
-import { emptyState, readSiteState } from '../../../src/cli/ci/site-state.js';
+import { emptyState, readSiteState, writeSiteState } from '../../../src/cli/ci/site-state.js';
 import {
   parseUpdateName,
   type UpdateJson,
@@ -883,6 +883,21 @@ describe('removed runs', () => {
     const again = same();
     await apply([again], { passRunId: 202 });
     expect((await stateOf()).applied.updates[again.id]?.outcome).toBe('applied');
+  });
+});
+
+describe('assets on the deletion list', () => {
+  test('an asset file scheduled while nothing referenced it leaves deletions.json once a report references it', async () => {
+    await apply([addPush({ sequence: 1, parts: [['job:7#flush:0', 0, true]] })]);
+    const referenced = 'assets/viewer.abc123.js';
+    expect(existsSync(join(site, referenced))).toBe(true);
+    const state = await stateOf();
+    state.deletions.files.push({ path: referenced, pass: 5 }, { path: 'assets/unused.js', pass: 5 });
+    await writeSiteState(deps.fs, join(site, 'site-state'), state);
+    await apply([addPush({ sequence: 1, job: 8, parts: [['job:8#flush:0', 1, true]] })], { passRunId: 101 });
+    const left = (await stateOf()).deletions.files.map((f) => f.path);
+    expect(left).not.toContain(referenced);
+    expect(left).toContain('assets/unused.js');
   });
 });
 

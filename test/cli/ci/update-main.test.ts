@@ -464,8 +464,36 @@ describe('runUpdateRun', () => {
       traceIdOf(runKey({ repository: 'o/r', runId: 42, runAttempt: 1 })),
     );
     expect(d.ok && d.state.run).toEqual({ from: 'w8', mode: 'panel' });
+    // the run is on a pull request branch: the default branch variable must not hide it
+    expect(d.ok && d.state.vars).toEqual({ 'vcs.ref.head.name': 'feat' });
     const u = await readUpdate(deps.fs, join(dir, 'u', outputs().name ?? ''));
     expect(u.reportUrl).toBe(url);
+  });
+
+  test('a run of another workflow opens no runs widget that filters it out; a default-branch run sets no variable', async () => {
+    const report = await runReportDir();
+    const apiWith =
+      (over: Partial<ApiRun>) =>
+      async (url: string): Promise<Response> =>
+        /\/actions\/runs\/42$/.test(url) ? Response.json({ ...apiRun, ...over }) : api(url);
+    const decoded = async (over: Partial<ApiRun>) => {
+      await runUpdateRun(
+        { ...runOpts(report), config: '.github/otel-html-ci.yaml' },
+        ioOf({ GITHUB_TOKEN: 't' }),
+        deps,
+        apiWith(over),
+      );
+      const url = outputs()['report-url'] ?? '';
+      const d = parseDashboardParam(new URLSearchParams(url.slice(url.indexOf('?') + 1)).get('d') ?? '');
+      if (!d.ok) throw new Error('d does not parse');
+      return d.state;
+    };
+    const load = await decoded({ name: 'load' });
+    expect(load.run).toBeNull();
+    expect(load.vars).toEqual({ 'vcs.ref.head.name': 'feat' });
+    const onMain = await decoded({ head_branch: 'main' });
+    expect(onMain.vars).toEqual({});
+    expect(onMain.run).toEqual({ from: 'w8', mode: 'panel' });
   });
 
   test('a report without a range is linked over the API run times', async () => {

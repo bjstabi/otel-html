@@ -24,7 +24,7 @@ import {
   previousRunOf,
 } from './link.js';
 import { dashboardIdOf, runsWindow } from './report-links.js';
-import { channelFor, parseSiteIndex, pullsToLink, slug } from './site.js';
+import { channelFor, parseSiteIndex, pullsToLink, siteRunOf, slug } from './site.js';
 
 export type LinkOptions = {
   runId: number;
@@ -106,8 +106,12 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
   // D57: the channel comes from the API, so a run the live index does not list yet still gets both lines.
   const baseUrl = opts.indexUrl.replace(/\/index\.json$/, '').replace(/\/+$/, '');
   const dashboard = dashboardIdOf(opts.url);
+  // `ci link` runs before the deploy pass: the live index does not list this run yet, so the window adds it
+  const thisRun = siteRunOf(run, '');
+  const thisRuns = Number.isNaN(Date.parse(thisRun.completedAt)) ? [] : [thisRun];
   const one = dashboard === undefined || reportPath === undefined ? undefined : { reportPath, dashboard };
-  if (placed !== undefined) page = channelPageOf(placed.key, placed.channel, baseUrl, one, null);
+  if (placed !== undefined)
+    page = channelPageOf(placed.key, placed.channel, baseUrl, one, runsWindow(thisRuns));
   try {
     const res = await fetchFn(opts.indexUrl, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
     if (!res.ok) throw new Error(`${opts.indexUrl} answered ${res.status}`);
@@ -119,7 +123,7 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
         placed.channel,
         baseUrl,
         one,
-        runsWindow(index.channels[placed.key]?.runs ?? []),
+        runsWindow([...(index.channels[placed.key]?.runs ?? []), ...thisRuns]),
       );
     }
   } catch (e) {

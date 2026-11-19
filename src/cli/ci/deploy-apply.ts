@@ -33,7 +33,7 @@ import {
   type SiteRun,
   slug,
 } from './site.js';
-import { ensureSharedAssets, migrateAssetsBases, pruneAssets } from './site-assets.js';
+import { ensureSharedAssets, migrateAssetsBases, pruneAssets, referencedAssets } from './site-assets.js';
 import { readSiteIndex, removePaths, writeBadges, writeSite } from './site-io.js';
 import { migrateToOneReport } from './site-migrate.js';
 import {
@@ -682,7 +682,13 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
   // (8) record
   if (changed) {
     await ensureSharedAssets(o.site, deps);
-    await scheduleDeletion(state, o.site, await pruneAssets(o.site, deps, warn), o.passRunId);
+    // an asset scheduled while nothing referenced it is live again once a report does
+    const referenced = await referencedAssets(o.site, deps, warn);
+    if (referenced !== null) {
+      const prefixes = [...referenced].filter((p) => p.endsWith('/'));
+      unschedule(state, (p) => referenced.has(p) || prefixes.some((x) => p.startsWith(x)));
+    }
+    await scheduleDeletion(state, o.site, await pruneAssets(o.site, deps, warn, referenced), o.passRunId);
   }
   const noBase = pending.base.deploymentId === undefined;
   if (!changed && consumed === 0)
