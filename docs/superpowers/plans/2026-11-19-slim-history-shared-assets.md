@@ -116,7 +116,7 @@ Inputs the spec implies but no task's tests exercise directly; each gets a test 
 - Produces, in `site.ts`: `export const assetsBaseFor = (reportPath: string): string` — `'../'.repeat(segments) + 'assets/'`.
 - Produces, in `engine.ts`: `export function engineAssetNames(format: 'local' | 'site', version: string = ENGINE_VERSION): string[]`.
 
-- [ ] **Step 1: Write the failing tests** in `test/cli/ci/site-assets.test.ts` (site in a temp dir, `deps` from
+- [x] **Step 1: Write the failing tests** in `test/cli/ci/site-assets.test.ts` (site in a temp dir, `deps` from
   `resolveDeps({ viewerAssets: fakeViewerAssets(), version: '9.9.9' })`; reports written with `createReportWith({ out, format: 'site', assetsBase })`
   as `test/cli/ci/site-main.test.ts` does, then `upgradeReport(deps, dir, { format: 'site', assetsBase })` for a base):
 
@@ -143,17 +143,17 @@ test('assetsBaseFor: branch/main → ../../assets/, pr/5/runs/7 → ../../../../
 test('engineAssetNames names another version on request', ...)
 ```
 
-- [ ] **Step 2: Run them to see them fail**: `pnpm exec vitest run test/cli/ci/site-assets.test.ts` → FAIL (module not found).
-- [ ] **Step 3: Implement** `src/cli/ci/site-assets.ts` with the signatures above (move `reportFolders` and
+- [x] **Step 2: Run them to see them fail**: `pnpm exec vitest run test/cli/ci/site-assets.test.ts` → FAIL (module not found).
+- [x] **Step 3: Implement** `src/cli/ci/site-assets.ts` with the signatures above (move `reportFolders` and
   `assetsBaseOf` from `site-io.ts` into it; href parsing with `/(?:src|href)="([^"]*)"/g` on the page text; path
   resolution with `node:path/posix` `normalize(join(folderRel, href))`). Add `assetsBaseFor` to `site.ts`, the
   `version` parameter to `engineAssetNames`, and update the callers listed above (`site-main.ts` schedules
   `await pruneAssets(...)` through `o.remove`; `removePullRequest` likewise).
-- [ ] **Step 4: Adapt the existing tests** in `site-main.test.ts` (the shared folder is flat: `assets/viewer.abc123.js`,
+- [x] **Step 4: Adapt the existing tests** in `site-main.test.ts` (the shared folder is flat: `assets/viewer.abc123.js`,
   not `assets/9.9.9/…`; "a version no report references is pruned" becomes "a viewer file no report references is
   scheduled"), `update-main.test.ts:441` (`../../../../assets/`) and `deploy-apply.test.ts` (`assets/<name>`).
-- [ ] **Step 5: Run** `pnpm exec vitest run test/cli/ci` → PASS; `mise run check` → green.
-- [ ] **Step 6: Commit** `feat(ci): one flat assets folder on the site, pruned per file`.
+- [x] **Step 5: Run** `pnpm exec vitest run test/cli/ci` → PASS; `mise run check` → green.
+- [x] **Step 6: Commit** `feat(ci): one flat assets folder on the site, pruned per file`.
 
 ---
 
@@ -193,7 +193,7 @@ test('engineAssetNames names another version on request', ...)
     (throws `invalid-report` when `fromDir` has no manifest) and
     `export const removeRun = (deps, dir, runId: number, o: { now: string }) => replaceRunPartitions(deps, dir, null, { runId, attempt: 0 }, { ...o, next: 0 })`.
 
-- [ ] **Step 1: Write the failing tests** (`test/format/manifest.test.ts`: `SOURCE_RE` accepts `run:12345#2` and
+- [x] **Step 1: Write the failing tests** (`test/format/manifest.test.ts`: `SOURCE_RE` accepts `run:12345#2` and
   still rejects `foo:1`; `test/cli/ci/main-report.test.ts`, reports built with `createReportWith` in `site` format
   from `spansOnlyRequest(n)` of `test-support/format4-fixture.ts`):
 
@@ -211,11 +211,11 @@ test('removeRun drops every partition of the run and nothing else', ...)
 test('replaceRunPartitions throws invalid-report without a main manifest or a source manifest', ...)
 ```
 
-- [ ] **Step 2: Run** `pnpm exec vitest run test/cli/ci/main-report.test.ts test/format/manifest.test.ts` → FAIL.
-- [ ] **Step 3: Implement** `main-report.ts`, the `SOURCE_RE` change (`/^(flush|compact|job|ci|merge|run):…/`), the
+- [x] **Step 2: Run** `pnpm exec vitest run test/cli/ci/main-report.test.ts test/format/manifest.test.ts` → FAIL.
+- [x] **Step 3: Implement** `main-report.ts`, the `SOURCE_RE` change (`/^(flush|compact|job|ci|merge|run):…/`), the
   exports in `run-report.ts`, and move `diskNext`.
-- [ ] **Step 4: Run** the two files → PASS; `mise run check` → green.
-- [ ] **Step 5: Commit** `feat(ci): run partitions added to and dropped from the one report by source`.
+- [x] **Step 4: Run** the two files → PASS; `mise run check` → green.
+- [x] **Step 5: Commit** `feat(ci): run partitions added to and dropped from the one report by source`.
 
 ---
 
@@ -254,7 +254,7 @@ test('replaceRunPartitions throws invalid-report without a main manifest or a so
     only); a test span under the job in scope `vitest`; a `mise.tasks`-scope span under the job with
     `mise.task.name: 'lint'`; one log record; one metric point (a gauge). All times from `startMs`.
 
-- [ ] **Step 1: Write the failing tests** in `test/cli/ci/trim-run.test.ts` (main report: `ensureMainReport` then
+- [x] **Step 1: Write the failing tests** in `test/cli/ci/trim-run.test.ts` (main report: `ensureMainReport` then
   `addRunReport` of a `writeCiRunReport` output; `config` = `resolveApiConfig(deps, undefined, undefined, { format: 'site', assetsBase: '../../assets/' })`;
   a `cicdRows(path)` helper reading the file with `readColumns('cicd', …)` into named rows):
 
@@ -268,10 +268,10 @@ test('trimRun numbers from next and leaves other runs untouched', ...)
 test('trimRun of a run with no partition changes nothing', ...)
 ```
 
-- [ ] **Step 2: Run** `pnpm exec vitest run test/cli/ci/trim-run.test.ts` → FAIL.
-- [ ] **Step 3: Implement** `trim-run.ts` and the fixture.
-- [ ] **Step 4: Run** → PASS; `mise run check` → green (knip: the fixture is used by a test).
-- [ ] **Step 5: Commit** `feat(ci): trim a run in the one report to its CI spans`.
+- [x] **Step 2: Run** `pnpm exec vitest run test/cli/ci/trim-run.test.ts` → FAIL.
+- [x] **Step 3: Implement** `trim-run.ts` and the fixture.
+- [x] **Step 4: Run** → PASS; `mise run check` → green (knip: the fixture is used by a test).
+- [x] **Step 5: Commit** `feat(ci): trim a run in the one report to its CI spans`.
 
 ---
 
@@ -321,7 +321,7 @@ test('trimRun of a run with no partition changes nothing', ...)
     run count.
   - `writeSite(dir: string, index: SiteIndex, repository: string, links?: LandingLinks): Promise<void>`.
 
-- [ ] **Step 1: Write the failing tests** in `test/cli/ci/site.test.ts` and `test/cli/ci/report-links.test.ts`:
+- [x] **Step 1: Write the failing tests** in `test/cli/ci/site.test.ts` and `test/cli/ci/report-links.test.ts`:
 
 ```ts
 // report-links.test.ts
@@ -343,11 +343,11 @@ test('renderLanding links open pull requests into the branch report with their b
 test('siteIndexSchema round-trips detail, reportUrl and closedAt, and still reads an index without them', ...)
 ```
 
-- [ ] **Step 2: Run** `pnpm exec vitest run test/cli/ci/site.test.ts test/cli/ci/report-links.test.ts` → FAIL.
-- [ ] **Step 3: Implement** `report-links.ts` (its first half) and the `site.ts` additions. `site-main.ts` keeps
+- [x] **Step 2: Run** `pnpm exec vitest run test/cli/ci/site.test.ts test/cli/ci/report-links.test.ts` → FAIL.
+- [x] **Step 3: Implement** `report-links.ts` (its first half) and the `site.ts` additions. `site-main.ts` keeps
   calling `applyRetention` until Task 7 replaces it.
-- [ ] **Step 4: Run** → PASS; `mise run check` → green.
-- [ ] **Step 5: Commit** `feat(ci): index records each run's detail, closed pull requests and retention tiers`.
+- [x] **Step 4: Run** → PASS; `mise run check` → green.
+- [x] **Step 5: Commit** `feat(ci): index records each run's detail, closed pull requests and retention tiers`.
 
 ---
 
@@ -392,7 +392,7 @@ test('siteIndexSchema round-trips detail, reportUrl and closedAt, and still read
   `dashboardIdOf(opts.url)` is defined; `window = runsWindow(index.channels[placed.key]?.runs ?? [])` when the index was
   read, else `null`.
 
-- [ ] **Step 1: Write the failing tests**:
+- [x] **Step 1: Write the failing tests**:
 
 ```ts
 // report-links.test.ts
@@ -412,10 +412,10 @@ test('channelPageOf: a pull request links the one report with its branch selecte
 test('reportUrl is allowed in a run update and refused in a push update', ...)
 ```
 
-- [ ] **Step 2: Run** the four files → FAIL.
-- [ ] **Step 3: Implement** as specified (the `README` row for `ci link` and `ci update run` is Task 8's).
-- [ ] **Step 4: Run** → PASS; `mise run check` → green.
-- [ ] **Step 5: Commit** `feat(ci): run and branch links into the one report`.
+- [x] **Step 2: Run** the four files → FAIL.
+- [x] **Step 3: Implement** as specified (the `README` row for `ci link` and `ci update run` is Task 8's).
+- [x] **Step 4: Run** → PASS; `mise run check` → green.
+- [x] **Step 5: Commit** `feat(ci): run and branch links into the one report`.
 
 ---
 
@@ -442,7 +442,7 @@ test('reportUrl is allowed in a run update and refused in a push update', ...)
        `o.remove`.
     `changed` is true when any of the three did something. Idempotent.
 
-- [ ] **Step 1: Write the failing tests** (a site built with `writeCiRunReport` reports merged by `mergeResolved`
+- [x] **Step 1: Write the failing tests** (a site built with `writeCiRunReport` reports merged by `mergeResolved`
   into `branch/main` as the rolling merge did — `mergeWithConfig(deps, undefined, { format: 'site', assetsBase: '../../assets/', compact: true })([a, b], out, false)`
   — so its partitions carry `merge:` sources and `cicd` files; a legacy index with `reportPath: 'branch/main/runs/<id>'`
   and folders `branch/main/runs/1/`, `pr/362/`):
@@ -454,10 +454,10 @@ test('run folders and pr folders go through remove; an in-progress staging folde
 test('a second call changes nothing', ...)
 ```
 
-- [ ] **Step 2: Run** `pnpm exec vitest run test/cli/ci/site-migrate.test.ts` → FAIL.
-- [ ] **Step 3: Implement** `site-migrate.ts`.
-- [ ] **Step 4: Run** → PASS; `mise run check` → green.
-- [ ] **Step 5: Commit** `feat(ci): migrate the rolling report and the index to the one report`.
+- [x] **Step 2: Run** `pnpm exec vitest run test/cli/ci/site-migrate.test.ts` → FAIL.
+- [x] **Step 3: Implement** `site-migrate.ts`.
+- [x] **Step 4: Run** → PASS; `mise run check` → green.
+- [x] **Step 5: Commit** `feat(ci): migrate the rolling report and the index to the one report`.
 
 ---
 
@@ -516,7 +516,7 @@ test('a second call changes nothing', ...)
     Record as today.
 - `deploy-plan.ts`: `PendingPlan.defaultBranch` set from the repository's default branch the plan already fetches.
 
-- [ ] **Step 1: Write the failing tests** in `test/cli/ci/deploy-apply.test.ts` (keep the push and pass describes;
+- [x] **Step 1: Write the failing tests** in `test/cli/ci/deploy-apply.test.ts` (keep the push and pass describes;
   rewrite `run`, `pull requests`, `removed runs`; run reports from `writeCiRunReport`; `ApplyOptions` get
   `slimRetention`/`prSlimRetention`; `pending.defaultBranch: 'main'`):
 
@@ -549,11 +549,11 @@ test("the one report's manifest config carries the branch variable default and t
 test('planDeploy records the default branch in pending.json', ...)   // deploy-plan.test.ts
 ```
 
-- [ ] **Step 2: Run** `pnpm exec vitest run test/cli/ci/deploy-apply.test.ts test/cli/ci/deploy-plan.test.ts` → FAIL.
-- [ ] **Step 3: Implement** the pass as specified; delete `site-main.ts` and its test; adjust `site-io.ts`; the CLI
+- [x] **Step 2: Run** `pnpm exec vitest run test/cli/ci/deploy-apply.test.ts test/cli/ci/deploy-plan.test.ts` → FAIL.
+- [x] **Step 3: Implement** the pass as specified; delete `site-main.ts` and its test; adjust `site-io.ts`; the CLI
   flags; `deploy-plan.ts`; `action.yml` only per the recorded decision.
-- [ ] **Step 4: Run** `pnpm exec vitest run test/cli/ci` → PASS; `mise run check` → green (knip clean: no dead exports left in `site-io.ts`, `site.ts`, `run-report.ts`).
-- [ ] **Step 5: Commit** `feat(ci): the deployer keeps one report with full and slim runs`.
+- [x] **Step 4: Run** `pnpm exec vitest run test/cli/ci` → PASS; `mise run check` → green (knip clean: no dead exports left in `site-io.ts`, `site.ts`, `run-report.ts`).
+- [x] **Step 5: Commit** `feat(ci): the deployer keeps one report with full and slim runs`.
 
 ---
 
@@ -565,17 +565,17 @@ test('planDeploy records the default branch in pending.json', ...)   // deploy-p
   `ci deploy apply`), `README.md:416-421` (the dashboard opens on `main`: the deployer sets the branch default)
 - Modify: `docs/superpowers/plans/2026-11-19-slim-history-shared-assets.md` (status, measurements)
 
-- [ ] **Step 1: Rewrite the README's site layout** as the spec has it: `/assets/` flat (one copy of each viewer and
+- [x] **Step 1: Rewrite the README's site layout** as the spec has it: `/assets/` flat (one copy of each viewer and
   engine file, pruned per file, deferred); `/branch/<name>/` the one report holding main's and every pull request's runs,
   no `runs/<id>/` and no `/pr/<n>/`; full vs slim and the four retention numbers; a closed pull request's runs stay
   slim; "This run's report" opens the run in the report; the pull request comment's "All runs on pull request #n"
   selects its branch; the dashboard opens on `main`. Remove the format-3 size estimate paragraph and the rolling-report
   paragraph. Update the `ci deploy apply` flags row (`--retention` 30, `--pr-retention` 3, `--slim-retention` 100,
   `--pr-slim-retention` 100), the `ci update run` outputs (`report-url` is the run link) and `ci link`'s description.
-- [ ] **Step 2: `mise run gen:check`** (the README's generated Development section is untouched) and
+- [x] **Step 2: `mise run gen:check`** (the README's generated Development section is untouched) and
   `pnpm exec biome check .`.
-- [ ] **Step 3: `timeout 900 mise run verify`** → green. Paste the tail of its output into the PR body's checks line.
-- [ ] **Step 4: Commit** `docs: the site keeps one CI report with slim history on one assets folder`.
+- [x] **Step 3: `timeout 900 mise run verify`** → green. Paste the tail of its output into the PR body's checks line.
+- [x] **Step 4: Commit** `docs: the site keeps one CI report with slim history on one assets folder`.
 - [ ] **Step 5: Branch review** (Opus 5.5) over the whole diff with the spec and this plan; fix blocking findings on the
   branch and re-review.
 - [ ] **Step 6: Open the PR** (`gh pr create`) with the title in the table and a body carrying: what changed per spec
