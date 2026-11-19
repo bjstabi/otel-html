@@ -80,8 +80,7 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
     const { default_branch: defaultBranch } = (
       await getJson<{ default_branch: string }>(repo, token, API_TIMEOUT_MS, fetchFn)
     ).body;
-    // the one report of the default branch; a malformed answer leaves the legacy pull request page
-    if (typeof defaultBranch === 'string') reportPath = `branch/${slug(defaultBranch)}`;
+    reportPath = `branch/${slug(defaultBranch)}`;
     try {
       const all = await fetchPullsForSha(
         { apiUrl: api, repository: opts.repository, sha: run.head_sha },

@@ -7,7 +7,9 @@ import {
   findStickyComment,
   previousRunOf,
 } from '../../../src/cli/ci/link.js';
+import { BRANCH_KEY } from '../../../src/cli/ci/report-links.js';
 import type { SiteIndex, SiteRun } from '../../../src/cli/ci/site.js';
+import { parseDashboardParam } from '../../../src/viewer/state/dashboard-state.js';
 
 const run = {
   id: 5,
@@ -167,7 +169,7 @@ describe('previousRunOf and channelPageOf (the live index, D57)', () => {
   });
 
   test('channelPageOf: a pull request links the one report with its branch selected and the runs window; without the one report, the legacy page', () => {
-    const pr = { kind: 'pr', title: '#7 Fix', headBranch: 'topic' } as const;
+    const pr = { kind: 'pr', title: '#7 Fix', headBranch: 'feat/a b' } as const;
     const w = { start: 1n, end: 2n };
     const page = channelPageOf(
       'pr/7',
@@ -177,8 +179,12 @@ describe('previousRunOf and channelPageOf (the live index, D57)', () => {
       w,
     );
     expect(page?.label).toBe('pull request #7');
-    expect(page?.url.startsWith('https://x.test/branch/main/#/dashboards/ci?t=1~2&d=')).toBe(true);
-    expect(page?.url).toContain(encodeURIComponent('topic'));
+    const url = page?.url ?? '';
+    expect(url.startsWith('https://x.test/branch/main/#/dashboards/ci?')).toBe(true);
+    const q = new URLSearchParams(url.slice(url.indexOf('?') + 1));
+    expect(q.get('t')).toBe('1~2');
+    const d = parseDashboardParam(q.get('d') ?? '');
+    expect(d.ok && d.state.vars[BRANCH_KEY]).toBe('feat/a b');
     expect(channelPageOf('pr/7', pr, 'https://x.test', undefined, w)?.url).toBe('https://x.test/pr/7/');
   });
 

@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { createReportWith, resolveDeps } from '../../../src/api/report.js';
 import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
+import { runKey, traceIdOf } from '../../../src/cli/ci/ids.js';
 import { readLedger } from '../../../src/cli/ci/ledger.js';
 import { readRunManifest } from '../../../src/cli/ci/run-report.js';
 import { readUpdate, type UpdateJson } from '../../../src/cli/ci/update.js';
@@ -23,6 +24,7 @@ import {
   runUpdateStop,
 } from '../../../src/cli/ci/update-main.js';
 import type { CliIo } from '../../../src/cli/io.js';
+import { parseDashboardParam } from '../../../src/viewer/state/dashboard-state.js';
 import type { WriterDeps } from '../../../src/writer/session.js';
 import { openTestDb } from '../../../test-support/duckdb-node.js';
 import { fakeViewerAssets } from '../../../test-support/writer-deps.js';
@@ -456,9 +458,28 @@ describe('runUpdateRun', () => {
     );
     const url = outputs()['report-url'] ?? '';
     expect(url.startsWith('https://x/branch/main/#/dashboards/ci?t=')).toBe(true);
-    expect(url).toContain('w8');
+    const q = new URLSearchParams(url.slice(url.indexOf('?') + 1));
+    const d = parseDashboardParam(q.get('d') ?? '');
+    expect(d.ok && d.state.sel.trace).toBe(
+      traceIdOf(runKey({ repository: 'o/r', runId: 42, runAttempt: 1 })),
+    );
+    expect(d.ok && d.state.run).toEqual({ from: 'w8', mode: 'panel' });
     const u = await readUpdate(deps.fs, join(dir, 'u', outputs().name ?? ''));
     expect(u.reportUrl).toBe(url);
+  });
+
+  test('a report without a range is linked over the API run times', async () => {
+    const report = join(dir, 'empty-report');
+    const r = await createReportWith({ out: report, format: 'local', assetsBase: 'assets/' }, deps);
+    await r.close();
+    expect((await readRunManifest(deps.fs, report))?.range).toBeNull();
+    await runUpdateRun(runOpts(report), ioOf({ GITHUB_TOKEN: 't' }), deps, api);
+    const url = outputs()['report-url'] ?? '';
+    const t = new URLSearchParams(url.slice(url.indexOf('?') + 1)).get('t') ?? '';
+    const ns = (iso: string): bigint => BigInt(Date.parse(iso)) * 1_000_000n;
+    expect(t).toBe(
+      `${ns(apiRun.run_started_at ?? '') - 7n * 86_400_000_000_000n}~${ns(apiRun.updated_at) + 3_600_000_000_000n}`,
+    );
   });
 
   test('every file the run report lists is in the update, rollup files included', async () => {
