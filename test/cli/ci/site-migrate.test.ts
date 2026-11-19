@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest';
@@ -186,5 +186,57 @@ describe('migrateToOneReport', () => {
     expect(second.changed).toBe(false);
     expect(second.index).toEqual(first.index);
     expect(removed).toEqual([]);
+  });
+
+  test('a flush: partition whose cicd run row names an indexed run is renamed to run:<id>#<attempt>', async () => {
+    await rolling([{ runId: 1, attempt: 3 }]);
+    const m = await manifest();
+    const [p] = m.partitions;
+    if (p === undefined) throw new Error('expected a partition');
+    await writeRunReport(deps, join(site, ONE), { ...m, partitions: [{ ...p, source: 'flush:5' }] });
+    const index: SiteIndex = {
+      version: 1,
+      channels: {
+        [ONE]: {
+          kind: 'branch',
+          title: 'main',
+          headBranch: 'main',
+          runs: [legacyRun(1, 3, `${ONE}/runs/1`)],
+        },
+      },
+    };
+    await migrate(index);
+    expect((await manifest()).partitions.map((x) => x.source)).toEqual([runSource(1, 3)]);
+    expect(removed).toEqual([]);
+  });
+
+  test('an unreadable cicd file keeps its partition untouched with one warning', async () => {
+    await rolling([
+      { runId: 1, attempt: 1 },
+      { runId: 2, attempt: 1 },
+    ]);
+    const m = await manifest();
+    const bad = m.partitions[0];
+    const cicd = bad?.files.cicd;
+    if (bad === undefined || cicd === undefined) throw new Error('expected a cicd file');
+    writeFileSync(join(site, ONE, cicd.path), 'not parquet at all');
+    const index: SiteIndex = {
+      version: 1,
+      channels: {
+        [ONE]: {
+          kind: 'branch',
+          title: 'main',
+          headBranch: 'main',
+          runs: [legacyRun(2, 1, `${ONE}/runs/2`), legacyRun(1, 1, `${ONE}/runs/1`)],
+        },
+      },
+    };
+    await migrate(index);
+    const sources = (await manifest()).partitions.map((x) => x.source);
+    expect(sources).toContain(bad.source);
+    expect(sources.filter((s) => s.startsWith('run:'))).toHaveLength(1);
+    expect(removed).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(cicd.path);
   });
 });
