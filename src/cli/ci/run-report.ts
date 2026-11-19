@@ -105,9 +105,9 @@ export interface SyncPlan {
 const filePaths = (e: PartitionEntry): string[] => TABLES.flatMap((t) => e.files[t]?.path ?? []);
 
 /** The partition files as the manifest lists them: numbered `n`, values normalised to the manifest's keys. */
-function entryFrom(
+export function entryFrom(
   n: number,
-  p: UpdatePartition,
+  p: Pick<UpdatePartition, 'source' | 'files' | 'cicd'>,
   dir: string,
   keys: StatisticsKeys,
   copies: FileMove[],
@@ -147,7 +147,7 @@ function withSharesFormat(manifest: ManifestV4, added: readonly PartitionEntry[]
   return { ...manifest, formatVersion: 8 };
 }
 
-function totalsAndRange(partitions: readonly PartitionEntry[]): Pick<ManifestV4, 'totals' | 'range'> {
+export function totalsAndRange(partitions: readonly PartitionEntry[]): Pick<ManifestV4, 'totals' | 'range'> {
   const totals = { spans: 0, logs: 0, metrics: 0 };
   let start: bigint | null = null;
   let end: bigint | null = null;
@@ -271,36 +271,6 @@ export function planSync(input: SyncInput): SyncPlan {
     pending: false,
     outcome: 'applied',
   };
-}
-
-/**
- * The manifest with partitions renumbered from `from` (ascending, paths rewritten) and the file moves that realise it
- * (D54). The moves are ordered so that applying them one after the other in one directory is safe: partitions that
- * shift up move last-first (descending `n`), those that shift down first-first (ascending), and a partition that
- * keeps its number has no move.
- */
-export function renumbered(
-  manifest: ManifestV4,
-  from: number,
-): { manifest: ManifestV4; moves: { from: string; to: string }[] } {
-  const up: { from: string; to: string }[] = [];
-  const down: { from: string; to: string }[] = [];
-  const partitions = manifest.partitions.map((e, i): PartitionEntry => {
-    const n = from + i;
-    const files: PartitionEntry['files'] = {};
-    for (const t of TABLES) {
-      const f = e.files[t];
-      if (f === undefined) continue;
-      const to = partitionFilePath(n, t);
-      if (n > e.n) up.push({ from: f.path, to });
-      else if (n < e.n) down.push({ from: f.path, to });
-      files[t] = { ...f, path: to };
-    }
-    return { ...e, n, files };
-  });
-  const result = { ...manifest, partitions };
-  parseAnyManifest(manifestForWrite(result));
-  return { manifest: result, moves: [...down, ...up.reverse()] };
 }
 
 /** Writes `data/manifest.js`, `index.html` (no host meta) and `.nojekyll` into `dir`. */

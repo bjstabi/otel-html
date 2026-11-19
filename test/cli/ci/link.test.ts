@@ -7,7 +7,9 @@ import {
   findStickyComment,
   previousRunOf,
 } from '../../../src/cli/ci/link.js';
+import { BRANCH_KEY } from '../../../src/cli/ci/report-links.js';
 import type { SiteIndex, SiteRun } from '../../../src/cli/ci/site.js';
+import { parseDashboardParam } from '../../../src/viewer/state/dashboard-state.js';
 
 const run = {
   id: 5,
@@ -140,23 +142,74 @@ describe('previousRunOf and channelPageOf (the live index, D57)', () => {
 
   test('names the channel page from the channel, whether or not the index lists the run', () => {
     expect(
-      channelPageOf('pr/7', { kind: 'pr', title: '#7 Fix', headBranch: 'topic' }, 'https://x.test'),
+      channelPageOf(
+        'pr/7',
+        { kind: 'pr', title: '#7 Fix', headBranch: 'topic' },
+        'https://x.test',
+        undefined,
+        null,
+      ),
     ).toEqual({ label: 'pull request #7', url: 'https://x.test/pr/7/' });
     expect(
-      channelPageOf('branch/main', { kind: 'branch', title: 'main', headBranch: 'main' }, 'https://x.test'),
+      channelPageOf(
+        'branch/main',
+        { kind: 'branch', title: 'main', headBranch: 'main' },
+        'https://x.test',
+        undefined,
+        null,
+      ),
     ).toEqual({ label: '`main`', url: 'https://x.test/branch/main/' });
+  });
+
+  test('previousRunOf prefers the indexed reportUrl', () => {
+    const idx = index([{ ...entry(5, 'ci'), reportUrl: 'https://x.test/branch/main/#/dashboards/ci?t=1' }]);
+    expect(previousRunOf(idx, 'pr/7', 9, 'https://x.test', 'ci')?.url).toBe(
+      'https://x.test/branch/main/#/dashboards/ci?t=1',
+    );
+  });
+
+  test('channelPageOf: a pull request links the one report with its branch selected and the runs window; without the one report, the legacy page', () => {
+    const pr = { kind: 'pr', title: '#7 Fix', headBranch: 'feat/a b' } as const;
+    const w = { start: 1n, end: 2n };
+    const page = channelPageOf(
+      'pr/7',
+      pr,
+      'https://x.test',
+      { reportPath: 'branch/main', dashboard: 'ci' },
+      w,
+    );
+    expect(page?.label).toBe('pull request #7');
+    const url = page?.url ?? '';
+    expect(url.startsWith('https://x.test/branch/main/#/dashboards/ci?')).toBe(true);
+    const q = new URLSearchParams(url.slice(url.indexOf('?') + 1));
+    expect(q.get('t')).toBe('1~2');
+    const d = parseDashboardParam(q.get('d') ?? '');
+    expect(d.ok && d.state.vars[BRANCH_KEY]).toBe('feat/a b');
+    expect(channelPageOf('pr/7', pr, 'https://x.test', undefined, w)?.url).toBe('https://x.test/pr/7/');
   });
 
   test('fences a branch name holding backticks with more of them', () => {
     const label = (headBranch: string): string | undefined =>
-      channelPageOf('branch/b', { kind: 'branch', title: headBranch, headBranch }, 'https://x.test')?.label;
+      channelPageOf(
+        'branch/b',
+        { kind: 'branch', title: headBranch, headBranch },
+        'https://x.test',
+        undefined,
+        null,
+      )?.label;
     expect(label('a`b')).toBe('``a`b``');
     expect(label('x``y`')).toBe('``` x``y` ```');
   });
 
   test('has no page for an older per-workflow channel', () => {
-    expect(channelPageOf('ci', { kind: 'workflow', title: 'ci', headBranch: 'main' }, 'https://x.test')).toBe(
-      undefined,
-    );
+    expect(
+      channelPageOf(
+        'ci',
+        { kind: 'workflow', title: 'ci', headBranch: 'main' },
+        'https://x.test',
+        undefined,
+        null,
+      ),
+    ).toBe(undefined);
   });
 });

@@ -23,7 +23,8 @@ import {
   findStickyComment,
   previousRunOf,
 } from './link.js';
-import { channelFor, parseSiteIndex, pullsToLink, slug } from './site.js';
+import { dashboardIdOf, runsWindow } from './report-links.js';
+import { channelFor, parseSiteIndex, pullsToLink, siteRunOf, slug } from './site.js';
 
 export type LinkOptions = {
   runId: number;
@@ -74,10 +75,12 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
   // A default-branch run is published to the branch's channel, so no pull request gets its comment; the channel is still found.
   let pulls: ApiPull[] = [];
   let placed: ReturnType<typeof channelFor>;
+  let reportPath: string | undefined;
   try {
     const { default_branch: defaultBranch } = (
       await getJson<{ default_branch: string }>(repo, token, API_TIMEOUT_MS, fetchFn)
     ).body;
+    reportPath = `branch/${slug(defaultBranch)}`;
     try {
       const all = await fetchPullsForSha(
         { apiUrl: api, repository: opts.repository, sha: run.head_sha },
@@ -102,12 +105,27 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
   let page: ReturnType<typeof channelPageOf>;
   // D57: the channel comes from the API, so a run the live index does not list yet still gets both lines.
   const baseUrl = opts.indexUrl.replace(/\/index\.json$/, '').replace(/\/+$/, '');
-  if (placed !== undefined) page = channelPageOf(placed.key, placed.channel, baseUrl);
+  const dashboard = dashboardIdOf(opts.url);
+  // `ci link` runs before the deploy pass: the live index does not list this run yet, so the window adds it
+  const thisRun = siteRunOf(run, '');
+  const thisRuns = Number.isNaN(Date.parse(thisRun.completedAt)) ? [] : [thisRun];
+  const one = dashboard === undefined || reportPath === undefined ? undefined : { reportPath, dashboard };
+  if (placed !== undefined)
+    page = channelPageOf(placed.key, placed.channel, baseUrl, one, runsWindow(thisRuns));
   try {
     const res = await fetchFn(opts.indexUrl, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
     if (!res.ok) throw new Error(`${opts.indexUrl} answered ${res.status}`);
     const index = parseSiteIndex(await res.text(), warn);
-    if (placed !== undefined) previous = previousRunOf(index, placed.key, run.id, baseUrl, run.name);
+    if (placed !== undefined) {
+      previous = previousRunOf(index, placed.key, run.id, baseUrl, run.name);
+      page = channelPageOf(
+        placed.key,
+        placed.channel,
+        baseUrl,
+        one,
+        runsWindow([...(index.channels[placed.key]?.runs ?? []), ...thisRuns]),
+      );
+    }
   } catch (e) {
     warn(`cannot read the site index, so no previous run is linked: ${messageOf(e)}`);
   }

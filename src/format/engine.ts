@@ -14,10 +14,14 @@ export type EngineExtension = (typeof ENGINE_EXTENSIONS)[number];
  * from the part of the last URL segment before the first dot, so the version may follow it). A `local` report opens
  * from `file://`, where only classic scripts load, and takes a gzipped base64 wrapper named by the engine version.
  */
-export function engineExtensionName(format: 'local' | 'site', extension: EngineExtension): string {
+export function engineExtensionName(
+  format: 'local' | 'site',
+  extension: EngineExtension,
+  version: string = ENGINE_VERSION,
+): string {
   return format === 'site'
-    ? `${extension}.${ENGINE_VERSION}.duckdb_extension.wasm`
-    : `duckdb.${ENGINE_VERSION}.${extension}.ext.gz.b64.js`;
+    ? `${extension}.${version}.duckdb_extension.wasm`
+    : `duckdb.${version}.${extension}.ext.gz.b64.js`;
 }
 
 /**
@@ -25,13 +29,13 @@ export function engineExtensionName(format: 'local' | 'site', extension: EngineE
  * one file per extension. A `site` report is served over http and takes the plain files; a `local` report opens
  * from `file://`, where only classic scripts load, and takes the base64 wrappers.
  */
-export function engineAssetNames(format: 'local' | 'site'): string[] {
-  const base = `duckdb.${ENGINE_VERSION}`;
+export function engineAssetNames(format: 'local' | 'site', version: string = ENGINE_VERSION): string[] {
+  const base = `duckdb.${version}`;
   const core =
     format === 'site'
       ? [`${base}.wasm`, `${base}.worker.js`]
       : [`${base}.wasm.gz.b64.js`, `${base}.worker.b64.js`];
-  return [...core, ...ENGINE_EXTENSIONS.map((e) => engineExtensionName(format, e))];
+  return [...core, ...ENGINE_EXTENSIONS.map((e) => engineExtensionName(format, e, version))];
 }
 
 /**

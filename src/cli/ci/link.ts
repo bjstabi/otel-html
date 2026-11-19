@@ -1,4 +1,5 @@
 import { type ApiJob, type ApiRun, CHECK_RUN_NAME } from './github-api.js';
+import { branchLink, type Window } from './report-links.js';
 import { type Channel, IN_PROGRESS, type SiteIndex, slug } from './site.js';
 import { codeSpan, MARKER, summaryTable } from './summary.js';
 
@@ -89,19 +90,32 @@ export function previousRunOf(
   if (prev === undefined) return undefined;
   return {
     runId: prev.runId,
-    url: `${baseUrl}/${prev.reportPath}/`,
+    url: prev.reportUrl ?? `${baseUrl}/${prev.reportPath}/`,
     ...(prev.workflow === undefined ? {} : { workflow: prev.workflow }),
   };
 }
 
-/** The rolling report of channel `key` under `baseUrl`, as `channelFor` describes the channel (D57); none for an older per-workflow channel. */
+/** Where the one CI report lives on the site, and the dashboard that shows its runs. */
+export type OneReport = { reportPath: string; dashboard: string };
+
+/**
+ * The rolling report of channel `key` under `baseUrl`, as `channelFor` describes the channel (D57): a branch's own
+ * page; a pull request's branch selected in the one report over `window` (the legacy `pr/<n>/` page without `one`);
+ * none for an older per-workflow channel.
+ */
 export function channelPageOf(
   key: string,
   channel: Omit<Channel, 'runs'>,
   baseUrl: string,
+  one: OneReport | undefined,
+  window: Window | null,
 ): ChannelPage | undefined {
   if (channel.kind === 'workflow') return undefined;
-  const label =
-    channel.kind === 'pr' ? `pull request #${key.slice('pr/'.length)}` : codeSpan(channel.headBranch);
-  return { label, url: `${baseUrl}/${key}/` };
+  if (channel.kind === 'branch') return { label: codeSpan(channel.headBranch), url: `${baseUrl}/${key}/` };
+  const label = `pull request #${key.slice('pr/'.length)}`;
+  if (one === undefined) return { label, url: `${baseUrl}/${key}/` };
+  return {
+    label,
+    url: branchLink(`${baseUrl}/${one.reportPath}/`, one.dashboard, channel.headBranch, window),
+  };
 }

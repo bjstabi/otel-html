@@ -445,6 +445,7 @@ describe('otel-html ci link', () => {
     stub();
     calls = [];
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/repos/o/r')) return new Response('{"default_branch":"main"}', { status: 200 });
       if (url.includes('/pulls'))
         return new Response(
           JSON.stringify([

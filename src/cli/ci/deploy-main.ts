@@ -36,6 +36,8 @@ export interface DeployApplyOptions {
   repository: string;
   retention: number;
   prRetention: number;
+  slimRetention: number;
+  prSlimRetention: number;
   config?: string;
   passRunId: number;
   /** The attempt of the pass's run (`GITHUB_RUN_ATTEMPT`); 1 when omitted. */

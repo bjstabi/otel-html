@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { resolveApiConfig } from '../../api/report.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
@@ -17,12 +18,14 @@ import {
   setOutputs,
   warning,
 } from './github-api.js';
+import { runKey, traceIdOf } from './ids.js';
 import { FAILURE_MARK, LOG_FILE, PID_FILE, readLedger, STOP_FILE, writeLedger } from './ledger.js';
 import { parseJobContext } from './publish.js';
 import { mergeWithConfig } from './publish-io.js';
 import { buildPushUpdate, ciSpansFromApi } from './push-update.js';
-import { channelFor, reportUrl } from './site.js';
-import { runAssetsBase } from './site-main.js';
+import { BRANCH_KEY, dashboardIds, runLink } from './report-links.js';
+import { readRunManifest } from './run-report.js';
+import { assetsBaseFor, channelFor, slug } from './site.js';
 import { parseUpdateName, readUpdate, UPDATE_FILE, type UpdateJson, updateName } from './update.js';
 
 const API_TIMEOUT_MS = 15_000;
@@ -331,17 +334,37 @@ export async function runUpdateRun(
   const reportOut = join(folder, 'report');
   await mergeWithConfig(deps, o.config, {
     format: 'site',
-    assetsBase: runAssetsBase(reportPath, deps.version),
+    assetsBase: assetsBaseFor(reportPath),
     compact: true,
   })([o.report], reportOut, false);
   await deps.fs.removeDir(join(reportOut, 'data', 'state'));
   await pruneReport(deps, reportOut);
+  // the run opens in the one report of the default branch: its trace selected, a window around it
+  const manifest = await readRunManifest(deps.fs, reportOut);
+  const nsOf = (iso: string): bigint => BigInt(Date.parse(iso)) * 1_000_000n;
+  const range =
+    manifest?.range == null
+      ? { start: nsOf(run.run_started_at ?? run.created_at), end: nsOf(run.updated_at) }
+      : { start: BigInt(manifest.range.start), end: BigInt(manifest.range.end) };
+  const link = runLink(
+    `${o.baseUrl.replace(/\/+$/, '')}/branch/${slug(defaultBranch)}/`,
+    dashboardIds(await resolveApiConfig(deps, o.config, undefined), run.name),
+    {
+      traceId: traceIdOf(runKey({ repository: o.repository, runId: run.id, runAttempt: run.run_attempt })),
+      range,
+    },
+    // the deployer defaults the branch variable to the default branch: any other run names its own
+    run.head_branch === null || run.head_branch === defaultBranch
+      ? undefined
+      : { [BRANCH_KEY]: run.head_branch },
+  );
+  update.reportUrl = link;
   await deps.fs.writeTextAtomic(join(folder, UPDATE_FILE), JSON.stringify(update));
   await readUpdate(deps.fs, folder);
   setOutputs(io, {
     name,
     channel: placed.key,
-    'report-url': reportUrl(o.baseUrl.replace(/\/+$/, ''), reportPath),
+    'report-url': link,
     published: 'true',
   });
 }

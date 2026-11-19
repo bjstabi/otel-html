@@ -27,8 +27,8 @@ inputs:
     description: Runs kept per workflow on each branch page (`branch/<name>/`) of the site.
     default: "30"
   pr-retention:
-    description: Runs kept per workflow on each pull request page (`pr/<number>/`) of the site.
-    default: "10"
+    description: Runs kept in full per workflow for each open pull request
+    default: "3"
   preview:
     description: >-
       Screenshot each default-branch rolling report this pass rebuilt (light and dark, `preview-light.png` and

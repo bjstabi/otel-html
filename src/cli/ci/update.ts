@@ -46,6 +46,8 @@ export interface UpdateJson {
   conclusion?: string;
   /** run: when that finished run ended (ISO); recorded with `conclusion`. */
   completedAt?: string;
+  /** A `run` update only: the link that opens the run in the one report (the index records it). */
+  reportUrl?: string;
 }
 
 const nonNegInt = z.number().int().nonnegative();
@@ -95,6 +97,7 @@ const OPTIONAL_FIELDS = [
   'pr',
   'conclusion',
   'completedAt',
+  'reportUrl',
 ] as const;
 
 export const UpdateJsonSchema: z.ZodType<UpdateJson> = z
@@ -112,12 +115,13 @@ export const UpdateJsonSchema: z.ZodType<UpdateJson> = z
     pr: z.exactOptional(nonNegInt),
     conclusion: z.exactOptional(z.enum(['success', 'failure', 'cancelled'])),
     completedAt: z.exactOptional(z.iso.datetime()),
+    reportUrl: z.exactOptional(z.string().max(2048)),
   })
   .superRefine((u, ctx) => {
     const allowed = new Set<string>([
       ...REQUIRED[u.kind],
       ...(u.kind === 'push' ? ['ci'] : []),
-      ...(u.kind === 'run' ? ['conclusion', 'completedAt'] : []),
+      ...(u.kind === 'run' ? ['conclusion', 'completedAt', 'reportUrl'] : []),
     ]);
     for (const f of OPTIONAL_FIELDS) {
       const present = u[f] !== undefined;

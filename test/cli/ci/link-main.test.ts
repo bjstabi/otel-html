@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
 import { runLink } from '../../../src/cli/ci/link-main.js';
 import type { CliIo } from '../../../src/cli/io.js';
+import { parseDashboardParam } from '../../../src/viewer/state/dashboard-state.js';
 
 const run = (over: Partial<ApiRun> = {}): ApiRun => ({
   id: 42,
@@ -40,7 +41,13 @@ const job = (id: number, name: string, conclusion: string | null, over: Partial<
 
 type Sent = { method: string; url: string; body: unknown };
 
-async function linked(r: ApiRun, jobs: ApiJob[], excludeJobs?: string): Promise<Sent[]> {
+async function linked(
+  r: ApiRun,
+  jobs: ApiJob[],
+  excludeJobs?: string,
+  index: unknown = { version: 1, channels: [] },
+  url = 'https://x/pr/5/runs/42/',
+): Promise<Sent[]> {
   const sent: Sent[] = [];
   const fetchFn = async (url: string, init?: RequestInit): Promise<Response> => {
     const method = init?.method ?? 'GET';
@@ -48,7 +55,7 @@ async function linked(r: ApiRun, jobs: ApiJob[], excludeJobs?: string): Promise<
       sent.push({ method, url, body: JSON.parse(String(init?.body)) });
       return Response.json({});
     }
-    if (url.endsWith('/index.json')) return Response.json({ version: 1, channels: [] });
+    if (url.endsWith('/index.json')) return Response.json(index);
     if (url.includes('/jobs')) return Response.json({ jobs });
     if (url.includes('/pulls'))
       return Response.json([
@@ -68,7 +75,7 @@ async function linked(r: ApiRun, jobs: ApiJob[], excludeJobs?: string): Promise<
     {
       runId: 42,
       repository: 'o/r',
-      url: 'https://x/pr/5/runs/42/',
+      url,
       indexUrl: 'https://x/index.json',
       comment: true,
       check: true,
@@ -101,5 +108,44 @@ describe('runLink from inside the run', () => {
     const during = run({ status: 'in_progress', conclusion: null });
     const inRun = [job(1, 'build', 'success'), job(8, 'site / report', null, { status: 'in_progress' })];
     expect(JSON.stringify(await linked(during, inRun))).toContain('site / report');
+  });
+
+  test('the all-runs link reaches the one report and its window holds the run the comment is about', async () => {
+    const old = {
+      runId: 7,
+      attempt: 1,
+      conclusion: 'success',
+      headSha: 'zzz',
+      headBranch: 'feat',
+      startedAt: '2025-12-01T00:00:00Z',
+      completedAt: '2025-12-01T00:05:00Z',
+      runUrl: 'u',
+      reportPath: 'pr/5/runs/7',
+    };
+    const index = {
+      version: 1,
+      channels: { 'pr/5': { kind: 'pr', title: '#5 t', headBranch: 'feat', runs: [old] } },
+    };
+    const done = [job(1, 'build', 'failure')];
+    const post = await linked(
+      run({ updated_at: '2026-01-01T00:02:00Z' }),
+      done,
+      undefined,
+      index,
+      'https://x/branch/main/#/dashboards/ci?t=1~2',
+    );
+    const body = JSON.stringify(post);
+    const m = /All runs on pull request #5: (\S+?)(?:\\n|")/.exec(body);
+    const link = m?.[1] ?? '';
+    expect(link.startsWith('https://x/branch/main/#/dashboards/ci?')).toBe(true);
+    const q = new URLSearchParams(link.slice(link.indexOf('?') + 1));
+    const [start, end] = (q.get('t') ?? '').split('~').map((x) => BigInt(x));
+    const ns = (iso: string): bigint => BigInt(Date.parse(iso)) * 1_000_000n;
+    expect(start).toBeLessThanOrEqual(ns('2025-12-01T00:00:00Z'));
+    expect(end).toBeGreaterThanOrEqual(ns('2026-01-01T00:02:00Z'));
+    expect(parseDashboardParam(q.get('d') ?? '')).toMatchObject({
+      ok: true,
+      state: { vars: { 'vcs.ref.head.name': 'feat' } },
+    });
   });
 });

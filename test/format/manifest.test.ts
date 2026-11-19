@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { type Manifest, ManifestSchema, parseManifest } from '../../src/format/manifest.js';
+import { type Manifest, ManifestSchema, parseManifest, SOURCE_RE } from '../../src/format/manifest.js';
 import { chunkPath, LOCK_PATH, MANIFEST_PATH, STATE_DIR } from '../../src/format/paths.js';
 import { REGISTRATION_GLOBAL } from '../../src/format/version.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
@@ -209,5 +209,12 @@ describe('manifest', () => {
     expect(failure(() => parseManifest({ ...manifest(), epochUnixNano: '12x' })).path).toBe(
       'manifest.epochUnixNano',
     );
+  });
+});
+
+describe('SOURCE_RE', () => {
+  test('accepts a run source and still rejects an unknown prefix', () => {
+    expect(SOURCE_RE.test('run:12345#2')).toBe(true);
+    expect(SOURCE_RE.test('foo:1')).toBe(false);
   });
 });

@@ -99,6 +99,8 @@ export interface PendingPlan {
   deletionsDue: number;
   floor: string;
   now: string;
+  /** The repository's default branch: the one report's name. Absent when the plan did not need it. */
+  defaultBranch?: string;
 }
 
 /** A failed check of one update: recorded as its rejection, never stops the pass. */
@@ -597,5 +599,14 @@ export async function planDeploy(
   const pendingFrom = updates.filter((u) => u.accepted).map((u) => isoOrUndefined(u.createdAt) ?? Infinity);
   const oldest = Math.min(...pendingFrom);
   const floor = hourBefore(Number.isFinite(oldest) ? oldest : nowMs);
-  return { version: 1, base, state: state?.applied.form ?? null, updates, deletionsDue, floor, now: o.now };
+  return {
+    version: 1,
+    base,
+    state: state?.applied.form ?? null,
+    updates,
+    deletionsDue,
+    floor,
+    now: o.now,
+    defaultBranch: await defaultBranchOf(),
+  };
 }
