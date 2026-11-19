@@ -22,7 +22,7 @@ wins where they differ.
 
 | #   | branch              | PR title                                                                        | status |
 | --- | ------------------- | ------------------------------------------------------------------------------- | ------ |
-| 1   | `feat/slim-history` | `feat(ci): one CI report with full and slim runs on one shared assets folder`   | open   |
+| 1   | `feat/slim-history` | `feat(ci): one CI report with full and slim runs on one shared assets folder`   | merged #363 (4bbfa873), hotfix #365 (028a33e8) |
 
 - **Models.** Implementers and task reviewers run on Sonnet 5.5. The branch review runs on Opus 5.5.
 - **Bugs found on the way** are fixed in this PR and listed under **Also** in its body.
@@ -576,33 +576,65 @@ test('planDeploy records the default branch in pending.json', ...)   // deploy-p
   `pnpm exec biome check .`.
 - [x] **Step 3: `timeout 900 mise run verify`** → green. Paste the tail of its output into the PR body's checks line.
 - [x] **Step 4: Commit** `docs: the site keeps one CI report with slim history on one assets folder`.
-- [ ] **Step 5: Branch review** (Opus 5.5) over the whole diff with the spec and this plan; fix blocking findings on the
+- [x] **Step 5: Branch review** (Opus 5.5) over the whole diff with the spec and this plan; fix blocking findings on the
   branch and re-review.
-- [ ] **Step 6: Open the PR** (`gh pr create`) with the title in the table and a body carrying: what changed per spec
+- [x] **Step 6: Open the PR** (`gh pr create`) with the title in the table and a body carrying: what changed per spec
   section; the decisions recorded during execution; **Also**; the before measurements (live `files.json` total
   755.3 MB on 2026-11-19, `site / deploy` 129–265 s); the placeholders for the after measurements (filled by Task 9);
   the verify output line; the session trailer.
-- [ ] **Step 7: Merge** on green CI (`gh pr merge <n> --squash --delete-branch`), per the unattended process (a
+- [x] **Step 7: Merge** on green CI (`gh pr merge <n> --squash --delete-branch`), per the unattended process (a
   CodeRabbit rate limit is not a reason to wait).
 
 ---
 
 ### Task 9: After the first live passes
 
-- [ ] **Step 1:** Watch the first `site / deploy` pass after the merge (`gh run list --workflow ci.yml`,
+- [x] **Step 1:** Watch the first `site / deploy` pass after the merge (`gh run list --workflow ci.yml`,
   `gh run view <id> --log` for the `deploy` job): the migration log lines, duration, no `::error::`. A failed pass is a
   stop (report what the log says).
-- [ ] **Step 2:** Verify live: `https://bjstabi.github.io/otel-html/branch/main/` opens on `main`; `index.json` runs
+- [x] **Step 2:** Verify live: `https://bjstabi.github.io/otel-html/branch/main/` opens on `main`; `index.json` runs
   carry `reportPath: "branch/main"` and `detail`; `site-state/files.json` total (sum of sizes) and count; no
   `assets/<version>/` folder referenced; after 15 minutes and the next pass, the old folders gone.
-- [ ] **Step 3:** After the first pull request run publishes (open a trivial PR if none is in flight): the "pull
+- [x] **Step 3:** After the first pull request run publishes (open a trivial PR if none is in flight): the "pull
   requests" quick filter shows its run; the PR comment's "Report:" link opens the run pane; "All runs on pull request"
   selects the branch.
-- [ ] **Step 4:** Measure the dashboard with `mise run measure:live -- --out <scratch>/live` (request count and settled
+- [x] **Step 4:** Measure the dashboard with `mise run measure:live -- --out <scratch>/live` (request count and settled
   time, default window) and, by hand in a browser, the `all` window's requests and load time; compare with the
   2026-11-18 record (63 requests, 1.32 s). If the `all` window is markedly slower, open an issue for the optional 7-day
   compaction of slim partitions (spec §5.9) rather than extending this PR.
-- [ ] **Step 5:** Record in the PR body and in this plan's status: `files.json` total before and after, a slim run's
+- [x] **Step 5:** Record in the PR body and in this plan's status: `files.json` total before and after, a slim run's
   bytes, the `site / deploy` duration of the first three passes, the dashboard numbers. A deploy pass over 8 minutes or
   a total above 500 MB is a stop.
-- [ ] **Step 6:** Post the unattended process's summary in the session.
+- [x] **Step 6:** Post the unattended process's summary in the session.
+
+---
+
+## Status (2026-11-19)
+
+Done. PR #363 merged (squash 4bbfa873) after per-task reviews on Sonnet 5.5 (three fix rounds: Tasks 4, 5, 6) and a
+whole-branch review on Opus 5.5 ("with fixes": PR and load run links opened outside the branch selection, the
+"All runs" window missed the newest run, referenced assets never left the deletion list; fixed before merge).
+
+The first live pass migrated the index and the assets base but kept every partition's old source: the deployer's
+import graph never loaded `src/writer/parquet-wasm-source.ts`, so every cicd read failed ("no parquet-wasm source
+registered"); the keep-and-retry path held and nothing was lost. Hotfix #365 (028a33e8) adds the side-effect import to
+`site-migrate.ts` and `trim-run.ts` with a module-reset regression test, and gives the heavy `deploy-apply` tests a
+30 s timeout (one took 5151 ms under coverage on main). The second pass renamed all 39 partitions and trimmed the two
+runs past their tier. Deferred findings: #364.
+
+### Measurements
+
+| | before (2026-11-19) | after (second pass, 2026-11-19) |
+| --- | --- | --- |
+| `site-state/files.json` total | 755.3 MB (1110 files) | 310.9 MB (566 files), 45 MB more scheduled |
+| versioned `assets/<version>/` files | 61 (≈ 330 MB) | 0; flat `assets/` 74.1 MB |
+| `site / deploy` duration | 129–265 s | 137 s, 136 s (the two passes), 135 s (PR run) |
+| one report | 36 partitions, 2.1 M spans windowed | 39 `run:` partitions, 5.0 M spans, 777 k logs |
+| a slim run | — | 47 KB (368 CI spans) |
+| CI dashboard (default window) | 63 requests / 1.32 s / 60.7 fps (2026-11-18) | 69 requests / 1.30 s / 60.6 fps |
+
+Not measured: the `all` window by hand in a browser (spec §5.9's optional 7-day compaction of slim partitions stays
+open until the slim history grows).
+
+Decisions made during execution beyond the spec are in PR #363's body; the ledger's rulings were reported in the
+session summary.
