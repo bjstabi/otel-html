@@ -15,6 +15,7 @@ import { parseTraceId } from '../../model/ids.js';
 import { type MenuItem, useContextMenu } from '../components/context-menu.js';
 import { withVariable } from '../dashboards/variables-bar.js';
 import type { DataSource } from '../data/data-source.js';
+import type { TimeWindow } from '../data/time-window.js';
 import type { DashboardPageState } from '../state/dashboard-state.js';
 import { jobStatus } from './derive.js';
 import type { CiRun } from './runs.js';
@@ -23,6 +24,7 @@ const BRANCH = 'vcs.ref.head.name';
 const TRIGGER = 'cicd.pipeline.trigger';
 const JOB = 'cicd.pipeline.task.name';
 const RUNNER = 'cicd.worker.labels';
+const REPOSITORY = 'vcs.repository.url.full';
 const URL_ATTR = 'cicd.pipeline.run.url.full';
 const PULL_REQUEST = 'pull_request';
 const MAX_JOB_ITEMS = 2;
@@ -64,14 +66,20 @@ interface RunActionsContext {
   state: DashboardPageState;
   change(fn: (s: DashboardPageState) => DashboardPageState): void;
   dataSource: DataSource;
+  /** The page window; the repository lookup uses it once (a report's repository does not change with it). */
+  window: TimeWindow | null;
 }
 
-interface Shared extends RunActionsContext {
+interface Shared extends Omit<RunActionsContext, 'window'> {
   /** The pane mode last used on this page; it outlives `d.run`, which a trace change clears. */
   mode: { current: 'attached' | 'panel' };
   /** Where the last run was opened (page-session state like the mode; never in the URL). */
   point: RunPoint | null;
   setPoint(p: RunPoint | null): void;
+  /** The report's only repository url, read once per page; null when there are several, none or the read failed. */
+  repository(): Promise<string | null>;
+  /** The settled `repository()`, synchronously; undefined until it settles. */
+  repositoryValue(): string | null | undefined;
 }
 
 const Ctx = createContext<Shared | null>(null);
@@ -81,10 +89,33 @@ export function RunActionsProvider(props: RunActionsContext & { children: ReactN
   const { children, ...value } = props;
   const mode = useRef<'attached' | 'panel'>('attached');
   const [point, setPoint] = useState<RunPoint | null>(null);
-  const { dashboard, state, change, dataSource } = value;
+  const { dashboard, state, change, dataSource, window: pageWindow } = value;
+  const lookup = useRef<{ promise: Promise<string | null>; value: string | null | undefined } | null>(null);
+  const repository = useCallback((): Promise<string | null> => {
+    if (lookup.current === null) {
+      const entry: { promise: Promise<string | null>; value: string | null | undefined } = {
+        promise: Promise.resolve(null),
+        value: undefined,
+      };
+      entry.promise = dataSource.resourceValues(REPOSITORY, { window: pageWindow }).then(
+        ({ values }) => {
+          const only = values.length === 1 ? values[0] : undefined;
+          entry.value = only !== undefined && /^https?:\/\//.test(only) ? only : null;
+          return entry.value;
+        },
+        () => {
+          entry.value = null;
+          return null;
+        },
+      );
+      lookup.current = entry;
+    }
+    return lookup.current.promise;
+  }, [dataSource, pageWindow]);
+  const repositoryValue = useCallback(() => lookup.current?.value, []);
   const shared = useMemo(
-    () => ({ dashboard, state, change, dataSource, mode, point, setPoint }),
-    [dashboard, state, change, dataSource, point],
+    () => ({ dashboard, state, change, dataSource, mode, point, setPoint, repository, repositoryValue }),
+    [dashboard, state, change, dataSource, point, repository, repositoryValue],
   );
   return <Ctx.Provider value={shared}>{children}</Ctx.Provider>;
 }
@@ -145,7 +176,7 @@ export interface RunActions {
 export function useRunActions(widgetId: string): RunActions {
   const ctx = useContext(Ctx);
   if (ctx === null) throw new Error('useRunActions needs a RunActionsProvider');
-  const { dashboard, state, change, dataSource, mode, point, setPoint } = ctx;
+  const { dashboard, state, change, dataSource, mode, point, setPoint, repository, repositoryValue } = ctx;
   const menu = useContextMenu();
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
@@ -189,23 +220,34 @@ export function useRunActions(widgetId: string): RunActions {
     [change, mode],
   );
 
-  // The tab opens inside the click (a popup blocker drops a `window.open` made after an await) and goes to the url
-  // once it is known; with none (or a blocked tab) the url is opened afterwards, or the notice is shown.
+  // With the repository known the url is built and opened in the click. Otherwise the tab opens inside the click (a
+  // popup blocker drops a `window.open` made after an await) and goes to the url once it is known; with none (or a
+  // blocked tab) the url is opened afterwards, or the notice is shown.
   const openOnGithub = useCallback(
     (run: CiRun): void => {
+      const numeric = /^\d+$/.test(run.runId);
+      const known = repositoryValue();
+      if (numeric && typeof known === 'string') {
+        window.open(`${known}/actions/runs/${run.runId}`, '_blank', 'noopener');
+        return;
+      }
       const tab = window.open('', '_blank') ?? null;
       if (tab !== null) tab.opener = null;
       const none = (): void => {
         tab?.close();
         setNotice('This run has no GitHub link.');
       };
-      runUrl(dataSource, run.traceId).then((url) => {
+      const urlOf = async (): Promise<string | null> => {
+        const repo = numeric ? await repository() : null;
+        return repo === null ? runUrl(dataSource, run.traceId) : `${repo}/actions/runs/${run.runId}`;
+      };
+      urlOf().then((url) => {
         if (url === null || !/^https?:\/\//.test(url)) none();
         else if (tab === null) window.open(url, '_blank', 'noopener');
         else tab.location.href = url;
       }, none);
     },
-    [dataSource],
+    [dataSource, repository, repositoryValue],
   );
 
   const filterItem = useCallback(
@@ -216,6 +258,7 @@ export function useRunActions(widgetId: string): RunActions {
 
   const runMenu = useCallback(
     (run: CiRun, at: At): void => {
+      repository();
       const quick = quickFor(dashboard, run);
       const failed = run.jobs.filter((j) => jobStatus(j) === 'failure').slice(0, MAX_JOB_ITEMS);
       menu.open(at, run.title ?? `Run ${run.runId}`, [
@@ -235,7 +278,7 @@ export function useRunActions(widgetId: string): RunActions {
         ...failed.flatMap((j) => filterItem('Filter the page by job', JOB, j.name)),
       ]);
     },
-    [dashboard, change, menu.open, openRun, openOnGithub, filterItem],
+    [dashboard, change, menu.open, openRun, openOnGithub, filterItem, repository],
   );
 
   const jobMenu = useCallback(

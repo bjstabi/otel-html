@@ -545,7 +545,7 @@ function DashboardView(props: {
 
   return (
     <CicdProvider dataSource={dataSource} extent={extent} shared={shared}>
-      <RunActionsProvider dashboard={d} state={state} change={change} dataSource={dataSource}>
+      <RunActionsProvider dashboard={d} state={state} change={change} dataSource={dataSource} window={page}>
         <PageChrome title={d.title} manifest={manifest} actions={actions} timeRange={false}>
           <div className="flex flex-col gap-3">
             <PageOptionNotice

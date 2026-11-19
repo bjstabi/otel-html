@@ -157,6 +157,7 @@ async function show(w: Widget, rows: CicdRow[], shift = 0, windowEnd = 14 * DAY)
               state = fn(state);
             }}
             dataSource={dataSource}
+            window={null}
           >
             <CicdWidget
               widget={w}

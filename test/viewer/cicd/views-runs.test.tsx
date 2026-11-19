@@ -116,6 +116,7 @@ const sourceOf = (rows: CicdRow[]): DataSource => {
     ds = {
       cicdRows: () => Promise.resolve(rows),
       manifest: { epochUnixNano: '1700000000000000000' },
+      resourceValues: () => Promise.resolve({ values: [] }),
     } as unknown as DataSource;
     sources.set(rows, ds);
   }
@@ -133,7 +134,13 @@ async function show(w: Widget, rows: CicdRow[], extent = { start: 0, end: 14 * D
     root.render(
       <ThemeProvider>
         <CicdProvider dataSource={dataSource} extent={extent}>
-          <RunActionsProvider dashboard={dashboard} state={state} change={change} dataSource={dataSource}>
+          <RunActionsProvider
+            dashboard={dashboard}
+            state={state}
+            change={change}
+            dataSource={dataSource}
+            window={null}
+          >
             <CicdWidget
               widget={w}
               scope={

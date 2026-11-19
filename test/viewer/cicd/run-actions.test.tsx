@@ -69,6 +69,7 @@ let host: HTMLElement;
 let api: ReturnType<typeof useRunActions>;
 let state: DashboardPageState;
 let getTrace: ReturnType<typeof vi.fn>;
+let resourceValues: ReturnType<typeof vi.fn>;
 
 function Probe(): React.JSX.Element {
   api = useRunActions('w9');
@@ -84,7 +85,8 @@ const render = (): void =>
         change={(fn) => {
           state = fn(state);
         }}
-        dataSource={{ getTrace } as unknown as DataSource}
+        dataSource={{ getTrace, resourceValues } as unknown as DataSource}
+        window={null}
       >
         <Probe />
       </RunActionsProvider>,
@@ -109,6 +111,9 @@ const detail = (url: string | null, rootless = false): unknown => ({
 beforeEach(() => {
   state = EMPTY_DASHBOARD_STATE;
   getTrace = vi.fn();
+  resourceValues = vi
+    .fn()
+    .mockResolvedValue({ values: ['https://github.com/a/b', 'https://github.com/c/d'] });
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -302,6 +307,78 @@ describe('Open on GitHub', () => {
     await click();
     expect(tab.close).toHaveBeenCalled();
     expect(document.querySelector('[role="status"]')?.textContent).toMatch(/no GitHub link/);
+  });
+});
+
+describe('Open on GitHub from the repository', () => {
+  const REPO = 'vcs.repository.url.full';
+  const menu = async (r: CiRun = run()): Promise<void> => {
+    await act(async () => api.runMenu(r, { x: 1, y: 1 }));
+  };
+  const closeMenu = (): void => {
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+  };
+
+  it('reads the repository once per page, when a menu opens', async () => {
+    resourceValues.mockResolvedValue({ values: ['https://github.com/o/r'] });
+    await menu();
+    expect(resourceValues).toHaveBeenCalledTimes(1);
+    expect(resourceValues).toHaveBeenCalledWith(REPO, { window: null });
+    closeMenu();
+    await menu();
+    expect(resourceValues).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the derived url in the click, with no blank tab and no trace read, once settled', async () => {
+    resourceValues.mockResolvedValue({ values: ['https://github.com/o/r'] });
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    await menu();
+    await act(async () => item('Open on GitHub').click());
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith('https://github.com/o/r/actions/runs/7', '_blank', 'noopener');
+    expect(getTrace).not.toHaveBeenCalled();
+  });
+
+  it('opens the blank tab in the click while pending and sends it to the derived url', async () => {
+    let resolve: (v: unknown) => void = () => {};
+    resourceValues.mockReturnValue(new Promise((r) => (resolve = r)));
+    const tab = { opener: 'parent', location: { href: '' }, close: vi.fn() };
+    const open = vi.spyOn(window, 'open').mockReturnValue(tab as never);
+    await menu();
+    await act(async () => item('Open on GitHub').click());
+    expect(open).toHaveBeenCalledWith('', '_blank');
+    expect(tab.location.href).toBe('');
+    await act(async () => resolve({ values: ['https://github.com/o/r'] }));
+    expect(tab.location.href).toBe('https://github.com/o/r/actions/runs/7');
+    expect(getTrace).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['two repositories', () => resourceValues.mockResolvedValue({ values: ['https://a/x', 'https://b/y'] })],
+    ['a failed read', () => resourceValues.mockRejectedValue(new Error('boom'))],
+    ['a non-http value', () => resourceValues.mockResolvedValue({ values: ['git@github.com:o/r'] })],
+  ])('reads the trace with %s', async (_name, arrange) => {
+    arrange();
+    const tab = { opener: 'parent', location: { href: '' }, close: vi.fn() };
+    vi.spyOn(window, 'open').mockReturnValue(tab as never);
+    getTrace.mockResolvedValue(detail('https://github.com/o/r/actions/runs/7'));
+    await menu();
+    await act(async () => item('Open on GitHub').click());
+    expect(getTrace).toHaveBeenCalledWith(TRACE);
+    expect(tab.location.href).toBe('https://github.com/o/r/actions/runs/7');
+  });
+
+  it('reads the trace for a run whose id is not numeric, even with a repository', async () => {
+    resourceValues.mockResolvedValue({ values: ['https://github.com/o/r'] });
+    const tab = { opener: 'parent', location: { href: '' }, close: vi.fn() };
+    vi.spyOn(window, 'open').mockReturnValue(tab as never);
+    getTrace.mockResolvedValue(detail('https://github.com/o/r/actions/runs/99'));
+    await menu(run({ runId: TRACE }));
+    await act(async () => item('Open on GitHub').click());
+    expect(getTrace).toHaveBeenCalledWith(TRACE);
+    expect(tab.location.href).toBe('https://github.com/o/r/actions/runs/99');
   });
 });
 

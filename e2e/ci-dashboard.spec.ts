@@ -221,3 +221,29 @@ test('on a phone nothing scrolls sideways, stats pair, the run pane follows its 
   await noSideScroll();
   expect(problems).toEqual([]);
 });
+
+test("Open on GitHub goes to the run's page", HTTP, async ({ page, reportUrl }) => {
+  // The page guard fails any request off this machine, so the tab is not really opened: window.open is recorded.
+  await page.addInitScript(() => {
+    const calls: unknown[][] = [];
+    (window as unknown as { opened: unknown[][] }).opened = calls;
+    window.open = (...args: unknown[]) => {
+      calls.push(args);
+      return null;
+    };
+  });
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await openCi(page, reportUrl('ci'));
+  const cell = widget(page, VIEW_IDS.grid).locator('[data-cell]').nth(3);
+  await cell.scrollIntoViewIfNeeded();
+  await cell.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: /Open on GitHub/ }).click();
+  // the repository may still be loading at the click: the blank tab (recorded as ['', '_blank']) comes first then
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { opened: unknown[][] }).opened.at(-1)))
+    .toEqual([
+      expect.stringMatching(/^https:\/\/github\.com\/example\/otel-html\/actions\/runs\/\d+$/),
+      '_blank',
+      'noopener',
+    ]);
+});

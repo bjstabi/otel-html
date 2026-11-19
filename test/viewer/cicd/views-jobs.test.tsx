@@ -125,6 +125,7 @@ async function show(w: Widget, rows: CicdRow[]): Promise<void> {
   const dataSource = {
     cicdRows: () => Promise.resolve(rows),
     manifest: { epochUnixNano: '1700000000000000000' },
+    resourceValues: () => Promise.resolve({ values: [] }),
     getTrace: () => Promise.reject(new Error('no trace')),
   } as unknown as DataSource;
   subtitles = [];
@@ -140,6 +141,7 @@ async function show(w: Widget, rows: CicdRow[]): Promise<void> {
               state = fn(state);
             }}
             dataSource={dataSource}
+            window={null}
           >
             <CicdWidget
               widget={w}
