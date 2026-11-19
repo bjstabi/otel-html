@@ -36,6 +36,7 @@
     "test/cli/ci/site-assets.test.ts": 0.5,
     "test/cli/ci/site-io.test.ts": 0.2,
     "test/cli/ci/site-main.test.ts": 4,
+    "test/cli/ci/site-migrate.test.ts": 3,
     "test/cli/ci/site-state.test.ts": 0.1,
     "test/cli/ci/site.test.ts": 0.1,
     "test/cli/ci/summary.test.ts": 0.1,
