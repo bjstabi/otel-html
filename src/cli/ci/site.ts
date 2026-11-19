@@ -172,8 +172,6 @@ export function channelBadges(channel: Channel): Record<string, Badge> {
   return badges;
 }
 
-export const reportUrl = (baseUrl: string, reportPath: string): string => `${baseUrl}/${reportPath}/`;
-
 /**
  * The open pull requests a finished run belongs to, the exact-commit ones first: those whose head is the run's
  * commit, then those whose head branch is the run's branch in the same repository (the pull request may have moved
@@ -249,35 +247,14 @@ export function placeRun(
   runs.sort((a, b) =>
     a.completedAt === b.completedAt ? b.runId - a.runId : a.completedAt < b.completedAt ? 1 : -1,
   );
-  return { ...index, channels: { ...index.channels, [key]: { ...channel, runs } } };
-}
-
-/**
- * Keeps, in each channel, the newest `keep.branch` (branch channels) or `keep.pr` (pull request channels) runs of each
- * workflow; runs recorded without a workflow count as one more. The run `publishing` (a run id) is kept as well, and
- * counts toward its workflow's tally, so a rebuild of an old run stays indexed until the next publish. `remove` is the
- * dropped runs' report paths.
- */
-export function applyRetention(
-  index: SiteIndex,
-  keep: { branch: number; pr: number },
-  publishing?: number,
-): { index: SiteIndex; remove: string[] } {
-  const remove: string[] = [];
-  const channels: Record<string, Channel> = {};
-  for (const [key, ch] of Object.entries(index.channels)) {
-    const n = ch.kind === 'pr' ? keep.pr : keep.branch;
-    const seen = new Map<string | undefined, number>();
-    const runs = ch.runs.filter((r) => {
-      const count = (seen.get(r.workflow) ?? 0) + 1;
-      seen.set(r.workflow, count);
-      if (count <= n || r.runId === publishing) return true;
-      remove.push(r.reportPath);
-      return false;
-    });
-    channels[key] = { ...ch, runs };
-  }
-  return { index: { ...index, channels }, remove };
+  const closedAt = channel.closedAt ?? index.channels[key]?.closedAt;
+  return {
+    ...index,
+    channels: {
+      ...index.channels,
+      [key]: { ...channel, ...(closedAt === undefined ? {} : { closedAt }), runs },
+    },
+  };
 }
 
 export interface Tiers {
@@ -409,22 +386,6 @@ export function dropWorkflowChannels(index: SiteIndex): { index: SiteIndex; remo
   return remove.length === 0 ? { index, remove } : { index: { ...index, channels }, remove };
 }
 
-/** The channel's report paths (site-relative), oldest first: the order the rolling report merges them in. A provisional (`in_progress`) run has duplicate roots and no verdict: it is left out (D66). */
-export function rollingInputs(channel: Channel): string[] {
-  return channel.runs
-    .filter((r) => r.conclusion !== IN_PROGRESS)
-    .map((r) => r.reportPath)
-    .reverse();
-}
-
-/** `index` without channel `key`, and its report paths; a missing key changes nothing. */
-export function removeChannel(index: SiteIndex, key: string): { index: SiteIndex; remove: string[] } {
-  const ch = index.channels[key];
-  if (ch === undefined) return { index, remove: [] };
-  const { [key]: _gone, ...channels } = index.channels;
-  return { index: { ...index, channels }, remove: ch.runs.map((r) => r.reportPath) };
-}
-
 const esc = (s: string): string =>
   s
     .replace(/&/g, '&amp;')
@@ -494,14 +455,4 @@ export function renderLanding(index: SiteIndex, repository: string, links?: Land
     ) +
     (branches.length + (branchKey === undefined ? 0 : prs.length) === 0 ? '<p>No reports yet.</p>' : '');
   return page(`${repository} CI reports`, body);
-}
-
-/** A page that forwards to `relativeTarget` (a path relative to the page). */
-export function renderRedirect(relativeTarget: string): string {
-  const t = esc(relativeTarget);
-  return page(
-    'Redirecting',
-    `<p>Redirecting to <a href="${t}">${t}</a>.</p>`,
-    `<meta http-equiv="refresh" content="0; url=${t}">`,
-  );
 }

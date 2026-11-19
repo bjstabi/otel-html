@@ -1,7 +1,6 @@
 import { expect, test } from 'vitest';
 import type { ApiPull, ApiRun } from '../../../src/cli/ci/github-api.js';
 import {
-  applyRetention,
   applyTiers,
   badgeFor,
   type Channel,
@@ -14,12 +13,8 @@ import {
   placeRun,
   pullsOfRun,
   pullsToLink,
-  removeChannel,
   renderLanding,
-  renderRedirect,
   reopenPullRequest,
-  reportUrl,
-  rollingInputs,
   type SiteIndex,
   type SiteRun,
   siteIndexSchema,
@@ -166,61 +161,20 @@ test('placeRun: newest first; the same runId replaces in place', () => {
   ]);
 });
 
+test('placeRun keeps the closedAt of the channel it replaces when the new metadata has none', () => {
+  const closed = {
+    ...empty(),
+    channels: { 'pr/12': { kind: 'pr' as const, title: '#12', headBranch: 'f', closedAt: 'T', runs: [] } },
+  };
+  const after = placeRun(closed, 'pr/12', { kind: 'pr', title: '#12 x', headBranch: 'f' }, siteRun(1));
+  expect(after.channels['pr/12']).toMatchObject({ closedAt: 'T', title: '#12 x' });
+});
+
 test('placeRun creates a channel that was removed meanwhile, without mutating the input', () => {
   const before = empty();
   const after = placeRun(before, 'pr/12', { kind: 'pr', title: '#12 x', headBranch: 'feat' }, siteRun(1));
   expect(Object.keys(before.channels)).toEqual([]);
   expect(after.channels['pr/12']?.runs).toHaveLength(1);
-});
-
-test('applyRetention keeps the run being published even when it is older than the kept ones', () => {
-  let ix = empty();
-  for (const id of [1, 2, 3, 4])
-    ix = placeRun(ix, MAIN, main, siteRun(id, { reportPath: `branch/main/runs/${id}`, workflow: 'ci' }));
-  const r = applyRetention(ix, { branch: 2, pr: 1 }, 1);
-  expect(r.index.channels[MAIN]?.runs.map((x) => x.runId)).toEqual([4, 3, 1]);
-  expect(r.remove).toEqual(['branch/main/runs/2']);
-  // the next publish drops it like any other old run
-  const next = applyRetention(
-    placeRun(r.index, MAIN, main, siteRun(5, { reportPath: 'branch/main/runs/5', workflow: 'ci' })),
-    { branch: 2, pr: 1 },
-    5,
-  );
-  expect(next.index.channels[MAIN]?.runs.map((x) => x.runId)).toEqual([5, 4]);
-  expect(next.remove.sort()).toEqual(['branch/main/runs/1', 'branch/main/runs/3']);
-});
-
-test('applyRetention keeps the newest runs of each workflow per channel, by channel kind', () => {
-  let ix = empty();
-  const w = (workflow: string | undefined) => (workflow === undefined ? {} : { workflow });
-  for (const [id, wf] of [
-    [1, 'ci'],
-    [2, 'load'],
-    [3, 'ci'],
-    [4, 'ci'],
-  ] as const)
-    ix = placeRun(ix, MAIN, main, siteRun(id, { reportPath: `branch/main/runs/${id}`, ...w(wf) }));
-  const pr = { kind: 'pr', title: '#12 x', headBranch: 'feat' } as const;
-  for (const [id, wf] of [
-    [5, undefined],
-    [6, undefined],
-    [7, 'ci'],
-    [8, 'load'],
-    [9, 'ci'],
-  ] as const)
-    ix = placeRun(ix, 'pr/12', pr, siteRun(id, { reportPath: `pr/12/runs/${id}`, ...w(wf) }));
-  const r = applyRetention(ix, { branch: 2, pr: 1 });
-  expect(r.remove.sort()).toEqual(['branch/main/runs/1', 'pr/12/runs/5', 'pr/12/runs/7']);
-  expect(r.index.channels[MAIN]?.runs.map((x) => x.runId)).toEqual([4, 3, 2]);
-  expect(r.index.channels['pr/12']?.runs.map((x) => x.runId)).toEqual([9, 8, 6]);
-});
-
-test('removeChannel returns the report paths; a missing key is a no-op', () => {
-  const ix = placeRun(empty(), 'pr/12', { kind: 'pr', title: '#12 x', headBranch: 'f' }, siteRun(1));
-  const r = removeChannel(ix, 'pr/12');
-  expect(r.index.channels).toEqual({});
-  expect(r.remove).toEqual(['ci/runs/1']);
-  expect(removeChannel(ix, 'pr/99')).toEqual({ index: ix, remove: [] });
 });
 
 test('dropWorkflowChannels removes the older per-workflow channels and names their folders', () => {
@@ -304,36 +258,12 @@ test('renderLanding lists the branches, then pull requests newest first, has no 
   expect(order).toEqual([...order].sort((a, b) => a - b));
 });
 
-test('slug and reportUrl', () => {
+test('slug', () => {
   expect(slug('ci')).toBe('ci');
   expect(slug('Perf / Load')).toBe('perf-load');
   expect(slug('feat/Big Thing')).toBe('feat-big-thing');
   expect(slug('pr')).toBe('pr');
   expect(slug('--')).toBe('workflow');
-  expect(reportUrl('https://o.github.io/r', 'pr/1/runs/1')).toBe('https://o.github.io/r/pr/1/runs/1/');
-});
-
-test('renderRedirect refreshes to the target', () => {
-  const html = renderRedirect('runs/123/');
-  expect(html).toContain('url=runs/123/');
-  expect(html).toContain('<a href="runs/123/">');
-  expect(renderRedirect('a"><script>')).not.toContain('<script');
-});
-
-test('rollingInputs lists the report paths oldest first', () => {
-  const r = (runId: number): SiteRun => ({
-    runId,
-    attempt: 1,
-    conclusion: 'success',
-    headSha: 'a',
-    headBranch: 'main',
-    completedAt: '2026-01-01T00:00:00Z',
-    runUrl: 'u',
-    reportPath: `ci/runs/${runId}`,
-  });
-  const channel = { kind: 'workflow' as const, title: 'ci', headBranch: 'main', runs: [r(3), r(2), r(1)] };
-  expect(rollingInputs(channel)).toEqual(['ci/runs/1', 'ci/runs/2', 'ci/runs/3']);
-  expect(channel.runs.map((x) => x.runId)).toEqual([3, 2, 1]);
 });
 
 test('formatRunDuration: seconds, minutes and hours, never negative', () => {
@@ -395,18 +325,6 @@ test('parseSiteIndex round-trips a run with and without startedAt', () => {
     channels: { [MAIN]: { ...main, runs: [timed({ runId: 2 }), siteRun(1)] } },
   };
   expect(parseSiteIndex(JSON.stringify(index))).toEqual(index);
-});
-
-test('rollingInputs skips in-progress runs (D66)', () => {
-  const channel = {
-    ...main,
-    runs: [
-      siteRun(3, { conclusion: 'in_progress' }),
-      siteRun(2, { conclusion: 'success' }),
-      siteRun(1, { conclusion: 'in_progress' }),
-    ],
-  };
-  expect(rollingInputs(channel)).toEqual([siteRun(2).reportPath]);
 });
 
 test('channelBadges skips in-progress runs: the badge names the newest finished run (D66)', () => {

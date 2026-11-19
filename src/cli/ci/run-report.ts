@@ -273,36 +273,6 @@ export function planSync(input: SyncInput): SyncPlan {
   };
 }
 
-/**
- * The manifest with partitions renumbered from `from` (ascending, paths rewritten) and the file moves that realise it
- * (D54). The moves are ordered so that applying them one after the other in one directory is safe: partitions that
- * shift up move last-first (descending `n`), those that shift down first-first (ascending), and a partition that
- * keeps its number has no move.
- */
-export function renumbered(
-  manifest: ManifestV4,
-  from: number,
-): { manifest: ManifestV4; moves: { from: string; to: string }[] } {
-  const up: { from: string; to: string }[] = [];
-  const down: { from: string; to: string }[] = [];
-  const partitions = manifest.partitions.map((e, i): PartitionEntry => {
-    const n = from + i;
-    const files: PartitionEntry['files'] = {};
-    for (const t of TABLES) {
-      const f = e.files[t];
-      if (f === undefined) continue;
-      const to = partitionFilePath(n, t);
-      if (n > e.n) up.push({ from: f.path, to });
-      else if (n < e.n) down.push({ from: f.path, to });
-      files[t] = { ...f, path: to };
-    }
-    return { ...e, n, files };
-  });
-  const result = { ...manifest, partitions };
-  parseAnyManifest(manifestForWrite(result));
-  return { manifest: result, moves: [...down, ...up.reverse()] };
-}
-
 /** Writes `data/manifest.js`, `index.html` (no host meta) and `.nojekyll` into `dir`. */
 export async function writeRunReport(
   deps: Pick<WriterDeps, 'fs' | 'viewerAssets'>,

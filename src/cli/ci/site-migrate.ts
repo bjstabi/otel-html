@@ -5,7 +5,7 @@ import { readColumns } from '../../format/parquet/stream.js';
 import type { WriterDeps } from '../../writer/session.js';
 import { runSource } from './main-report.js';
 import { readRunManifest, totalsAndRange, writeRunReport } from './run-report.js';
-import { IN_PROGRESS, type SiteIndex } from './site.js';
+import { IN_PROGRESS, type SiteIndex, type SiteRun } from './site.js';
 
 const CICD_NAMES = TABLE_COLUMNS.cicd.map((c) => c.name);
 const KIND = CICD_NAMES.indexOf('kind');
@@ -95,7 +95,8 @@ export async function migrateToOneReport(o: {
   for (const [key, ch] of Object.entries(o.index.channels)) {
     let touched = false;
     const runs = ch.runs.map((r) => {
-      if (r.reportPath === o.reportPath && r.detail !== undefined) return r;
+      // a push staging folder is not a report of its own yet: its run is still being published
+      if (r.conclusion === IN_PROGRESS || (r.reportPath === o.reportPath && r.detail !== undefined)) return r;
       touched = true;
       return { ...r, reportPath: o.reportPath, detail: r.detail ?? ('full' as const) };
     });
@@ -103,10 +104,25 @@ export async function migrateToOneReport(o: {
     channels[key] = touched ? { ...ch, runs } : ch;
   }
 
-  const folders = (await dirsIn(join(o.site, 'pr'))).map((n) => `pr/${n}`);
+  const staged = (runs: readonly SiteRun[] = []): Set<string> =>
+    new Set(runs.filter((r) => r.conclusion === IN_PROGRESS).map((r) => String(r.runId)));
+  const folders: string[] = [];
+  for (const n of await dirsIn(join(o.site, 'pr'))) {
+    const key = `pr/${n}`;
+    const staging = staged(o.index.channels[key]?.runs);
+    if (staging.size === 0) {
+      folders.push(key);
+      continue;
+    }
+    // the folder of a pull request with a run in progress keeps that run's staging folder
+    for (const name of await readdir(join(o.site, key)).catch(() => [] as string[]))
+      if (name !== 'runs') folders.push(`${key}/${name}`);
+    for (const id of await dirsIn(join(o.site, key, 'runs')))
+      if (!staging.has(id)) folders.push(`${key}/runs/${id}`);
+  }
   for (const [key, ch] of Object.entries(o.index.channels)) {
     if (ch.kind !== 'branch') continue;
-    const staging = new Set(ch.runs.filter((r) => r.conclusion === IN_PROGRESS).map((r) => String(r.runId)));
+    const staging = staged(ch.runs);
     for (const n of await dirsIn(join(o.site, key, 'runs')))
       if (!staging.has(n)) folders.push(`${key}/runs/${n}`);
   }

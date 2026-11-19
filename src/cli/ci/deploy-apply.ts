@@ -9,7 +9,8 @@ import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
 import type { PendingPlan, PendingUpdate } from './deploy-plan.js';
 import { messageOf, warning } from './github-api.js';
-import { diskNext } from './main-report.js';
+import { addRunReport, diskNext, ensureMainReport, removeRun } from './main-report.js';
+import { dashboardIds, withBranchDefault } from './report-links.js';
 import {
   emptyRunState,
   type JobUpdate,
@@ -19,10 +20,22 @@ import {
   readRunManifest,
   writeRunReport,
 } from './run-report.js';
-import { assetsBaseFor, type Channel, IN_PROGRESS, placeRun, type SiteRun } from './site.js';
-import { ensureSharedAssets } from './site-assets.js';
-import { readSiteIndex, removePaths, writeSite } from './site-io.js';
-import { placeFinishedRun, removePullRequest } from './site-main.js';
+import {
+  applyTiers,
+  assetsBaseFor,
+  type Channel,
+  closePullRequest,
+  dropWorkflowChannels,
+  IN_PROGRESS,
+  placeRun,
+  reopenPullRequest,
+  type SiteIndex,
+  type SiteRun,
+  slug,
+} from './site.js';
+import { ensureSharedAssets, migrateAssetsBases, pruneAssets } from './site-assets.js';
+import { readSiteIndex, removePaths, writeBadges, writeSite } from './site-io.js';
+import { migrateToOneReport } from './site-migrate.js';
 import {
   DELETION_GRACE_MS,
   readSiteState,
@@ -33,6 +46,7 @@ import {
   type UpdateOutcome,
   writeSiteState,
 } from './site-state.js';
+import { trimRun } from './trim-run.js';
 import { nameMatches, type ParsedName, parseUpdateName, readUpdate, type UpdateJson } from './update.js';
 
 /** §5.3 steps 3 to 5 over directories (D54, D59, D63, D64, D66): a pure function of the unpacked base, the state and the updates. */
@@ -46,8 +60,14 @@ export interface ApplyOptions {
   updates: string;
   pending: PendingPlan;
   repository: string;
+  /** Runs kept in full per workflow in the branch report. */
   retention: number;
+  /** Runs kept in full per workflow for each open pull request. */
   prRetention: number;
+  /** Runs kept per workflow in the branch report, full or slim. */
+  slimRetention: number;
+  /** Slim pull request runs kept per workflow across all pull requests. */
+  prSlimRetention: number;
   config?: string;
   /** This deployer run's id: the `pass` of what it consumes and drops. */
   passRunId: number;
@@ -63,7 +83,7 @@ export interface ApplyResult {
   consumed: number;
   /** = `changed`, but for a base that names no deployment (a consumed-only state cannot name one). */
   deployed: boolean;
-  /** Branch channels whose rolling report was rebuilt. */
+  /** Branch reports that changed. */
   previews: string[];
   /** Job keys whose updates wait for files an earlier update has not carried yet. */
   pendingJobs: string[];
@@ -119,6 +139,15 @@ const isSafeRel = (p: string): boolean =>
 /** Files written again by this pass are live again: they leave the list. */
 function unschedule(state: SiteState, keep: (path: string) => boolean): void {
   state.deletions.files = state.deletions.files.filter((f) => !keep(f.path));
+}
+
+/** The site-relative folder of the one report: the default branch's, else the trusted channel's, else the only branch channel's, else `branch/main`. */
+function mainReportPath(pending: PendingPlan, trust: ApplyOptions['trust'], index: SiteIndex): string {
+  if (pending.defaultBranch !== undefined) return `branch/${slug(pending.defaultBranch)}`;
+  if (trust?.channel.startsWith('branch/') === true) return trust.channel;
+  const branches = Object.entries(index.channels).filter(([, c]) => c.kind === 'branch');
+  const [only] = branches;
+  return branches.length === 1 && only !== undefined ? only[0] : 'branch/main';
 }
 
 const ms = (text: string | undefined): number | undefined => {
@@ -322,7 +351,15 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
     (ms(a.createdAt) ?? 0) - (ms(b.createdAt) ?? 0) || a.key.localeCompare(b.key);
 
   let index = await readSiteIndex(o.site, warn);
-  const commitIndex = async (): Promise<void> => writeSite(o.site, index, o.repository);
+  const mainPath = mainReportPath(pending, o.trust, index);
+  const mainDir = join(o.site, ...mainPath.split('/'));
+  const mainBase = assetsBaseFor(mainPath);
+  const resolved = withBranchDefault(
+    await resolveApiConfig(deps, o.config, undefined, { format: 'site', assetsBase: mainBase }),
+    pending.defaultBranch ?? mainPath.slice('branch/'.length),
+  );
+  const links = { dashboard: dashboardIds(resolved).dashboard };
+  const commitIndex = async (): Promise<void> => writeSite(o.site, index, o.repository, links);
   const prRemoved = (c: Placed): boolean => {
     if (c.channel.channel.kind !== 'pr') return false;
     return c.channel.key.slice(3) in state.removed.prs;
@@ -334,25 +371,71 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
     for (const key of Object.keys(state.runs.runs))
       if (paths.some((p) => key === p || key.startsWith(`${p}/`))) delete state.runs.runs[key];
   };
+  const mainFiles = (rel: string[]): string[] => rel.map((f) => toRel(mainPath, f));
+
+  const migrateSite = async (): Promise<boolean> => {
+    const manifestFile = join(mainDir, MANIFEST_PATH);
+    const fingerprint = async (): Promise<string> =>
+      JSON.stringify([
+        index,
+        state.deletions.files.length,
+        (await fs.exists(manifestFile)) ? await fs.readText(manifestFile) : '',
+      ]);
+    const moved = (await migrateAssetsBases(o.site, deps, warn)).length > 0;
+    const before = await fingerprint();
+    const legacy = dropWorkflowChannels(index);
+    index = legacy.index;
+    // a legacy channel named like a shared folder must not take the site's own files with it
+    await scheduleRemoval(
+      o.site,
+      legacy.remove.filter((p) => p !== 'assets' && p !== SITE_STATE_DIR),
+    );
+    const migrated = await migrateToOneReport({
+      site: o.site,
+      index,
+      reportPath: mainPath,
+      deps,
+      warn,
+      remove: scheduleRemoval,
+    });
+    index = migrated.index;
+    // folders still on disk (deferred deletion) are listed again, but nothing new is
+    return moved || (await fingerprint()) !== before;
+  };
+
+  // (3.5) a site laid out as before the one report moves to it; what that leaves behind is scheduled
+  if (await migrateSite()) {
+    changed = true;
+    await commitIndex();
+  }
 
   // (4) remove-pr and reopen-pr, by time
   for (const c of [...prUpdates].sort(byTime)) {
     const pr = c.u.pr ?? 0;
     if (c.u.kind === 'reopen-pr') {
       delete state.removed.prs[String(pr)];
+      const reopened = reopenPullRequest(index, pr);
+      index = reopened.index;
+      if (reopened.changed) changed = true;
     } else {
       state.removed.prs[String(pr)] = { runId: c.u.runId, at: o.now };
-      const gone = await removePullRequest(o.site, pr, o.repository, deps, io, scheduleRemoval);
-      if (gone) changed = true;
-      index = await readSiteIndex(o.site, warn);
+      const closedNow = closePullRequest(index, pr, o.now);
+      index = closedNow.index;
+      if (closedNow.changed) changed = true;
+      // a pull request folder of the layout before the one report (and a push staging folder in it)
+      if (await fs.exists(join(o.site, 'pr', String(pr)))) {
+        await scheduleRemoval(o.site, [`pr/${pr}`]);
+        changed = true;
+      }
     }
+    await commitIndex();
     record(c, 'applied');
   }
 
   // (5) push, one sync per run and job
   const pushes = placedUpdates.filter((l) => l.u.kind === 'push');
   const completeAtStart = new Map<string, { complete: boolean; attempt: number }>();
-  let resolved: ResolvedConfig | undefined;
+  let pushConfig: ResolvedConfig | undefined;
   const groups = new Map<string, Placed[]>();
   for (const c of pushes) {
     if (prRemoved(c)) {
@@ -375,7 +458,8 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
       if (seen === undefined) {
         const m = indexed === undefined ? null : await readRunManifest(fs, runDir);
         seen = {
-          complete: m?.complete === true,
+          // a run the index says is finished is complete, whatever its staging folder (awaiting deletion) says
+          complete: m?.complete === true || (indexed !== undefined && indexed.conclusion !== IN_PROGRESS),
           attempt: Math.max(state.runs.runs[reportPath]?.attempt ?? 0, indexed?.attempt ?? 0),
         };
         completeAtStart.set(reportPath, seen);
@@ -394,14 +478,16 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
         next: Math.max(known.next, await diskNext(runDir)),
       };
       const assetsBase = assetsBaseFor(reportPath);
-      let manifest = indexed === undefined ? null : await readRunManifest(fs, runDir);
+      // a finished run's staging folder is awaiting deletion: a re-run starts it over
+      const staged = indexed !== undefined && indexed.conclusion === IN_PROGRESS;
+      let manifest = staged ? await readRunManifest(fs, runDir) : null;
       if (manifest === null) {
-        resolved ??= await resolveApiConfig(deps, o.config, undefined, { format: 'site', assetsBase });
+        pushConfig ??= await resolveApiConfig(deps, o.config, undefined, { format: 'site', assetsBase });
         manifest = newRunManifest({
           title: `run ${first.run.runId}`,
           createdAt: o.now,
           assetsBase,
-          config: resolved,
+          config: pushConfig,
           version: deps.version,
         });
       }
@@ -454,70 +540,120 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
     }
   }
 
-  // (6) run, by time
+  // (6) run, by time: its partitions join the one report
+  const published = new Set<number>();
+  let mainChanged = false;
+  let mainNext = state.runs.runs[mainPath]?.next ?? 0;
   for (const c of placedUpdates.filter((l) => l.u.kind === 'run').sort(byTime)) {
     if (prRemoved(c)) {
       record(c, 'removed-pr');
       continue;
     }
-    const { reportPath } = c.run;
-    const runDir = join(o.site, ...reportPath.split('/'));
+    const stagingPath = c.run.reportPath;
     const indexed = index.channels[c.channel.key]?.runs.find((r) => r.runId === c.run.runId);
-    const known = state.runs.runs[reportPath];
+    const known = state.runs.runs[stagingPath];
     if (c.u.runAttempt < Math.max(known?.attempt ?? 0, indexed?.attempt ?? 0)) {
       record(c, 'superseded');
       continue;
     }
+    const deletionsBefore = [...state.deletions.files];
+    const runsBefore = structuredClone(state.runs);
     try {
-      const old = await readRunManifest(fs, runDir).catch(() => null);
-      const oldFiles = (old?.partitions ?? []).flatMap((p) =>
-        Object.values(p.files).map((f) => toRel(reportPath, f.path)),
-      );
-      const renumberFrom = Math.max(known?.next ?? 0, await diskNext(runDir));
-      const deletionsBefore = [...state.deletions.files];
-      const runsBefore = structuredClone(state.runs);
-      const placed = await placeFinishedRun(o.site, c.channel, c.run, `${c.dir}/report`, {
-        retention: o.retention,
-        prRetention: o.prRetention,
-        config: o.config,
-        repository: o.repository,
+      const ensured = await ensureMainReport(deps, mainDir, resolved, { now: o.now, assetsBase: mainBase });
+      const added = await addRunReport(
         deps,
-        io,
-        remove: scheduleRemoval,
-        renumberFrom,
-      }).catch((e: unknown) => {
-        // nothing the failed placement scheduled stands: its files are still live
-        state.deletions.files = deletionsBefore;
-        state.runs = runsBefore;
-        throw e;
-      });
-      await scheduleDeletion(state, o.site, oldFiles, o.passRunId);
-      const manifest = await readRunManifest(fs, runDir);
-      const next = Math.max(renumberFrom, ...(manifest?.partitions ?? []).map((p) => p.n + 1));
-      state.runs.runs[reportPath] = {
-        next,
-        attempt: Math.max(known?.attempt ?? 0, c.u.runAttempt),
-        jobs: known?.jobs ?? {},
-      };
-      const written = [
-        ...['index.html', '.nojekyll', MANIFEST_PATH].map((f) => toRel(reportPath, f)),
-        ...(manifest?.partitions ?? []).flatMap((p) =>
-          Object.values(p.files).map((f) => toRel(reportPath, f.path)),
-        ),
-      ];
-      const channelPrefix = `${c.channel.key}/`;
-      unschedule(
-        state,
-        (p) => written.includes(p) || (p.startsWith(channelPrefix) && !p.startsWith(`${channelPrefix}runs/`)),
+        mainDir,
+        `${c.dir}/report`,
+        { runId: c.u.runId, attempt: c.u.runAttempt },
+        { now: o.now, next: Math.max(mainNext, await diskNext(mainDir)) },
       );
-      index = await readSiteIndex(o.site, warn);
-      if (placed.rolling === 'built' && c.channel.channel.kind === 'branch') previews.push(c.channel.key);
+      await scheduleDeletion(state, o.site, mainFiles(added.dropped), o.passRunId);
+      if (await fs.exists(join(o.site, ...stagingPath.split('/'))))
+        await scheduleRemoval(o.site, [stagingPath]);
+      const written = new Set(mainFiles([...ensured, ...added.written]));
+      unschedule(state, (p) => written.has(p));
+      mainNext = added.next;
+      state.runs.runs[mainPath] = { next: mainNext, attempt: 0, jobs: {} };
+      index = placeRun(index, c.channel.key, c.channel.channel, {
+        ...c.run,
+        reportPath: mainPath,
+        detail: 'full',
+        ...(c.u.reportUrl === undefined ? {} : { reportUrl: c.u.reportUrl }),
+      });
+      published.add(c.u.runId);
+      mainChanged = true;
       changed = true;
       record(c, 'applied');
     } catch (e) {
       if (!(e instanceof OtelHtmlError)) throw e;
+      // nothing the failed update scheduled stands: its files are still live
+      state.deletions.files = deletionsBefore;
+      state.runs = runsBefore;
       record(c, 'rejected', messageOf(e));
     }
+  }
+
+  // (6b) the tiers, every pass: older runs turn slim or leave the report
+  const tiers = applyTiers(
+    index,
+    { full: o.retention, slim: o.slimRetention, prFull: o.prRetention, prSlim: o.prSlimRetention },
+    published,
+  );
+  const held = (runId: number): boolean =>
+    Object.values(tiers.index.channels).some((ch) => ch.runs.some((r) => r.runId === runId));
+  const reshaped = async (r: { written: string[]; dropped: string[]; next: number }): Promise<void> => {
+    await scheduleDeletion(state, o.site, mainFiles(r.dropped), o.passRunId);
+    const keep = new Set(mainFiles(r.written));
+    unschedule(state, (p) => keep.has(p));
+    mainNext = r.next;
+    state.runs.runs[mainPath] = { next: mainNext, attempt: 0, jobs: {} };
+    mainChanged ||= r.written.length > 0 || r.dropped.length > 0;
+  };
+  for (const { run } of tiers.drop) {
+    if (held(run.runId)) continue; // another channel still lists it
+    try {
+      await reshaped(await removeRun(deps, mainDir, run.runId, { now: o.now }));
+    } catch (e) {
+      if (!(e instanceof OtelHtmlError)) throw e;
+      warn(`run ${run.runId}: not dropped from ${mainPath}: ${messageOf(e)}`);
+    }
+  }
+  const stayFull = new Set<number>();
+  for (const runId of new Set(tiers.trim.map((t) => t.run.runId))) {
+    const attempt = tiers.trim.find((t) => t.run.runId === runId)?.run.attempt ?? 1;
+    try {
+      await reshaped(
+        await trimRun(deps, mainDir, { runId, attempt }, resolved, { now: o.now, next: mainNext }),
+      );
+    } catch (e) {
+      if (!(e instanceof OtelHtmlError)) throw e;
+      warn(`run ${runId}: not trimmed in ${mainPath}, kept in full: ${messageOf(e)}`);
+      stayFull.add(runId);
+    }
+  }
+  const tiered: SiteIndex = {
+    ...tiers.index,
+    channels: Object.fromEntries(
+      Object.entries(tiers.index.channels).map(([key, ch]) => [
+        key,
+        stayFull.size === 0
+          ? ch
+          : {
+              ...ch,
+              runs: ch.runs.map((r) => (stayFull.has(r.runId) ? { ...r, detail: 'full' as const } : r)),
+            },
+      ]),
+    ),
+  };
+  const retiered = JSON.stringify(tiered) !== JSON.stringify(index);
+  index = tiered;
+  if (retiered) changed = true;
+  if (retiered || mainChanged) await commitIndex();
+  const mainChannel = index.channels[mainPath];
+  if (mainChanged && mainChannel !== undefined) await writeBadges(o.site, mainPath, mainChannel);
+  if (mainChanged) {
+    previews.push(mainPath);
+    changed = true;
   }
 
   // (7) the deletions that are due
@@ -544,7 +680,10 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
   }
 
   // (8) record
-  if (changed) await ensureSharedAssets(o.site, deps);
+  if (changed) {
+    await ensureSharedAssets(o.site, deps);
+    await scheduleDeletion(state, o.site, await pruneAssets(o.site, deps, warn), o.passRunId);
+  }
   const noBase = pending.base.deploymentId === undefined;
   if (!changed && consumed === 0)
     return { changed, consumed, deployed: false, previews, pendingJobs, rejected };

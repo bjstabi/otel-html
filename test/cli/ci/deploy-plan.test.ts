@@ -235,6 +235,16 @@ const pull5 = (over: Record<string, unknown> = {}) => ({
 });
 
 describe('planDeploy', () => {
+  test('records the default branch in pending.json', async () => {
+    const plan = await planDeploy(
+      opts(),
+      { fs: createMemoryFileSystem() },
+      'tok',
+      fake(await world()).fetchFn,
+    );
+    expect(plan.defaultBranch).toBe('main');
+  });
+
   test('finds the base, the newest state and the authenticated pending updates', async () => {
     const { fetchFn, calls } = fake(await world());
     const fs = createMemoryFileSystem();

@@ -3,8 +3,10 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -20,6 +22,9 @@ import {
 } from '../../../src/cli/ci/deploy-apply.js';
 import { runDeployApply } from '../../../src/cli/ci/deploy-main.js';
 import type { PendingPlan, PendingUpdate } from '../../../src/cli/ci/deploy-plan.js';
+import { runSource } from '../../../src/cli/ci/main-report.js';
+import { mergeWithConfig } from '../../../src/cli/ci/publish-io.js';
+import { BRANCH_KEY } from '../../../src/cli/ci/report-links.js';
 import { readRunManifest } from '../../../src/cli/ci/run-report.js';
 import type { SiteIndex, SiteRun } from '../../../src/cli/ci/site.js';
 import { emptyState, readSiteState } from '../../../src/cli/ci/site-state.js';
@@ -31,10 +36,12 @@ import {
 } from '../../../src/cli/ci/update.js';
 import type { CliIo } from '../../../src/cli/io.js';
 import { wrapDataFile } from '../../../src/format/data-file.js';
+import { engineAssetNames } from '../../../src/format/engine.js';
 import { type ManifestV4, manifestForWrite } from '../../../src/format/manifest.js';
 import { TABLES } from '../../../src/format/parquet/columns.js';
 import { MANIFEST_KEY } from '../../../src/format/paths.js';
 import type { WriterDeps } from '../../../src/writer/session.js';
+import { writeCiRunReport } from '../../../test-support/ci-run-fixture.js';
 import {
   buildFormat4Report,
   type Format4Fixture,
@@ -241,6 +248,47 @@ function addRun(
   return pending.run === null ? pending : { ...pending, run: { ...pending.run, ...planRun } };
 }
 
+const filesUnder = (root: string, rel = ''): string[] =>
+  readdirSync(join(root, rel)).flatMap((n) => {
+    const r = rel === '' ? n : `${rel}/${n}`;
+    return statSync(join(root, r)).isDirectory() ? filesUnder(root, r) : [r];
+  });
+
+/** A `run` update of a real CI run report (CI spans, test spans, a log and a gauge), as `ci report` leaves it. */
+async function addCiRun(
+  runId: number,
+  o: { attempt?: number; completedMin?: number; channel?: Placement } = {},
+): Promise<PendingUpdate> {
+  const attempt = o.attempt ?? 1;
+  const channel = o.channel ?? MAIN_CHANNEL;
+  const out = join(dir, `ci-run-${runId}-${attempt}`);
+  await writeCiRunReport(deps, out, {
+    repository: 'o/r',
+    runId,
+    attempt,
+    branch: channel.channel.headBranch,
+    startMs: Date.parse(NOW) - (o.completedMin ?? 1) * MIN,
+  });
+  const files: Record<string, Uint8Array | string> = {};
+  for (const f of filesUnder(out).filter((x) => !x.startsWith('assets/') && !x.startsWith('data/state/')))
+    files[`report/${f}`] = readFileSync(join(out, f));
+  const u: UpdateJson = { version: 1, kind: 'run', runId, runAttempt: attempt, createdAt: minutesBefore(2) };
+  const pending = add(u, files, {}, channel);
+  return pending.run === null
+    ? pending
+    : { ...pending, run: { ...pending.run, completedAt: minutesBefore(o.completedMin ?? 1) } };
+}
+
+const removalOf = (pr: number, runId: number, at: number, kind: 'remove-pr' | 'reopen-pr' = 'remove-pr') =>
+  add(
+    { version: 1, kind, runId, runAttempt: 1, createdAt: minutesBefore(at), pr },
+    {},
+    { channel: null, run: null },
+  );
+const runsOf = (key: string) => indexOf().channels[key]?.runs ?? [];
+const partitionsOf = async (runId: number) =>
+  (await manifestOf(MAIN)).partitions.filter((p) => p.source.startsWith(`run:${runId}#`));
+
 const pendingOf = (
   list: PendingUpdate[],
   base: PendingPlan['base'] = { kind: 'live', deploymentId: 9 },
@@ -252,6 +300,7 @@ const pendingOf = (
   deletionsDue: 0,
   floor: minutesBefore(65),
   now: NOW,
+  defaultBranch: 'main',
 });
 
 const apply = (list: PendingUpdate[], over: Partial<ApplyOptions> = {}) =>
@@ -263,6 +312,8 @@ const apply = (list: PendingUpdate[], over: Partial<ApplyOptions> = {}) =>
       repository: 'o/r',
       retention: 30,
       prRetention: 10,
+      slimRetention: 100,
+      prSlimRetention: 100,
       passRunId: 100,
       now: NOW,
       ...over,
@@ -544,69 +595,133 @@ describe('run', () => {
     });
   });
 
-  test('replaces provisional partitions by renumbered ones and defers the deletion of the old files', async () => {
-    await provisional();
-    const old = [0, 1, 2].map((n) => `${RUN42}/data/partitions/00000${n}/spans.parquet`);
-    const bytes = old.map((p) => readFileSync(join(site, p)));
-    const r = await apply([addRun(42)], { passRunId: 200 });
+  test('a run update adds its partitions to branch/main under run:<id>#<attempt>, indexes it full with its reportUrl, and previews main', async () => {
+    const p = await addCiRun(42);
+    const url = 'https://example.org/report/42/';
+    writeFileSync(
+      join(updates, p.name, 'update.json'),
+      JSON.stringify({ ...readJson<UpdateJson>(join(updates, p.name, 'update.json')), reportUrl: url }),
+    );
+    const r = await apply([p]);
     expect(r).toMatchObject({ changed: true, consumed: 1, previews: [MAIN], rejected: 0 });
-    const m = await manifestOf(RUN42);
+    const m = await manifestOf(MAIN);
+    expect(sources(m)).toEqual(m.partitions.map(() => runSource(42, 1)));
+    expect(m.partitions.length).toBeGreaterThan(0);
     expect(m.complete).toBe(true);
-    expect(m.partitions.map((p) => p.n)).toEqual(closed.manifest.partitions.map((_, i) => 3 + i));
-    expect(m.engine.assetsBase).toBe('../../../../assets/');
-    for (const [i, p] of old.entries())
-      expect(readFileSync(join(site, p)).equals(bytes[i] ?? Buffer.alloc(0))).toBe(true);
-    const state = await stateOf();
-    for (const p of old) expect(state.deletions.files).toContainEqual({ path: p, pass: 200 });
-    for (const p of m.partitions)
-      for (const f of Object.values(p.files))
-        expect(state.deletions.files.map((d) => d.path)).not.toContain(`${RUN42}/${f.path}`);
-    expect(existsSync(join(site, MAIN, 'data/manifest.js'))).toBe(true);
-    const badge = readJson<{ message: string }>(join(site, MAIN, 'badge-ci.json'));
-    expect(badge.message).toMatch(/^✓/);
-    expect(indexOf().channels[MAIN]?.runs[0]).toMatchObject({ runId: 42, conclusion: 'success' });
-    expect(state.runs.runs[RUN42]?.next).toBe(3 + closed.manifest.partitions.length);
+    expect(m.engine.assetsBase).toBe('../../assets/');
+    expect(runsOf(MAIN)[0]).toMatchObject({ runId: 42, reportPath: MAIN, detail: 'full', reportUrl: url });
+    expect(existsSync(join(site, MAIN, 'runs'))).toBe(false);
+    expect(readJson<{ message: string }>(join(site, MAIN, 'badge-ci.json')).message).toMatch(/^✓/);
     expect(existsSync(join(site, 'assets'))).toBe(true);
   });
 
-  test('a run update for a pull request channel previews nothing', async () => {
-    const r = await apply([addRun(42, 1, (m) => m, PR_CHANNEL)]);
-    expect(r).toMatchObject({ changed: true, previews: [] });
-    expect(existsSync(join(site, 'pr/5/runs/42/data/manifest.js'))).toBe(true);
+  test('a pull request run goes into the same report under its pr channel', async () => {
+    const r = await apply([await addCiRun(42, { channel: PR_CHANNEL })]);
+    expect(r).toMatchObject({ changed: true, previews: [MAIN] });
+    expect(runsOf('pr/5')[0]).toMatchObject({ runId: 42, reportPath: MAIN, detail: 'full' });
+    expect(indexOf().channels[MAIN]).toBeUndefined();
+    expect(existsSync(join(site, 'pr'))).toBe(false);
+    expect((await partitionsOf(42)).length).toBeGreaterThan(0);
+  });
+
+  test('a re-run replaces the earlier attempt: its partitions are scheduled, numbers go up', async () => {
+    await apply([await addCiRun(42)]);
+    const first = await partitionsOf(42);
+    const oldFiles = first.flatMap((p) => Object.values(p.files).map((f) => `${MAIN}/${f.path}`));
+    await apply([await addCiRun(42, { attempt: 2 })], { passRunId: 200 });
+    const again = await partitionsOf(42);
+    expect(again.map((p) => p.source)).toEqual(again.map(() => runSource(42, 2)));
+    expect(Math.min(...again.map((p) => p.n))).toBeGreaterThan(Math.max(...first.map((p) => p.n)));
+    const state = await stateOf();
+    for (const f of oldFiles) {
+      expect(state.deletions.files).toContainEqual({ path: f, pass: 200 });
+      expect(existsSync(join(site, f))).toBe(true);
+    }
+    expect(runsOf(MAIN)).toHaveLength(1);
+    expect(runsOf(MAIN)[0]).toMatchObject({ attempt: 2 });
+  });
+
+  test('a re-run of a run already slim comes back full and its slim partition is scheduled', async () => {
+    await apply([await addCiRun(1, { completedMin: 30 })]);
+    await apply([await addCiRun(2, { completedMin: 20 })], { retention: 1, passRunId: 101 });
+    expect(runsOf(MAIN).find((r) => r.runId === 1)?.detail).toBe('slim');
+    const slim = (await partitionsOf(1)).flatMap((p) =>
+      Object.values(p.files).map((f) => `${MAIN}/${f.path}`),
+    );
+    expect(slim.length).toBeGreaterThan(0);
+    await apply([await addCiRun(1, { attempt: 2, completedMin: 5 })], { retention: 1, passRunId: 102 });
+    const entry = runsOf(MAIN).find((r) => r.runId === 1);
+    expect(entry).toMatchObject({ attempt: 2, detail: 'full' });
+    expect((await partitionsOf(1)).some((p) => p.files.logs !== undefined)).toBe(true);
+    const state = await stateOf();
+    for (const f of slim) expect(state.deletions.files.map((d) => d.path)).toContain(f);
+  });
+
+  test('tiers: the newest run stays full, the next is trimmed (spans only), the oldest is dropped; the index says so', async () => {
+    const tiers = { retention: 1, slimRetention: 2 };
+    await apply([await addCiRun(1, { completedMin: 30 })], { ...tiers, passRunId: 101 });
+    await apply([await addCiRun(2, { completedMin: 20 })], { ...tiers, passRunId: 102 });
+    expect(runsOf(MAIN).map((r) => [r.runId, r.detail])).toEqual([
+      [2, 'full'],
+      [1, 'slim'],
+    ]);
+    const full = await partitionsOf(1);
+    const oldFiles = full.flatMap((p) => Object.values(p.files).map((f) => `${MAIN}/${f.path}`));
+    await apply([await addCiRun(3, { completedMin: 10 })], { ...tiers, passRunId: 103 });
+    expect(runsOf(MAIN).map((r) => [r.runId, r.detail])).toEqual([
+      [3, 'full'],
+      [2, 'slim'],
+    ]);
+    expect(await partitionsOf(1)).toEqual([]);
+    const two = await partitionsOf(2);
+    expect(two.length).toBeGreaterThan(0);
+    expect(two.every((p) => p.files.logs === undefined && p.files.spans !== undefined)).toBe(true);
+    expect((await partitionsOf(3)).some((p) => p.files.logs !== undefined)).toBe(true);
+    const state = await stateOf();
+    for (const f of oldFiles) expect(state.deletions.files.map((d) => d.path)).toContain(f);
+    expect(existsSync(join(site, oldFiles[0] ?? ''))).toBe(true);
+  });
+
+  test('a trimming failure warns, keeps the run full and the pass goes on', async () => {
+    await apply([await addCiRun(1, { completedMin: 30 })], { passRunId: 101 });
+    for (const p of await partitionsOf(1)) {
+      const f = p.files.spans;
+      if (f !== undefined) writeFileSync(join(site, MAIN, f.path), 'not parquet');
+    }
+    const r = await apply([await addCiRun(2, { completedMin: 20 })], { retention: 1, passRunId: 102 });
+    expect(r).toMatchObject({ changed: true, rejected: 0 });
+    expect(out.join('')).toMatch(/warning|::warning/i);
+    expect(runsOf(MAIN).map((x) => [x.runId, x.detail])).toEqual([
+      [2, 'full'],
+      [1, 'full'],
+    ]);
+    expect((await partitionsOf(2)).length).toBeGreaterThan(0);
+  });
+
+  test('a staging folder of the run (push updates) is scheduled when the run update applies', async () => {
+    await provisional();
+    const staged = [0, 1, 2].map((n) => `${RUN42}/data/partitions/00000${n}/spans.parquet`);
+    await apply([addRun(42)], { passRunId: 200 });
+    const state = await stateOf();
+    for (const p of staged) {
+      expect(state.deletions.files).toContainEqual({ path: p, pass: 200 });
+      expect(existsSync(join(site, p))).toBe(true);
+    }
+    expect(state.runs.runs[RUN42]).toBeUndefined();
+    expect(state.runs.runs[MAIN]).toMatchObject({ attempt: 0 });
+    expect(runsOf(MAIN)[0]).toMatchObject({ runId: 42, reportPath: MAIN, conclusion: 'success' });
+    expect((await manifestOf(MAIN)).partitions.map((p) => p.source)).toEqual(
+      closed.manifest.partitions.map(() => runSource(42, 1)),
+    );
   });
 
   test('a run the state does not know numbers from one above the highest folder on disk', async () => {
     for (let n = 0; n < 5; n++) {
-      mkdirSync(join(site, RUN42, `data/partitions/00000${n}`), { recursive: true });
-      writeFileSync(join(site, RUN42, `data/partitions/00000${n}/spans.parquet`), 'x');
+      mkdirSync(join(site, MAIN, `data/partitions/00000${n}`), { recursive: true });
+      writeFileSync(join(site, MAIN, `data/partitions/00000${n}/spans.parquet`), 'x');
     }
     await apply([addRun(42)]);
-    expect((await manifestOf(RUN42)).partitions[0]?.n).toBe(5);
-  });
-
-  test('retention drops the oldest runs: their files are scheduled and stay on disk', async () => {
-    const runs = Array.from({ length: 31 }, (_, i) =>
-      siteRunOf(i + 1, {
-        completedAt: new Date(Date.parse(NOW) - (100 - i) * MIN).toISOString(),
-        reportPath: `${MAIN}/runs/${i + 1}`,
-      }),
-    );
-    for (const r of runs) {
-      mkdirSync(join(site, r.reportPath), { recursive: true });
-      writeFileSync(join(site, r.reportPath, 'index.html'), 'x');
-    }
-    const index: SiteIndex = {
-      version: 1,
-      channels: { [MAIN]: { ...MAIN_CHANNEL.channel, runs: [...runs].reverse() } },
-    };
-    writeFileSync(join(site, 'index.json'), JSON.stringify(index));
-    await apply([addRun(42)], { passRunId: 200 });
-    const state = await stateOf();
-    expect(state.deletions.files).toContainEqual({ path: `${MAIN}/runs/1/index.html`, pass: 200 });
-    expect(state.deletions.files).toContainEqual({ path: `${MAIN}/runs/2/index.html`, pass: 200 });
-    expect(existsSync(join(site, MAIN, 'runs/1/index.html'))).toBe(true);
-    expect(indexOf().channels[MAIN]?.runs.some((r) => r.runId === 1)).toBe(false);
-    expect(indexOf().channels[MAIN]?.runs.some((r) => r.runId === 3)).toBe(true);
+    expect((await manifestOf(MAIN)).partitions[0]?.n).toBe(5);
   });
 
   const rerunPush = (job: number, name: string, part: number, sequence = 1): PendingUpdate =>
@@ -615,14 +730,12 @@ describe('run', () => {
       { jobAttempt: 2, run: { ...siteRunOf(42, { attempt: 2 }), event: 'push' } },
     );
 
-  test('a push after the run for the same attempt is superseded; a re-run keeps the compacted partitions and adds its own', async () => {
+  test('a push after the run for the same attempt is superseded; a re-run pushes into a fresh staging folder', async () => {
     await apply([
       addPush({ sequence: 1, job: 7, jobName: 'build', parts: [['job:7#flush:0', 0, true]] }),
       addPush({ sequence: 1, job: 8, jobName: 'test', parts: [['job:8#flush:0', 1, true]] }),
     ]);
     await apply([addRun(42)], { passRunId: 200 });
-    const finalSources = sources(await manifestOf(RUN42));
-    expect(finalSources.every((x) => /^(compact|merge):/.test(x))).toBe(true);
 
     const late = addPush({ sequence: 2, job: 7, jobName: 'build', parts: [['job:7#flush:0', 0, false]] });
     const r1 = await apply([late], { passRunId: 201 });
@@ -633,7 +746,7 @@ describe('run', () => {
     expect(r2.changed).toBe(true);
     const m = await manifestOf(RUN42);
     expect(m.complete).toBe(false);
-    expect(sources(m)).toEqual([...finalSources, 'job:17#flush:0']);
+    expect(sources(m)).toEqual(['job:17#flush:0']);
     expect(indexOf().channels[MAIN]?.runs[0]).toMatchObject({ attempt: 2, conclusion: 'in_progress' });
   });
 
@@ -652,7 +765,7 @@ describe('run', () => {
     expect((await stateOf()).deletions.files).toContainEqual({ path: `${RUN42}/${buildFile}`, pass: 201 });
   });
 
-  test('a run update older than the report attempt is superseded', async () => {
+  test('a run update older than the indexed attempt is superseded', async () => {
     await apply([addRun(42, 2)]);
     const r = await apply([addRun(42, 1)], { passRunId: 101 });
     expect(r).toMatchObject({ changed: false, consumed: 1 });
@@ -696,79 +809,163 @@ describe('run update failures and checks', () => {
 });
 
 describe('pull requests', () => {
-  test('remove-pr schedules the folder, a push for it is removed-pr until reopen-pr', async () => {
-    await apply([addPush({ sequence: 1, parts: [['job:7#flush:0', 0, true]] }, {}, PR_CHANNEL)]);
-    expect(existsSync(join(site, 'pr/5/runs/42/data/manifest.js'))).toBe(true);
-    const removal: UpdateJson = {
-      version: 1,
-      kind: 'remove-pr',
-      runId: 50,
-      runAttempt: 1,
-      createdAt: minutesBefore(4),
-      pr: 5,
-    };
-    const removed = add(removal, {}, { channel: null, run: null });
-    const r = await apply([removed], { passRunId: 200 });
+  test('remove-pr marks the channel closed and trims its runs; a push or run for it is removed-pr until reopen-pr', async () => {
+    await apply([await addCiRun(42, { channel: PR_CHANNEL })]);
+    expect(runsOf('pr/5')[0]?.detail).toBe('full');
+    const r = await apply([removalOf(5, 50, 4)], { passRunId: 200 });
     expect(r.changed).toBe(true);
-    expect(indexOf().channels['pr/5']).toBeUndefined();
+    expect(indexOf().channels['pr/5']).toMatchObject({ closedAt: NOW });
+    expect(runsOf('pr/5')[0]).toMatchObject({ runId: 42, detail: 'slim' });
+    expect((await partitionsOf(42)).every((p) => p.files.logs === undefined)).toBe(true);
     const state = await stateOf();
-    expect(state.deletions.files.map((d) => d.path)).toContain('pr/5/runs/42/data/manifest.js');
-    expect(existsSync(join(site, 'pr/5/runs/42/data/manifest.js'))).toBe(true);
     expect(state.removed.prs['5']).toEqual({ runId: 50, at: NOW });
 
     const blocked = addPush({ sequence: 2, parts: [['job:7#flush:0', 0, true]] }, {}, PR_CHANNEL);
-    await apply([blocked], { passRunId: 201 });
-    expect((await stateOf()).applied.updates[blocked.id]?.outcome).toBe('removed-pr');
-    expect(indexOf().channels['pr/5']).toBeUndefined();
+    const blockedRun = await addCiRun(43, { channel: PR_CHANNEL });
+    await apply([blocked, blockedRun], { passRunId: 201 });
+    const after = await stateOf();
+    expect(after.applied.updates[blocked.id]?.outcome).toBe('removed-pr');
+    expect(after.applied.updates[blockedRun.id]?.outcome).toBe('removed-pr');
+    expect(runsOf('pr/5').map((x) => x.runId)).toEqual([42]);
+  });
 
-    const reopen: UpdateJson = {
-      version: 1,
-      kind: 'reopen-pr',
-      runId: 51,
-      runAttempt: 1,
-      createdAt: minutesBefore(3),
-      pr: 5,
-    };
-    const again = addPush({ sequence: 3, job: 8, parts: [['job:8#flush:0', 1, true]] }, {}, PR_CHANNEL);
-    await apply([add(reopen, {}, { channel: null, run: null }), again], { passRunId: 202 });
-    const state2 = await stateOf();
-    expect(state2.removed.prs['5']).toBeUndefined();
-    expect(state2.applied.updates[again.id]?.outcome).toBe('applied');
-    expect(indexOf().channels['pr/5']?.runs[0]?.conclusion).toBe('in_progress');
-    // the run folder written again is live again
-    expect(state2.deletions.files.map((d) => d.path)).not.toContain('pr/5/runs/42/data/manifest.js');
+  test('a legacy pr/<n> folder still on disk is scheduled by remove-pr', async () => {
+    mkdirSync(join(site, 'pr/5/runs/1'), { recursive: true });
+    writeFileSync(join(site, 'pr/5/runs/1/index.html'), 'x');
+    await apply([removalOf(5, 50, 4)], { passRunId: 200 });
+    expect((await stateOf()).deletions.files).toContainEqual({ path: 'pr/5/runs/1/index.html', pass: 200 });
+    expect(existsSync(join(site, 'pr/5/runs/1/index.html'))).toBe(true);
+  });
+
+  test('reopen-pr clears closedAt; a new run arrives full while the old ones stay slim', async () => {
+    await apply([await addCiRun(42, { channel: PR_CHANNEL, completedMin: 30 })]);
+    await apply([removalOf(5, 50, 4)], { passRunId: 200 });
+    await apply(
+      [removalOf(5, 51, 3, 'reopen-pr'), await addCiRun(43, { channel: PR_CHANNEL, completedMin: 10 })],
+      {
+        passRunId: 201,
+      },
+    );
+    const ch = indexOf().channels['pr/5'];
+    expect(ch?.closedAt).toBeUndefined();
+    expect(ch?.runs.map((x) => [x.runId, x.detail])).toEqual([
+      [43, 'full'],
+      [42, 'slim'],
+    ]);
+    expect((await stateOf()).removed.prs['5']).toBeUndefined();
+  });
+
+  test('the pool drops the oldest slim pull request runs across channels and removes an emptied channel', async () => {
+    const pr6: Placement = { key: 'pr/6', channel: { kind: 'pr', title: '#6 other', headBranch: 'other' } };
+    await apply([await addCiRun(42, { channel: PR_CHANNEL, completedMin: 30 })], { passRunId: 101 });
+    await apply([await addCiRun(43, { channel: pr6, completedMin: 20 })], { passRunId: 102 });
+    const old = (await partitionsOf(42)).flatMap((p) =>
+      Object.values(p.files).map((f) => `${MAIN}/${f.path}`),
+    );
+    await apply([removalOf(5, 50, 4), removalOf(6, 51, 3)], { passRunId: 200, prSlimRetention: 1 });
+    const ix = indexOf();
+    expect(ix.channels['pr/5']).toBeUndefined();
+    expect(ix.channels['pr/6']?.runs.map((x) => [x.runId, x.detail])).toEqual([[43, 'slim']]);
+    expect(await partitionsOf(42)).toEqual([]);
+    const state = await stateOf();
+    for (const f of old) expect(state.deletions.files.map((d) => d.path)).toContain(f);
   });
 });
 
 describe('removed runs', () => {
-  test('after remove-pr and reopen-pr, the same push is applied to a fresh manifest', async () => {
+  test('after remove-pr and reopen-pr, the same push is applied', async () => {
     const same = (): PendingUpdate =>
       addPush({ sequence: 1, parts: [['job:7#flush:0', 0, true]] }, {}, PR_CHANNEL);
     await apply([same()]);
-    const removal: UpdateJson = {
-      version: 1,
-      kind: 'remove-pr',
-      runId: 50,
-      runAttempt: 1,
-      createdAt: minutesBefore(4),
-      pr: 5,
-    };
-    const reopen: UpdateJson = {
-      version: 1,
-      kind: 'reopen-pr',
-      runId: 51,
-      runAttempt: 1,
-      createdAt: minutesBefore(3),
-      pr: 5,
-    };
-    await apply([add(removal, {}, { channel: null, run: null })], { passRunId: 200 });
+    await apply([removalOf(5, 50, 4)], { passRunId: 200 });
     expect((await stateOf()).runs.runs['pr/5/runs/42']).toBeUndefined();
-    await apply([add(reopen, {}, { channel: null, run: null })], { passRunId: 201 });
+    await apply([removalOf(5, 51, 3, 'reopen-pr')], { passRunId: 201 });
     const again = same();
     await apply([again], { passRunId: 202 });
-    expect(sources(await manifestOf('pr/5/runs/42'))).toEqual(['job:7#flush:0']);
     expect((await stateOf()).applied.updates[again.id]?.outcome).toBe('applied');
   });
+});
+
+describe('migration', () => {
+  test('the first pass renames merge: partitions, schedules the run and pr folders and migrates the assets base', async () => {
+    const START = Date.parse('2026-10-01T10:00:00Z');
+    const inputs: string[] = [];
+    for (const id of [1, 2]) {
+      const d = join(dir, `old-${id}`);
+      await writeCiRunReport(deps, d, { repository: 'o/r', runId: id, attempt: 1, startMs: START + id });
+      inputs.push(d);
+    }
+    const merge = mergeWithConfig(deps, undefined, {
+      format: 'site',
+      assetsBase: '../../assets/9.9.9/',
+      compact: true,
+    });
+    await merge(inputs, join(site, MAIN), false);
+    for (const n of engineAssetNames('site').concat(['viewer.abc123.js', 'viewer.abc123.css'])) {
+      mkdirSync(join(site, 'assets/9.9.9'), { recursive: true });
+      writeFileSync(join(site, 'assets/9.9.9', n), n);
+    }
+    for (const id of [1, 2]) {
+      mkdirSync(join(site, MAIN, 'runs', String(id)), { recursive: true });
+      writeFileSync(join(site, MAIN, 'runs', String(id), 'index.html'), 'x');
+    }
+    mkdirSync(join(site, 'pr/362/runs/9'), { recursive: true });
+    writeFileSync(join(site, 'pr/362/runs/9/index.html'), 'x');
+    const legacy = (id: number, reportPath: string): SiteRun =>
+      siteRunOf(id, { completedAt: minutesBefore(40 - id), reportPath });
+    const index: SiteIndex = {
+      version: 1,
+      channels: {
+        [MAIN]: {
+          ...MAIN_CHANNEL.channel,
+          runs: [legacy(2, `${MAIN}/runs/2`), legacy(1, `${MAIN}/runs/1`)],
+        },
+        'pr/362': {
+          kind: 'pr',
+          title: '#362 x',
+          headBranch: 'x',
+          runs: [legacy(9, 'pr/362/runs/9')],
+        },
+      },
+    };
+    writeFileSync(join(site, 'index.json'), JSON.stringify(index));
+    const r = await apply([], { passRunId: 300 });
+    expect(r.changed).toBe(true);
+    const m = await manifestOf(MAIN);
+    expect(new Set(sources(m))).toEqual(new Set([runSource(1, 1), runSource(2, 1)]));
+    expect(m.engine.assetsBase).toBe('../../assets/');
+    expect(runsOf('pr/362')[0]).toMatchObject({ reportPath: MAIN, detail: 'full' });
+    expect(runsOf(MAIN).map((x) => [x.reportPath, x.detail])).toEqual([
+      [MAIN, 'full'],
+      [MAIN, 'full'],
+    ]);
+    const state = await stateOf();
+    const scheduled = state.deletions.files.map((d) => d.path);
+    expect(scheduled).toEqual(
+      expect.arrayContaining([
+        `${MAIN}/runs/1/index.html`,
+        `${MAIN}/runs/2/index.html`,
+        'pr/362/runs/9/index.html',
+      ]),
+    );
+    expect(scheduled.some((p) => p.startsWith('assets/9.9.9/'))).toBe(true);
+    expect(existsSync(join(site, 'pr/362/runs/9/index.html'))).toBe(true);
+    // a second pass changes nothing and schedules nothing more
+    const again = await apply([], { passRunId: 301 });
+    expect(again.changed).toBe(false);
+    expect((await stateOf()).deletions.files).toEqual(state.deletions.files);
+  });
+});
+
+test("the one report's manifest config carries the branch variable default and the deployer's version", async () => {
+  const config = join(import.meta.dirname, '../../../.github/otel-html-ci.yaml');
+  await apply([await addCiRun(42)], { config });
+  const m = await manifestOf(MAIN);
+  const variable = m.config?.dashboards[0]?.dashboard.variables.find((v) => v.key === BRANCH_KEY);
+  expect(variable?.default).toBe('main');
+  expect(m.otelHtmlVersion).toBe(deps.version);
+  await apply([await addCiRun(43, { completedMin: 5 })], { config, passRunId: 101 });
+  expect((await manifestOf(MAIN)).config).toEqual(m.config);
 });
 
 describe('the pass', () => {
@@ -875,6 +1072,8 @@ describe('runDeployApply', () => {
         repository: 'o/r',
         retention: 30,
         prRetention: 10,
+        slimRetention: 100,
+        prSlimRetention: 100,
         passRunId: 5,
         trust: { channel: 'branch/smoke' },
         now: NOW,

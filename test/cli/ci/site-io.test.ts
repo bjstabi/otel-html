@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import type { SiteIndex } from '../../../src/cli/ci/site.js';
-import { copyReport, readSiteIndex, removePaths, writeSite } from '../../../src/cli/ci/site-io.js';
+import { readSiteIndex, removePaths, writeSite } from '../../../src/cli/ci/site-io.js';
 
 let dir: string;
 beforeEach(() => {
@@ -66,17 +66,5 @@ describe('site-io', () => {
     await removePaths(dir, ['a/b', 'missing']);
     expect(existsSync(join(dir, 'a'))).toBe(true);
     expect(existsSync(join(dir, 'a', 'b'))).toBe(false);
-  });
-
-  test('copyReport replaces an existing target', async () => {
-    const from = join(dir, 'from');
-    const to = join(dir, 'to', 'deep');
-    mkdirSync(from);
-    writeFileSync(join(from, 'new.txt'), 'n');
-    mkdirSync(to, { recursive: true });
-    writeFileSync(join(to, 'old.txt'), 'o');
-    await copyReport(from, to);
-    expect(existsSync(join(to, 'new.txt'))).toBe(true);
-    expect(existsSync(join(to, 'old.txt'))).toBe(false);
   });
 });

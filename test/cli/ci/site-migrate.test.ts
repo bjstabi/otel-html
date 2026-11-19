@@ -161,6 +161,28 @@ describe('migrateToOneReport', () => {
     const r = await migrate(index);
     expect(r.changed).toBe(true);
     expect(removed.sort()).toEqual(['branch/main/runs/1', 'pr/362', 'pr/363']);
+    expect(r.index.channels[ONE]?.runs.map((x) => [x.reportPath, x.detail])).toEqual([
+      [`${ONE}/runs/9`, undefined],
+      [ONE, 'full'],
+    ]);
+  });
+
+  test('a pull request folder keeps the staging folder of its run in progress', async () => {
+    for (const p of ['pr/5/runs/7', 'pr/5/runs/8', 'pr/5/data'])
+      mkdirSync(join(site, p), { recursive: true });
+    const index: SiteIndex = {
+      version: 1,
+      channels: {
+        'pr/5': {
+          kind: 'pr',
+          title: '#5',
+          headBranch: 'f',
+          runs: [legacyRun(7, 1, 'pr/5/runs/7', IN_PROGRESS)],
+        },
+      },
+    };
+    await migrate(index);
+    expect(removed.sort()).toEqual(['pr/5/data', 'pr/5/runs/8']);
   });
 
   test('a second call changes nothing', async () => {

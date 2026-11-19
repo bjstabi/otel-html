@@ -8,7 +8,6 @@ import {
   planSync,
   type RunReportState,
   readRunManifest,
-  renumbered,
   writeRunReport,
 } from '../../../src/cli/ci/run-report.js';
 import type { UpdateJson, UpdatePartition } from '../../../src/cli/ci/update.js';
@@ -101,8 +100,6 @@ const sync = (
   over: { jobKey?: string; jobName?: string; attempt?: number } = {},
 ) => planSync({ manifest, state, jobKey: '7', jobName: 'build', attempt: 1, updates, now: NOW, ...over });
 
-const TABLE_PATHS = (p: { files: Partial<Record<string, { path: string }>> }): string[] =>
-  Object.values(p.files).flatMap((f) => (f ? [f.path] : []));
 const jobEntry = (plan: { state: RunReportState }) => {
   const e = plan.state.jobs['7'];
   if (!e) throw new Error('no job 7');
@@ -421,58 +418,6 @@ describe('planSync attempt gate is per job name', () => {
   });
 });
 
-describe('renumbered', () => {
-  test('moves are safe to apply in order when shifting up or down', async () => {
-    const m = await newManifest();
-    const a = sync(m, emptyRunState(1), [ju(first())]);
-    const apply = (dir: Map<string, string>, moves: { from: string; to: string }[]) => {
-      for (const mv of moves) {
-        const v = dir.get(mv.from);
-        if (v === undefined) throw new Error(`missing ${mv.from}`);
-        dir.delete(mv.from);
-        dir.set(mv.to, v);
-      }
-    };
-    for (const from of [1, 5]) {
-      const dir = new Map(a.manifest.partitions.flatMap((p) => TABLE_PATHS(p).map((x) => [x, x] as const)));
-      const r = renumbered(a.manifest, from);
-      apply(dir, r.moves);
-      expect([...dir.keys()].sort()).toEqual(r.manifest.partitions.flatMap(TABLE_PATHS).sort());
-    }
-    const down = renumbered(
-      { ...a.manifest, partitions: a.manifest.partitions.map((p) => ({ ...p, n: p.n + 4 })) },
-      0,
-    );
-    expect(down.manifest.partitions.map((p) => p.n)).toEqual([0, 1, 2]);
-  });
-  test('shifting up lists the highest partition first', async () => {
-    const m = await newManifest();
-    const a = sync(m, emptyRunState(1), [ju(first())]);
-    const two = { ...a.manifest, partitions: a.manifest.partitions.slice(0, 2) };
-    expect(renumbered(two, 1).moves).toEqual([
-      { from: 'data/partitions/000001/spans.parquet', to: 'data/partitions/000002/spans.parquet' },
-      { from: 'data/partitions/000000/spans.parquet', to: 'data/partitions/000001/spans.parquet' },
-    ]);
-  });
-});
-
-describe('renumbered (basic)', () => {
-  test('moves every partition to numbers from the given one', async () => {
-    const m = await newManifest();
-    const a = sync(m, emptyRunState(1), [ju(first())]);
-    const two = { ...a.manifest, partitions: a.manifest.partitions.slice(0, 2) };
-    const r = renumbered(two, 10);
-    expect(r.manifest.partitions.map((p) => p.n)).toEqual([10, 11]);
-    expect(r.manifest.partitions[0]?.files.spans?.path).toBe('data/partitions/000010/spans.parquet');
-    expect(r.moves).toEqual([
-      { from: 'data/partitions/000001/spans.parquet', to: 'data/partitions/000011/spans.parquet' },
-      { from: 'data/partitions/000000/spans.parquet', to: 'data/partitions/000010/spans.parquet' },
-    ]);
-    const back = parseAnyManifest(manifestForWrite(r.manifest));
-    expect(isPartitioned(back) ? back.partitions : null).toEqual(r.manifest.partitions);
-  });
-});
-
 describe('writeRunReport', () => {
   test('writes the manifest, the index and .nojekyll, and reads the manifest back', async () => {
     const w = createTestWriter();
@@ -576,11 +521,6 @@ describe('format 6 in a run report', () => {
     const lifted = sync(seven, emptyRunState(1), [ju(push(1, [withCicd]))]);
     expect(lifted.manifest.formatVersion).toBe(8);
     expect(lifted.manifest.partitions[0]?.files.cicd?.path).toMatch(/cicd\.parquet$/);
-  });
-  test('renumbering a format-6 manifest keeps serviceShare', async () => {
-    const six = sync(await newManifest(), emptyRunState(1), [ju(upd(true))]);
-    const { manifest } = renumbered(six.manifest, 3);
-    expect(manifest.partitions[0]?.files.traces?.serviceShare).toBe(true);
   });
 });
 

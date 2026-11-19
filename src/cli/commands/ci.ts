@@ -67,6 +67,8 @@ interface DeployApplyFlags {
   pending?: string;
   retention: string;
   prRetention: string;
+  slimRetention: string;
+  prSlimRetention: string;
   config?: string;
   passRunId?: string;
   passRunAttempt?: string;
@@ -413,8 +415,14 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .option('--state <dir>', 'the state `plan` chose; overwrites <site>/site-state/ first')
     .requiredOption('--updates <dir>', "the unpacked updates, <dir>/<update's name>/ each")
     .option('--pending <file>', "the plan's pending.json (optional with --trust-updates)")
-    .option('--retention <n>', 'runs kept per workflow in each branch channel', '30')
-    .option('--pr-retention <n>', 'runs kept per workflow in each pull request channel', '10')
+    .option('--retention <n>', 'runs kept in full per workflow in the branch report', '30')
+    .option('--pr-retention <n>', 'runs kept in full per workflow for each open pull request', '3')
+    .option('--slim-retention <n>', 'runs kept per workflow in the branch report, full or slim', '100')
+    .option(
+      '--pr-slim-retention <n>',
+      'slim pull request runs kept per workflow across all pull requests',
+      '100',
+    )
     .option('--config <file>', 'the dashboard config file for the rolling reports')
     .option('--pass-run-id <n>', 'this deployer run id (default: $GITHUB_RUN_ID)')
     .option('--pass-run-attempt <n>', 'this deployer run attempt (default: $GITHUB_RUN_ATTEMPT, else 1)')
@@ -441,6 +449,8 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
           repository: repositoryOf(flags.repository),
           retention: parsePositive('--retention', flags.retention),
           prRetention: parsePositive('--pr-retention', flags.prRetention),
+          slimRetention: parsePositive('--slim-retention', flags.slimRetention),
+          prSlimRetention: parsePositive('--pr-slim-retention', flags.prSlimRetention),
           passRunId: parsePositive('--pass-run-id', passRun),
           passRunAttempt: parsePositive(
             '--pass-run-attempt',
