@@ -1,6 +1,6 @@
 import type { UnixNanos } from '../../model/ids.js';
 import { formatDuration } from '../../semconv/formatters.js';
-import { niceAxis } from '../components/run-chart-format.js';
+import { formatTick, niceAxis } from '../components/run-chart-format.js';
 import { shortTime } from '../shell/time-range.js';
 
 export { shortTime };
@@ -10,14 +10,20 @@ export { shortTime };
  * `4 min 12 s`, from an hour `1 h 5 min` (whole numbers; rounded seconds carry into the minute).
  */
 export function durationText(ns: number): string {
+  if (!Number.isFinite(ns)) return formatDuration(ns);
   if (ns === 0) return '0 s';
   if (ns < 0) return `-${durationText(-ns)}`;
   if (ns < 60e9) return formatDuration(ns);
   const total = Math.round(ns / 1e9);
   const tail = (n: number, unit: string): string => (n === 0 ? '' : ` ${n} ${unit}`);
   if (total < 3600) return `${Math.floor(total / 60)} min${tail(total % 60, 's')}`;
-  const minutes = Math.round(total / 60);
+  const minutes = Math.round(ns / 60e9);
   return `${Math.floor(minutes / 60)} h${tail(minutes % 60, 'min')}`;
+}
+
+/** A duration axis tick in the run charts' compact form: `0s`, `30s`, `5m`, `1h 30m`. */
+export function tickText(ns: number): string {
+  return formatTick(ns / 1e9, 's');
 }
 
 /** The y axis for durations in ns: round steps of seconds, minutes and hours (see `niceAxis`). */

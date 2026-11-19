@@ -396,7 +396,7 @@ A `metric` widget with `runBy` is a run chart: one point per CI run instead of o
 | `minutes` | CI minutes per day, stacked by trigger or, with `by: job`, by the top 7 jobs and Other; a header toggle switches | all |
 | `tests` | the test suites of the latest run that has test spans: files by test time, with test and skipped counts; a row expands to its tests | the latest run |
 
-Durations read in the unit they need (`312 ms`, `1.5 s`, `4 min 12 s`, `1 h 5 min`), and the duration axes step by 1, 2, 5, 10, 15 or 30 seconds or minutes, or 1 or 2 hours.
+Durations read in the unit they need (`312 ms`, `1.5 s`, `4 min 12 s`, `1 h 5 min`), and the duration axes step by 1, 2, 5, 10, 15 or 30 seconds or minutes, or 1 or 2 hours, with compact tick labels (`30s`, `5m`, `1h 30m`) where the text reads `4 min 12 s`.
 
 "All" means the dashboard's variables; the views that do not honour `job` or `runner` say "ignores job" in their header instead (the echo, above). A run's duration is the latest job end minus the run's start, cancelled runs are left out of percentiles, and CI minutes are the sum of job durations.
 

@@ -2,7 +2,7 @@ import { type JSX, useMemo } from 'react';
 import { Chart } from '../../components/chart.js';
 import type { WidgetRenderer } from '../../dashboards/dashboard-page.js';
 import { useTheme } from '../../theme/theme-provider.js';
-import { durationAxis, durationText } from '../format.js';
+import { durationAxis, durationText, tickText } from '../format.js';
 import { useRunActions } from '../run-actions.js';
 import type { CiRun } from '../runs.js';
 import { useCicd } from '../use-cicd.js';
@@ -34,7 +34,7 @@ export const RunsView: WidgetRenderer = ({ widget, scope, height }): JSX.Element
   const maxDuration = Math.max(0, ...runs.map((r) => r.duration));
 
   const option = useMemo(() => {
-    const axis = durationAxis(maxDuration);
+    const axis = durationAxis(maxDuration * 1.08);
     return {
       animation: false,
       grid: { left: PLOT.left, right: PLOT.right, top: 8, bottom: 8 },
@@ -50,7 +50,7 @@ export const RunsView: WidgetRenderer = ({ widget, scope, height }): JSX.Element
         type: 'value',
         max: axis.max,
         interval: axis.interval,
-        axisLabel: { formatter: (v: number) => durationText(v) },
+        axisLabel: { formatter: (v: number) => tickText(v) },
       },
       series: [
         {

@@ -6,7 +6,7 @@ import { useEpoch } from '../../dashboards/widgets/layout.js';
 import { useSubtitle } from '../../dashboards/widgets/subtitle.js';
 import { useTheme } from '../../theme/theme-provider.js';
 import { bucketOf, trendBuckets } from '../derive.js';
-import { axisTime, durationAxis, durationText } from '../format.js';
+import { axisTime, durationAxis, tickText } from '../format.js';
 import { useRunActions } from '../run-actions.js';
 import { useCicd } from '../use-cicd.js';
 import { CicdBody, chartPx, indexOf, pointOf, resultColors, ringSeries } from './body.js';
@@ -91,7 +91,7 @@ export const RunsTrendView: WidgetRenderer = ({
         {
           type: 'value',
           ...durationAxis(Math.max(0, ...buckets.flatMap((b) => [b.p50, b.p95]).filter((v) => v !== null))),
-          axisLabel: { formatter: (v: number) => durationText(v) },
+          axisLabel: { formatter: (v: number) => tickText(v) },
         },
         { type: 'value', minInterval: 1, splitLine: { show: false } },
       ],

@@ -341,6 +341,14 @@ describe('Open on GitHub from the repository', () => {
     expect(getTrace).not.toHaveBeenCalled();
   });
 
+  it('ignores trailing slashes on the repository url', async () => {
+    resourceValues.mockResolvedValue({ values: ['https://github.com/o/r/'] });
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    await menu();
+    await act(async () => item('Open on GitHub').click());
+    expect(open).toHaveBeenCalledWith('https://github.com/o/r/actions/runs/7', '_blank', 'noopener');
+  });
+
   it('opens the blank tab in the click while pending and sends it to the derived url', async () => {
     let resolve: (v: unknown) => void = () => {};
     resourceValues.mockReturnValue(new Promise((r) => (resolve = r)));

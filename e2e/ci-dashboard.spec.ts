@@ -246,4 +246,18 @@ test("Open on GitHub goes to the run's page", HTTP, async ({ page, reportUrl }) 
       '_blank',
       'noopener',
     ]);
+  // the repository is read by now: a second click is the synchronous direct path, one call and no blank tab first
+  const opened = (): Promise<unknown[][]> =>
+    page.evaluate(() => (window as unknown as { opened: unknown[][] }).opened.map((c) => [...c]));
+  const before = await opened();
+  await cell.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: /Open on GitHub/ }).click();
+  const after = await opened();
+  expect(after).toHaveLength(before.length + 1);
+  expect(after.at(-1)).toEqual([
+    expect.stringMatching(/^https:\/\/github\.com\/example\/otel-html\/actions\/runs\/\d+$/),
+    '_blank',
+    'noopener',
+  ]);
+  expect(after.slice(before.length).some((c) => c[0] === '')).toBe(false);
 });

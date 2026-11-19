@@ -1,6 +1,12 @@
 import { describe, expect, test } from 'vitest';
 import type { UnixNanos } from '../../../src/model/ids.js';
-import { axisTime, durationAxis, durationText, shortTime } from '../../../src/viewer/cicd/format.js';
+import {
+  axisTime,
+  durationAxis,
+  durationText,
+  shortTime,
+  tickText,
+} from '../../../src/viewer/cicd/format.js';
 
 const MS = 1_000_000;
 const HOUR = 3_600_000 * MS;
@@ -33,6 +39,15 @@ describe('durationText', () => {
     expect(durationText(7170 * S)).toBe('2 h');
   });
 
+  test('hours round the minutes from the duration, not from rounded seconds', () => {
+    expect(durationText(3689.6 * 1e9)).toBe('1 h 1 min');
+  });
+
+  test('a non-finite duration is the shared formatter text', () => {
+    expect(durationText(Number.NaN)).toBe('NaN');
+    expect(durationText(Number.POSITIVE_INFINITY)).toBe('Infinity');
+  });
+
   test('a negative duration is the minus sign and the magnitude', () => {
     expect(durationText(-252e9)).toBe('-4 min 12 s');
     expect(durationText(-1500 * MS)).toBe('-1.5 s');
@@ -63,5 +78,14 @@ describe('axisTime', () => {
     expect(axisTime(0, epoch, 24 * HOUR, tz)).not.toContain('\n');
     expect(axisTime(0, epoch, 24 * HOUR, tz)).not.toMatch(/\d:\d\d/);
     expect(axisTime(0, epoch, 24 * HOUR, tz)).toContain('Nov');
+  });
+});
+
+describe('tickText', () => {
+  test('axis ticks read in the run charts compact form', () => {
+    expect(tickText(0)).toBe('0s');
+    expect(tickText(30e9)).toBe('30s');
+    expect(tickText(90e9)).toBe('1m 30s');
+    expect(tickText(5_400e9)).toBe('1h 30m');
   });
 });

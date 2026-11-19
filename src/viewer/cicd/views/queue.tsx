@@ -64,7 +64,7 @@ export const QueueView: WidgetRenderer = ({ widget, scope, actions: page }): JSX
                     />
                     <span className="absolute inset-y-0 w-px bg-ink" style={{ left: pct(r.max) }} />
                   </span>
-                  <span className="w-44 shrink-0 text-right font-mono text-xs text-muted">
+                  <span className="w-60 shrink-0 whitespace-nowrap text-right font-mono text-xs text-muted">
                     {durationText(r.p50)} – {durationText(r.p95)} · n {r.n}
                   </span>
                 </li>

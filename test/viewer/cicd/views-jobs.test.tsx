@@ -234,14 +234,23 @@ describe('jobs', () => {
     expect(menuLabels()).toEqual(['Filter the page by job', 'Open its trend']);
   });
 
+  it('puts the trend axis on a round step that covers the longest job point', async () => {
+    const rows = runs(12, ['build']).map((r, i) =>
+      r.kind === 'job' ? { ...r, end: r.start + (40 + i * 7) * SEC } : r,
+    );
+    const longest = Math.max(...rows.filter((r) => r.kind === 'job').map((r) => r.end - r.start));
+    await show(widget('jobs'), rows);
+    await act(async () => q<HTMLElement>('[data-job="build"]').click());
+    const y = (lastChart().option as unknown as { yAxis: { max: number; interval: number } }).yAxis;
+    expect(y.interval).toBeGreaterThan(0);
+    expect(y.max).toBeGreaterThanOrEqual(longest);
+    expect(y.max % y.interval).toBe(0);
+  });
+
   it('rings the open run in the expanded trend, faint or full', async () => {
     open('other');
     await show(widget('jobs'), runs(12, ['build', 'test']));
     await act(async () => q<HTMLElement>('[data-job="build"]').click());
-    const y = (lastChart().option as unknown as { yAxis: { max: number; interval: number } }).yAxis;
-    expect(y.interval).toBeGreaterThan(0);
-    expect(y.max).toBeGreaterThanOrEqual(Math.max(y.interval, 60 * SEC));
-    expect(y.max % y.interval).toBe(0);
     const ring = (): { itemStyle: { opacity: number }; data: number[][] } | undefined =>
       (lastChart().option as unknown as { series: { type: string }[] }).series.find(
         (s) => s.type === 'scatter' && 'data' in s,

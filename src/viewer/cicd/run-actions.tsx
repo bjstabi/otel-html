@@ -99,7 +99,7 @@ export function RunActionsProvider(props: RunActionsContext & { children: ReactN
       };
       entry.promise = dataSource.resourceValues(REPOSITORY, { window: pageWindow }).then(
         ({ values }) => {
-          const only = values.length === 1 ? values[0] : undefined;
+          const only = values.length === 1 ? values[0]?.replace(/\/+$/, '') : undefined;
           entry.value = only !== undefined && /^https?:\/\//.test(only) ? only : null;
           return entry.value;
         },
