@@ -14,6 +14,8 @@ import {
 import { readColumns } from '../../format/parquet/stream.js';
 import type { UnixNanos } from '../../model/ids.js';
 import type { SpanRecord } from '../../model/records.js';
+// The CLI reads Parquet here and nothing else on its import path registers the codec's WASM.
+import '../../writer/parquet-wasm-source.js';
 import type { WriterDeps } from '../../writer/session.js';
 import { replaceRunPartitions, runSourcePrefix } from './main-report.js';
 import { readRunManifest } from './run-report.js';
