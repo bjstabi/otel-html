@@ -342,7 +342,7 @@ export function applyTiers(
       pools.set(run.workflow, pool);
     }
   }
-  const gone = new Set<number>();
+  const gone = new Set<string>();
   for (const pool of pools.values()) {
     pool.sort((a, b) =>
       a.run.completedAt === b.run.completedAt
@@ -353,7 +353,7 @@ export function applyTiers(
     );
     pool.forEach(({ key, run }, i) => {
       if (i < tiers.prSlim || publishing.has(run.runId)) return;
-      gone.add(run.runId);
+      gone.add(`${key}\0${run.runId}`);
       const original = index.channels[key]?.runs.find((x) => x.runId === run.runId);
       drop.push({ key, run: original ?? run });
       const at = trim.findIndex((t) => t.key === key && t.run.runId === run.runId);
@@ -362,7 +362,7 @@ export function applyTiers(
   }
   for (const [key, ch] of Object.entries(index.channels)) {
     const runs = (kept.get(key) ?? []).filter(
-      (r) => !gone.has(r.runId) || index.channels[key]?.kind !== 'pr',
+      (r) => !gone.has(`${key}\0${r.runId}`) || index.channels[key]?.kind !== 'pr',
     );
     if (runs.length === 0 && ch.kind === 'pr') continue;
     channels[key] = { ...ch, runs };

@@ -569,3 +569,19 @@ test('siteIndexSchema round-trips detail, reportUrl and closedAt, and still read
   const plain: SiteIndex = { version: 1, channels: { [MAIN]: chan('branch', [at(1)]) } };
   expect(siteIndexSchema.parse(JSON.parse(JSON.stringify(plain)))).toEqual(plain);
 });
+
+test('applyTiers: a run shared by two pull request channels is dropped only from the copy past prSlim', () => {
+  const closed = { closedAt: '2026-02-01T00:00:00Z' };
+  const ix: SiteIndex = {
+    version: 1,
+    channels: {
+      'pr/1': chan('pr', [at(9)], closed),
+      'pr/2': chan('pr', [at(9)], closed),
+    },
+  };
+  const r = applyTiers(ix, { ...TIERS, prSlim: 1 });
+  expect(r.drop.map((t) => `${t.key}:${t.run.runId}`)).toEqual(['pr/2:9']);
+  expect(ids(r.index.channels['pr/1'])).toEqual([9]);
+  expect(r.index.channels['pr/1']?.runs[0]?.detail).toBe('slim');
+  expect(r.index.channels['pr/2']).toBeUndefined();
+});
