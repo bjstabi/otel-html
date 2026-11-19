@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { resolveApiConfig, resolveDeps } from '../../../src/api/report.js';
 import { addRunReport, ensureMainReport, runSource } from '../../../src/cli/ci/main-report.js';
 import { readRunManifest } from '../../../src/cli/ci/run-report.js';
@@ -128,5 +128,17 @@ describe('trimRun', () => {
     const r = await trimRun(deps, main, { runId: 99, attempt: 1 }, config, { now: NOW, next });
     expect(r).toEqual({ written: [], dropped: [], next });
     expect(await manifestOf()).toEqual(before);
+  });
+
+  test('reads the spans with only its own import graph to register the Parquet codec', async () => {
+    const next = await mainWith([1]);
+    // A fresh module graph has a fresh codec registry that nothing but trim-run's own imports can fill.
+    vi.resetModules();
+    const fresh = await import('../../../src/cli/ci/trim-run.js');
+    await fresh.trimRun(deps, main, { runId: 1, attempt: 1 }, config, { now: NOW, next });
+    const after = (await manifestOf()).partitions.filter((p) => p.source === runSource(1, 1));
+    expect(after).toHaveLength(1);
+    expect(after[0]?.files.logs).toBeUndefined();
+    expect(after[0]?.files.spans?.rows).toBe(3);
   });
 });

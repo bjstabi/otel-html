@@ -2,6 +2,8 @@ import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { TABLE_COLUMNS } from '../../format/parquet/columns.js';
 import { readColumns } from '../../format/parquet/stream.js';
+// The CLI reads Parquet here and nothing else on its import path registers the codec's WASM.
+import '../../writer/parquet-wasm-source.js';
 import type { WriterDeps } from '../../writer/session.js';
 import { runSource } from './main-report.js';
 import { readRunManifest, totalsAndRange, writeRunReport } from './run-report.js';

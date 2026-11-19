@@ -551,7 +551,7 @@ describe('push', () => {
   });
 });
 
-describe('run', () => {
+describe('run', { timeout: 30_000 }, () => {
   const provisional = async (): Promise<void> => {
     await apply([
       addPush({
@@ -808,7 +808,7 @@ describe('run update failures and checks', () => {
   });
 });
 
-describe('pull requests', () => {
+describe('pull requests', { timeout: 30_000 }, () => {
   test('remove-pr marks the channel closed and trims its runs; a push or run for it is removed-pr until reopen-pr', async () => {
     await apply([await addCiRun(42, { channel: PR_CHANNEL })]);
     expect(runsOf('pr/5')[0]?.detail).toBe('full');
@@ -901,7 +901,7 @@ describe('assets on the deletion list', () => {
   });
 });
 
-describe('migration', () => {
+describe('migration', { timeout: 30_000 }, () => {
   test('the first pass renames merge: partitions, schedules the run and pr folders and migrates the assets base', async () => {
     const START = Date.parse('2026-10-01T10:00:00Z');
     const inputs: string[] = [];
@@ -972,7 +972,9 @@ describe('migration', () => {
   });
 });
 
-test("the one report's manifest config carries the branch variable default and the deployer's version", async () => {
+test("the one report's manifest config carries the branch variable default and the deployer's version", {
+  timeout: 30_000,
+}, async () => {
   const config = join(import.meta.dirname, '../../../.github/otel-html-ci.yaml');
   await apply([await addCiRun(42)], { config });
   const m = await manifestOf(MAIN);

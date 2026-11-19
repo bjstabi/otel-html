@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { resolveDeps } from '../../../src/api/report.js';
 import { runSource } from '../../../src/cli/ci/main-report.js';
 import { mergeWithConfig } from '../../../src/cli/ci/publish-io.js';
@@ -260,5 +260,33 @@ describe('migrateToOneReport', () => {
     expect(removed).toEqual([]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(cicd.path);
+  });
+
+  test('reads the cicd file with only its own import graph to register the Parquet codec', async () => {
+    await rolling([{ runId: 1, attempt: 1 }]);
+    const index: SiteIndex = {
+      version: 1,
+      channels: {
+        [ONE]: {
+          kind: 'branch',
+          title: 'main',
+          headBranch: 'main',
+          runs: [legacyRun(1, 1, `${ONE}/runs/1`)],
+        },
+      },
+    };
+    // A fresh module graph has a fresh codec registry that nothing but site-migrate's own imports can fill.
+    vi.resetModules();
+    const fresh = await import('../../../src/cli/ci/site-migrate.js');
+    await fresh.migrateToOneReport({
+      site,
+      index,
+      reportPath: ONE,
+      deps,
+      warn: (m) => warnings.push(m),
+      remove: async () => {},
+    });
+    expect(warnings).toEqual([]);
+    expect((await manifest()).partitions.map((p) => p.source)).toEqual([runSource(1, 1)]);
   });
 });
