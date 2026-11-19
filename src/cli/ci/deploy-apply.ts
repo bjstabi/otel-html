@@ -9,6 +9,7 @@ import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
 import type { PendingPlan, PendingUpdate } from './deploy-plan.js';
 import { messageOf, warning } from './github-api.js';
+import { diskNext } from './main-report.js';
 import {
   emptyRunState,
   type JobUpdate,
@@ -156,15 +157,6 @@ const partitionBytes = (m: {
   partitions: readonly { files: Partial<Record<string, { bytes: number }>> }[];
 }): number =>
   m.partitions.reduce((n, p) => n + Object.values(p.files).reduce((k, f) => k + (f?.bytes ?? 0), 0), 0);
-
-/** One above the highest `data/partitions/<p6>/` folder (the high-water mark, including folders awaiting deletion). */
-async function diskNext(runDir: string): Promise<number> {
-  let next = 0;
-  for (const name of await readdir(join(runDir, 'data', 'partitions')).catch(() => [] as string[])) {
-    if (/^\d+$/.test(name)) next = Math.max(next, Number(name) + 1);
-  }
-  return next;
-}
 
 /** `<key>/runs/<run id>` of channel `key`. */
 const reportPathOf = (key: string, runId: number): string => `${key}/runs/${runId}`;

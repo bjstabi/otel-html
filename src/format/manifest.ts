@@ -243,7 +243,7 @@ export interface ManifestV4 {
 
 export type AnyManifest = Manifest | ManifestV4;
 
-export const SOURCE_RE: RegExp = /^(flush|compact|job|ci|merge):[A-Za-z0-9#:._-]{1,200}$/;
+export const SOURCE_RE: RegExp = /^(flush|compact|job|ci|merge|run):[A-Za-z0-9#:._-]{1,200}$/;
 const INT64_MIN = -(2n ** 63n);
 const INT64_MAX = 2n ** 63n - 1n;
 const INT64_CANONICAL = /^(?:0|-?[1-9][0-9]*)$/;

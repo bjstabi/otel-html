@@ -105,9 +105,9 @@ export interface SyncPlan {
 const filePaths = (e: PartitionEntry): string[] => TABLES.flatMap((t) => e.files[t]?.path ?? []);
 
 /** The partition files as the manifest lists them: numbered `n`, values normalised to the manifest's keys. */
-function entryFrom(
+export function entryFrom(
   n: number,
-  p: UpdatePartition,
+  p: Pick<UpdatePartition, 'source' | 'files' | 'cicd'>,
   dir: string,
   keys: StatisticsKeys,
   copies: FileMove[],
@@ -147,7 +147,7 @@ function withSharesFormat(manifest: ManifestV4, added: readonly PartitionEntry[]
   return { ...manifest, formatVersion: 8 };
 }
 
-function totalsAndRange(partitions: readonly PartitionEntry[]): Pick<ManifestV4, 'totals' | 'range'> {
+export function totalsAndRange(partitions: readonly PartitionEntry[]): Pick<ManifestV4, 'totals' | 'range'> {
   const totals = { spans: 0, logs: 0, metrics: 0 };
   let start: bigint | null = null;
   let end: bigint | null = null;
