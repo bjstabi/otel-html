@@ -38,6 +38,7 @@
     "test/cli/ci/site-state.test.ts": 0.1,
     "test/cli/ci/site.test.ts": 0.1,
     "test/cli/ci/summary.test.ts": 0.1,
+    "test/cli/ci/trim-run.test.ts": 1,
     "test/cli/ci/trust.test.ts": 0.1,
     "test/cli/ci/update-main.test.ts": 2.7,
     "test/cli/ci/update.test.ts": 0.1,
