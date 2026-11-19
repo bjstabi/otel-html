@@ -516,7 +516,7 @@ Runs are kept in tiers, per workflow (`ci`, `load`). A full run has everything. 
 
 A run older than all of these drops out of the report on the next pass. The run being published always stays, even when it is older than the ones kept (a re-run of an old run); the next pass removes it. When a pull request closes or merges, `pull_request_target` triggers the `cleanup` job, which marks it closed (`ci update remove-pr`). Its runs stay, all slim, and count against `--pr-slim-retention`. GitHub Pages sites are limited to 1 GB. Slim runs are what keeps the report small; the site's `site-state/files.json` lists every file with its size.
 
-After each pass the deployer also writes a `badge-<workflow>.json` file per workflow into the report's folder, a shields.io endpoint badge showing that workflow's newest run, and keeps any `preview-*.png` screenshots, which survive rebuilds (a later step may refresh them). A per-run report whose format this version of otel-html no longer reads is skipped with a warning and the rest still merge. A `load` run whose jobs were skipped has no job reports and publishes nothing.
+After each pass the deployer also writes a `badge-<workflow>.json` file per workflow into the report's folder, a shields.io endpoint badge showing that workflow's newest run, and keeps any `preview-*.png` screenshots, which survive rebuilds (a later step may refresh them). A `load` run whose jobs were skipped has no job reports and publishes nothing.
 
 The landing page (`/index.html`, from `/index.json`) lists the report and the open pull requests, each with its link into the report.
 
