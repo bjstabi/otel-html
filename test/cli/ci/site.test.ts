@@ -2,9 +2,12 @@ import { expect, test } from 'vitest';
 import type { ApiPull, ApiRun } from '../../../src/cli/ci/github-api.js';
 import {
   applyRetention,
+  applyTiers,
   badgeFor,
+  type Channel,
   channelBadges,
   channelFor,
+  closePullRequest,
   dropWorkflowChannels,
   formatRunDuration,
   parseSiteIndex,
@@ -14,6 +17,7 @@ import {
   removeChannel,
   renderLanding,
   renderRedirect,
+  reopenPullRequest,
   reportUrl,
   rollingInputs,
   type SiteIndex,
@@ -295,7 +299,7 @@ test('renderLanding lists the branches, then pull requests newest first, has no 
   expect(html).not.toContain('href="ci/"');
   expect(html).not.toContain('<img');
   expect(html).not.toContain('<script');
-  const order = ['branch/main/', 'pr/20/', 'pr/12/'].map((h) => html.indexOf(`href="${h}"`));
+  const order = ['branch/main/', 'f:y', '#12'].map((h) => html.indexOf(h));
   expect(order.every((i) => i > 0)).toBe(true);
   expect(order).toEqual([...order].sort((a, b) => a - b));
 });
@@ -416,4 +420,152 @@ test('channelBadges skips in-progress runs: the badge names the newest finished 
   };
   expect(channelBadges(channel)['badge-ci.json']?.message).toBe('✗ 4m12s');
   expect(channelBadges({ ...main, runs: [timed({ runId: 4, conclusion: 'in_progress' })] })).toEqual({});
+});
+
+const chan = (kind: 'branch' | 'pr', runs: SiteRun[], over: Partial<Channel> = {}): Channel => ({
+  kind,
+  title: kind === 'pr' ? '#1 t' : 'main',
+  headBranch: kind === 'pr' ? 'feat' : 'main',
+  runs,
+  ...over,
+});
+const at = (id: number, over: Partial<SiteRun> = {}): SiteRun =>
+  siteRun(id, { completedAt: `2026-01-${String(id).padStart(2, '0')}T00:00:00Z`, workflow: 'ci', ...over });
+const newestFirst = (...ids: number[]): number[] => ids;
+const ids = (c: Channel | undefined): number[] => (c?.runs ?? []).map((r) => r.runId);
+const TIERS = { full: 2, slim: 4, prFull: 1, prSlim: 10 };
+
+test('applyTiers on a branch channel: full, then slim, then dropped, per workflow', () => {
+  const ci = [6, 5, 4, 3, 2, 1].map((i) => at(i));
+  const load = [8, 7].map((i) => at(i, { workflow: 'load' }));
+  const ix: SiteIndex = { version: 1, channels: { [MAIN]: chan('branch', [...load, ...ci]) } };
+  const r = applyTiers(ix, TIERS);
+  const out = r.index.channels[MAIN]?.runs ?? [];
+  const detail = (id: number) => out.find((x) => x.runId === id)?.detail;
+  expect([6, 5].map(detail)).toEqual(['full', 'full']);
+  expect([4, 3].map(detail)).toEqual(['slim', 'slim']);
+  expect([8, 7].map(detail)).toEqual(['full', 'full']);
+  expect(r.trim.map((t) => t.run.runId).sort()).toEqual([3, 4]);
+  expect(r.drop.map((t) => t.run.runId).sort()).toEqual([1, 2]);
+  expect(r.drop.every((t) => t.key === MAIN)).toBe(true);
+  expect(ids(r.index.channels[MAIN]).sort()).toEqual([3, 4, 5, 6, 7, 8]);
+});
+
+test('applyTiers keeps a slim run slim when it ranks among the full', () => {
+  const ix: SiteIndex = {
+    version: 1,
+    channels: { [MAIN]: chan('branch', [at(2, { detail: 'slim' }), at(1)]) },
+  };
+  const r = applyTiers(ix, TIERS);
+  expect(r.index.channels[MAIN]?.runs.map((x) => x.detail)).toEqual(['slim', 'full']);
+  expect(r.trim).toEqual([]);
+});
+
+test('applyTiers: an open pull request keeps prFull full, the rest slim; a closed one is all slim', () => {
+  const ix: SiteIndex = {
+    version: 1,
+    channels: {
+      'pr/1': chan('pr', [at(3), at(2), at(1)]),
+      'pr/2': chan('pr', [at(6), at(5)], { closedAt: '2026-02-01T00:00:00Z' }),
+    },
+  };
+  const r = applyTiers(ix, TIERS);
+  expect(r.index.channels['pr/1']?.runs.map((x) => x.detail)).toEqual(['full', 'slim', 'slim']);
+  expect(r.index.channels['pr/2']?.runs.map((x) => x.detail)).toEqual(['slim', 'slim']);
+  expect(r.trim.map((t) => t.run.runId).sort()).toEqual([1, 2, 5, 6]);
+});
+
+test('applyTiers: the pull request pool keeps prSlim slim runs per workflow across channels and removes emptied channels', () => {
+  const ix: SiteIndex = {
+    version: 1,
+    channels: {
+      'pr/1': chan('pr', [at(3), at(2), at(1)], { closedAt: '2026-02-01T00:00:00Z' }),
+      'pr/2': chan('pr', [at(5), at(4)]),
+    },
+  };
+  const r = applyTiers(ix, { ...TIERS, prSlim: 2 });
+  // slim PR runs: 3,2,1 (pr/1) and 4 (pr/2); run 5 is full; the newest two slim are 4 and 3
+  expect(r.drop.map((t) => t.run.runId).sort()).toEqual([1, 2]);
+  expect(ids(r.index.channels['pr/1'])).toEqual([3]);
+  expect(ids(r.index.channels['pr/2'])).toEqual([5, 4]);
+  const gone = applyTiers(
+    {
+      version: 1,
+      channels: { 'pr/1': chan('pr', [at(1)], { closedAt: 'x' }), 'pr/2': chan('pr', [at(9), at(8)]) },
+    },
+    { ...TIERS, prSlim: 1 },
+  );
+  expect(gone.drop.map((t) => t.run.runId)).toEqual([1]);
+  expect(Object.keys(gone.index.channels)).toEqual(['pr/2']);
+});
+
+test('applyTiers never drops the publishing run and leaves its detail', () => {
+  const ci = [6, 5, 4, 3, 2, 1].map((i) => at(i));
+  const ix: SiteIndex = { version: 1, channels: { [MAIN]: chan('branch', ci) } };
+  const r = applyTiers(ix, TIERS, new Set([1, 6]));
+  const out = r.index.channels[MAIN]?.runs ?? [];
+  expect(out.find((x) => x.runId === 1)?.detail).toBe('full');
+  expect(r.drop.map((t) => t.run.runId)).toEqual([2]);
+  expect(r.trim.map((t) => t.run.runId).sort()).toEqual([3, 4]);
+  const pr = applyTiers(
+    { version: 1, channels: { 'pr/1': chan('pr', [at(3), at(2), at(1)], { closedAt: 'x' }) } },
+    { ...TIERS, prSlim: 1 },
+    new Set([1]),
+  );
+  expect(ids(pr.index.channels['pr/1'])).toEqual([3, 1]);
+  expect(newestFirst(...pr.drop.map((t) => t.run.runId))).toEqual([2]);
+});
+
+test('closePullRequest marks closedAt once; reopenPullRequest clears it; an unknown channel is unchanged', () => {
+  const ix: SiteIndex = { version: 1, channels: { 'pr/1': chan('pr', [at(1)]) } };
+  const closed = closePullRequest(ix, 1, '2026-02-01T00:00:00Z');
+  expect(closed.changed).toBe(true);
+  expect(closed.index.channels['pr/1']?.closedAt).toBe('2026-02-01T00:00:00Z');
+  const again = closePullRequest(closed.index, 1, '2026-03-01T00:00:00Z');
+  expect(again.changed).toBe(false);
+  expect(again.index.channels['pr/1']?.closedAt).toBe('2026-02-01T00:00:00Z');
+  const reopened = reopenPullRequest(closed.index, 1);
+  expect(reopened.changed).toBe(true);
+  expect('closedAt' in (reopened.index.channels['pr/1'] ?? {})).toBe(false);
+  expect(reopenPullRequest(reopened.index, 1).changed).toBe(false);
+  expect(closePullRequest(ix, 9, 'x')).toEqual({ index: ix, changed: false });
+  expect(reopenPullRequest(ix, 9)).toEqual({ index: ix, changed: false });
+});
+
+test('renderLanding links open pull requests into the branch report with their branch selected, and skips closed ones', () => {
+  let ix = placeRun(empty(), MAIN, main, siteRun(1));
+  ix = placeRun(ix, 'pr/12', { kind: 'pr', title: '#12 Open', headBranch: 'feat-open' }, siteRun(2));
+  ix = placeRun(
+    ix,
+    'pr/13',
+    { kind: 'pr', title: '#13 Shut', headBranch: 'feat-shut', closedAt: '2026-02-01T00:00:00Z' },
+    siteRun(3),
+  );
+  const html = renderLanding(ix, 'o/r', { dashboard: 'ci' });
+  expect(html).toContain('href="branch/main/#/dashboards/ci?');
+  expect(html).toContain('vcs.ref.head.name');
+  expect(html).toContain('feat-open');
+  expect(html).not.toContain('#13');
+  expect(html).not.toContain('feat-shut');
+  expect(renderLanding(ix, 'o/r')).toContain('href="branch/main/"');
+  const noBranch = renderLanding(
+    placeRun(empty(), 'pr/12', { kind: 'pr', title: '#12 Open', headBranch: 'f' }, siteRun(2)),
+    'o/r',
+    { dashboard: 'ci' },
+  );
+  expect(noBranch).not.toContain('Pull requests');
+});
+
+test('siteIndexSchema round-trips detail, reportUrl and closedAt, and still reads an index without them', () => {
+  const ix: SiteIndex = {
+    version: 1,
+    channels: {
+      'pr/1': chan('pr', [at(1, { detail: 'slim', reportUrl: 'https://x/y/' })], {
+        closedAt: '2026-02-01T00:00:00Z',
+      }),
+    },
+  };
+  expect(siteIndexSchema.parse(JSON.parse(JSON.stringify(ix)))).toEqual(ix);
+  const plain: SiteIndex = { version: 1, channels: { [MAIN]: chan('branch', [at(1)]) } };
+  expect(siteIndexSchema.parse(JSON.parse(JSON.stringify(plain)))).toEqual(plain);
 });

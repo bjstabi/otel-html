@@ -6,7 +6,7 @@ export const T_FORMAT: RegExp = /^(\d+)~(\d+)$/;
  * The largest window value a URL may carry: the largest double below 2^63. A value up to it parses (`Number`) to at most
  * itself, so the formatter's int64 check holds for every window read from a URL, with room for an anchor's rounding.
  */
-export const MAX_T = 2n ** 63n - 1024n;
+export const MAX_T: bigint = 2n ** 63n - 1024n;
 
 /**
  * Whether the window text has start <= end and an end within `MAX_T` (a window relative to the epoch in format 5, unix

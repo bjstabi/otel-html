@@ -7,7 +7,14 @@ import { OtelHtmlError } from '../../model/errors.js';
 import type { WriterDeps } from '../../writer/session.js';
 import { upgradeReport } from '../../writer/upgrade.js';
 import { readRunManifest, renumbered, writeRunReport } from './run-report.js';
-import { type Channel, channelBadges, parseSiteIndex, renderLanding, type SiteIndex } from './site.js';
+import {
+  type Channel,
+  channelBadges,
+  type LandingLinks,
+  parseSiteIndex,
+  renderLanding,
+  type SiteIndex,
+} from './site.js';
 
 /** The filesystem side of the published site: its index, landing page, and the report folders under it. */
 
@@ -24,10 +31,15 @@ export async function readSiteIndex(dir: string, warn?: (message: string) => voi
 }
 
 /** Writes `index.json`, the landing `index.html` and `.nojekyll` into `dir`. */
-export async function writeSite(dir: string, index: SiteIndex, repository: string): Promise<void> {
+export async function writeSite(
+  dir: string,
+  index: SiteIndex,
+  repository: string,
+  links?: LandingLinks,
+): Promise<void> {
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, 'index.json'), `${JSON.stringify(index, null, 2)}\n`);
-  await writeFile(join(dir, 'index.html'), renderLanding(index, repository));
+  await writeFile(join(dir, 'index.html'), renderLanding(index, repository, links));
   await writeFile(join(dir, '.nojekyll'), '');
 }
 

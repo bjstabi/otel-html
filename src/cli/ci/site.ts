@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ApiPull, ApiRun } from './github-api.js';
+import { branchLink, runsWindow } from './report-links.js';
 
 /** The published site's index (`/index.json`): channels of runs, and the pure operations on it. */
 
@@ -17,7 +18,12 @@ export type SiteRun = {
   reportPath: string;
   /** The run's workflow name (`ci`, `load`); absent in entries written before it was recorded. */
   workflow?: string;
+  /** `slim` keeps only the run's CI spans; absent means `full`. */
+  detail?: Detail;
+  /** The run's own report, when it is published outside this site. */
+  reportUrl?: string;
 };
+type Detail = 'full' | 'slim';
 /** Where a report at the site-relative folder `reportPath` loads the shared viewer files from: the site's flat `assets/`. */
 export const assetsBaseFor = (reportPath: string): string =>
   `${'../'.repeat(reportPath.split('/').filter((x) => x !== '').length)}assets/`;
@@ -47,6 +53,8 @@ export type Channel = {
   headBranch: string;
   /** A pull request channel's head repository, `owner/repo`. */
   headRepo?: string;
+  /** When the pull request was closed; its runs are all slim. */
+  closedAt?: string;
   /** Newest first. */
   runs: SiteRun[];
 };
@@ -63,6 +71,8 @@ const siteRunSchema = z.object({
   runUrl: z.string(),
   reportPath: z.string(),
   workflow: z.string().exactOptional(),
+  detail: z.enum(['full', 'slim']).exactOptional(),
+  reportUrl: z.string().exactOptional(),
 });
 const KINDS = ['branch', 'pr', 'workflow'] as const;
 const channelSchema: z.ZodType<Channel> = z.object({
@@ -70,6 +80,7 @@ const channelSchema: z.ZodType<Channel> = z.object({
   title: z.string(),
   headBranch: z.string(),
   headRepo: z.string().exactOptional(),
+  closedAt: z.string().exactOptional(),
   runs: z.array(siteRunSchema),
 });
 export const siteIndexSchema: z.ZodType<SiteIndex> = z.object({
@@ -269,6 +280,120 @@ export function applyRetention(
   return { index: { ...index, channels }, remove };
 }
 
+export interface Tiers {
+  full: number;
+  slim: number;
+  prFull: number;
+  prSlim: number;
+}
+export interface TierChange {
+  key: string;
+  run: SiteRun;
+}
+
+/**
+ * `index` with each run's `detail` set by its rank: per channel and workflow (no workflow counting as one more), a
+ * branch channel keeps `tiers.full` runs full, `tiers.slim` in all, and drops the rest; an open pull request keeps
+ * `tiers.prFull` full and the rest slim, a closed one is all slim. The slim pull request runs of every channel then
+ * form one pool per workflow, newest first, of which only `tiers.prSlim` stay. A run in `publishing` is never dropped
+ * and keeps its detail; a slim run never becomes full. `trim` is the runs that turned slim, `drop` the removed ones.
+ */
+export function applyTiers(
+  index: SiteIndex,
+  tiers: Tiers,
+  publishing: ReadonlySet<number> = new Set(),
+): { index: SiteIndex; trim: TierChange[]; drop: TierChange[] } {
+  const trim: TierChange[] = [];
+  const drop: TierChange[] = [];
+  const channels: Record<string, Channel> = {};
+  const kept = new Map<string, SiteRun[]>();
+  for (const [key, ch] of Object.entries(index.channels)) {
+    const seen = new Map<string | undefined, number>();
+    const runs: SiteRun[] = [];
+    for (const r of ch.runs) {
+      const rank = (seen.get(r.workflow) ?? 0) + 1;
+      seen.set(r.workflow, rank);
+      const current: Detail = r.detail ?? 'full';
+      let target: Detail | 'drop';
+      if (ch.kind === 'pr') {
+        target = ch.closedAt !== undefined || rank > tiers.prFull ? 'slim' : 'full';
+      } else {
+        target = rank <= tiers.full ? 'full' : rank <= tiers.slim ? 'slim' : 'drop';
+      }
+      if (publishing.has(r.runId)) target = current;
+      else if (target === 'full' && current === 'slim') target = 'slim';
+      if (target === 'drop') {
+        drop.push({ key, run: r });
+        continue;
+      }
+      if (target === 'slim' && current === 'full') trim.push({ key, run: r });
+      runs.push({ ...r, detail: target });
+    }
+    kept.set(key, runs);
+  }
+  // one pool of slim pull request runs per workflow, across channels
+  const pools = new Map<string | undefined, { key: string; run: SiteRun }[]>();
+  for (const [key, ch] of Object.entries(index.channels)) {
+    if (ch.kind !== 'pr') continue;
+    for (const run of kept.get(key) ?? []) {
+      if (run.detail !== 'slim') continue;
+      const pool = pools.get(run.workflow) ?? [];
+      pool.push({ key, run });
+      pools.set(run.workflow, pool);
+    }
+  }
+  const gone = new Set<number>();
+  for (const pool of pools.values()) {
+    pool.sort((a, b) =>
+      a.run.completedAt === b.run.completedAt
+        ? b.run.runId - a.run.runId
+        : a.run.completedAt < b.run.completedAt
+          ? 1
+          : -1,
+    );
+    pool.forEach(({ key, run }, i) => {
+      if (i < tiers.prSlim || publishing.has(run.runId)) return;
+      gone.add(run.runId);
+      const original = index.channels[key]?.runs.find((x) => x.runId === run.runId);
+      drop.push({ key, run: original ?? run });
+      const at = trim.findIndex((t) => t.key === key && t.run.runId === run.runId);
+      if (at >= 0) trim.splice(at, 1);
+    });
+  }
+  for (const [key, ch] of Object.entries(index.channels)) {
+    const runs = (kept.get(key) ?? []).filter(
+      (r) => !gone.has(r.runId) || index.channels[key]?.kind !== 'pr',
+    );
+    if (runs.length === 0 && ch.kind === 'pr') continue;
+    channels[key] = { ...ch, runs };
+  }
+  return { index: { ...index, channels }, trim, drop };
+}
+
+/** `index` with pull request `pr` closed at `now`; unchanged when it is absent or already closed. */
+export function closePullRequest(
+  index: SiteIndex,
+  pr: number,
+  now: string,
+): { index: SiteIndex; changed: boolean } {
+  const key = `pr/${pr}`;
+  const ch = index.channels[key];
+  if (ch === undefined || ch.closedAt !== undefined) return { index, changed: false };
+  return {
+    index: { ...index, channels: { ...index.channels, [key]: { ...ch, closedAt: now } } },
+    changed: true,
+  };
+}
+
+/** `index` with pull request `pr` open again; unchanged when it is absent or not closed. */
+export function reopenPullRequest(index: SiteIndex, pr: number): { index: SiteIndex; changed: boolean } {
+  const key = `pr/${pr}`;
+  const ch = index.channels[key];
+  if (ch === undefined || ch.closedAt === undefined) return { index, changed: false };
+  const { closedAt: _closed, ...open } = ch;
+  return { index: { ...index, channels: { ...index.channels, [key]: open } }, changed: true };
+}
+
 /**
  * `index` without the older per-workflow channels (`ci`, `load`), and their folders to delete. Their runs are not
  * moved: the default branch's page starts over at `branch/<default>/`.
@@ -333,13 +458,26 @@ const branchLabel = (ch: Channel, repository: string): string =>
     ? ch.headBranch
     : `${ch.headRepo.split('/')[0]}:${ch.headBranch}`;
 
-/** The static landing page: the branches, then the pull requests (highest number first), each its rolling report. */
-export function renderLanding(index: SiteIndex, repository: string): string {
+export interface LandingLinks {
+  /** The id of the CI dashboard the pull request links open. */
+  dashboard: string;
+}
+
+/**
+ * The static landing page: the branches, then the open pull requests (highest number first). A pull request links
+ * into the branch report with its head branch selected (`links` names the dashboard; without it, the report itself).
+ */
+export function renderLanding(index: SiteIndex, repository: string, links?: LandingLinks): string {
   const all = Object.entries(index.channels);
   const branches = all.filter(([, c]) => c.kind === 'branch').sort(([a], [b]) => a.localeCompare(b));
   const prs = all
-    .filter(([, c]) => c.kind === 'pr')
+    .filter(([, c]) => c.kind === 'pr' && c.closedAt === undefined)
     .sort(([a], [b]) => Number(b.slice(3)) - Number(a.slice(3)));
+  const branchKey = branches[0]?.[0];
+  const prHref = (c: Channel): string =>
+    links === undefined || branchKey === undefined
+      ? `${branchKey}/`
+      : branchLink(`${branchKey}/`, links.dashboard, c.headBranch, runsWindow(c.runs));
   const section = (heading: string, rows: string[]): string =>
     rows.length === 0 ? '' : `<h2>${heading}</h2><ul>${rows.join('')}</ul>`;
   const body =
@@ -350,9 +488,11 @@ export function renderLanding(index: SiteIndex, repository: string): string {
     ) +
     section(
       'Pull requests',
-      prs.map(([key, c]) => entry(`${key}/`, c.title, c, branchLabel(c, repository))),
+      branchKey === undefined
+        ? []
+        : prs.map(([, c]) => entry(prHref(c), c.title, c, branchLabel(c, repository))),
     ) +
-    (branches.length + prs.length === 0 ? '<p>No reports yet.</p>' : '');
+    (branches.length + (branchKey === undefined ? 0 : prs.length) === 0 ? '<p>No reports yet.</p>' : '');
   return page(`${repository} CI reports`, body);
 }
 

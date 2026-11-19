@@ -424,8 +424,7 @@ describe('placing runs on the site', () => {
     });
     expect(indexOf().channels['pr/7']?.runs.map((r) => r.workflow)).toEqual(['load', 'ci']);
     const landing = readFileSync(join(site, 'index.html'), 'utf8');
-    expect(landing).toContain('href="pr/7/"');
-    expect(landing).toContain('feat/topic');
+    expect(landing).not.toContain('href="pr/7/"'); // no branch report to link into yet
   });
 
   test('a pull request channel keeps its retention per workflow', async () => {
@@ -485,7 +484,7 @@ describe('placing runs on the site', () => {
     expect(Object.keys(indexOf().channels).sort()).toEqual(['branch/main', 'pr/3']);
     const landing = readFileSync(join(site, 'index.html'), 'utf8');
     expect(landing).not.toContain('href="ci/"');
-    expect(landing).toContain('href="pr/3/"');
+    expect(landing).toContain('<a href="branch/main/">#3 Old');
   });
 
   test('a channel of a kind this version does not know is skipped with a warning, not a failure', async () => {
