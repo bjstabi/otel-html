@@ -236,6 +236,10 @@ describe('jobs', () => {
     open('other');
     await show(widget('jobs'), runs(12, ['build', 'test']));
     await act(async () => q<HTMLElement>('[data-job="build"]').click());
+    const y = (lastChart().option as unknown as { yAxis: { max: number; interval: number } }).yAxis;
+    expect(y.interval).toBeGreaterThan(0);
+    expect(y.max).toBeGreaterThanOrEqual(Math.max(y.interval, 60 * SEC));
+    expect(y.max % y.interval).toBe(0);
     const ring = (): { itemStyle: { opacity: number }; data: number[][] } | undefined =>
       (lastChart().option as unknown as { series: { type: string }[] }).series.find(
         (s) => s.type === 'scatter' && 'data' in s,

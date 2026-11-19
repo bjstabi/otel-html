@@ -1,5 +1,5 @@
-import { formatDuration } from '../../semconv/formatters.js';
 import type { CicdRow } from '../data/cicd-query.js';
+import { durationText } from './format.js';
 import { type CiJob, type CiRun, combineRuns } from './runs.js';
 
 const MIN = 60_000_000_000;
@@ -164,7 +164,7 @@ function valueText(kind: StatKind, v: number): string {
       return `${rounded(v)}%`;
     case 'median-run':
     case 'queue-p95':
-      return formatDuration(v);
+      return durationText(v);
     case 'cache':
       return `${rounded(v)}×`;
     case 'minutes':

@@ -232,13 +232,18 @@ describe('runs-trend', () => {
     await show(widget('runs-trend'), sevenDays());
     const o = lastChart().option as unknown as {
       xAxis: { data: string[] };
-      yAxis: { axisLabel: { formatter(v: number): string } }[];
+      yAxis: { max: number; interval: number; axisLabel: { formatter(v: number): string } }[];
     };
     expect(o.xAxis.data.length).toBeGreaterThan(0);
     for (const l of o.xAxis.data) expect(l).not.toMatch(/\d{4}-\d\d-\d\dT|\.\d{3}Z/);
     // two-day buckets: the date only
     expect(o.xAxis.data[0]).not.toMatch(/\d:\d\d/);
     expect(o.yAxis[0]?.axisLabel.formatter(0)).toBe('0 s');
+    // the duration axis steps by a round interval and covers every p95
+    const { max, interval } = o.yAxis[0] ?? { max: 0, interval: 0 };
+    expect(interval).toBeGreaterThan(0);
+    expect(max).toBeGreaterThanOrEqual(Math.max(interval, 60 * SEC));
+    expect(max % interval).toBe(0);
   });
 
   it('offers "Zoom the slider to this bucket", which writes whole nanoseconds', async () => {
@@ -328,6 +333,15 @@ describe('runs', () => {
     await act(async () => on('click')?.({ dataIndex: 2 }));
     expect(state.sel.trace).toBe(TRACE(3));
     expect(state.run?.from).toBe('w1');
+  });
+
+  it('puts the y axis on a round duration step that covers the longest run', async () => {
+    await show(widget('runs'), sevenDays());
+    const y = (lastChart().option as unknown as { yAxis: { max: number; interval: number } }).yAxis;
+    expect(y.interval).toBeGreaterThan(0);
+    expect(y.max).toBeGreaterThanOrEqual(Math.max(y.interval, 60 * SEC));
+    expect(y.max % y.interval).toBe(0);
+    expect(y.interval % SEC).toBe(0);
   });
 
   it('opens the run menu on a right-click', async () => {

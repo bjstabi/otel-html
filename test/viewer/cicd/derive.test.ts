@@ -98,7 +98,7 @@ describe('stat', () => {
     const prev = [run(0, { duration: 100 * SEC })];
     const s = stat('median-run', runs, prev);
     // durations without the cancelled 90 s: 10..80, 100, 110, 120 -> median of 11 values is the 6th = 60
-    expect(s.value).toBe('60 s');
+    expect(s.value).toBe('1 min');
     expect(s.delta).toEqual({ text: '−40%', better: true });
     expect(s.spark?.length).toBeGreaterThanOrEqual(2);
   });

@@ -6,7 +6,7 @@ import { useEpoch } from '../../dashboards/widgets/layout.js';
 import { useSubtitle } from '../../dashboards/widgets/subtitle.js';
 import { useTheme } from '../../theme/theme-provider.js';
 import { type JobRow, jobsTable } from '../derive.js';
-import { axisTime, durationText } from '../format.js';
+import { axisTime, durationAxis, durationText } from '../format.js';
 import { useRunActions } from '../run-actions.js';
 import { useCicd } from '../use-cicd.js';
 import {
@@ -152,7 +152,11 @@ export const JobsView: WidgetRenderer = ({
         data: trend.points.map((p) => axisTime(p.run.start, epoch, 0)),
         axisLabel: { hideOverlap: true },
       },
-      yAxis: { type: 'value', axisLabel: { formatter: (v: number) => durationText(v) } },
+      yAxis: {
+        type: 'value',
+        ...durationAxis(Math.max(0, ...trend.points.map((p) => p.duration))),
+        axisLabel: { formatter: (v: number) => durationText(v) },
+      },
       series: [
         {
           type: 'line',

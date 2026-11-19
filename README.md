@@ -396,6 +396,8 @@ A `metric` widget with `runBy` is a run chart: one point per CI run instead of o
 | `minutes` | CI minutes per day, stacked by trigger or, with `by: job`, by the top 7 jobs and Other; a header toggle switches | all |
 | `tests` | the test suites of the latest run that has test spans: files by test time, with test and skipped counts; a row expands to its tests | the latest run |
 
+Durations read in the unit they need (`312 ms`, `1.5 s`, `4 min 12 s`, `1 h 5 min`), and the duration axes step by 1, 2, 5, 10, 15 or 30 seconds or minutes, or 1 or 2 hours.
+
 "All" means the dashboard's variables; the views that do not honour `job` or `runner` say "ignores job" in their header instead (the echo, above). A run's duration is the latest job end minus the run's start, cancelled runs are left out of percentiles, and CI minutes are the sum of job durations.
 
 **Variable values.** On a page with a `cicd` widget, the four CI keys (`vcs.ref.head.name`, `cicd.pipeline.trigger`, `cicd.pipeline.task.name` and `cicd.worker.labels`) list their values from the `cicd` table, not from the spans: the distinct values of the runs and jobs that started in the page window, for the first `cicd` widget's `pipeline`. That list shares the widgets' own fetch, so it costs no request of its own while no branch or trigger is bound. A selected value outside the window stays listed. Any other variable key, and every page without a `cicd` widget, reads the resources as before.

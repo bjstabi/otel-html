@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { UnixNanos } from '../../../src/model/ids.js';
-import { axisTime, durationText, shortTime } from '../../../src/viewer/cicd/format.js';
+import { axisTime, durationAxis, durationText, shortTime } from '../../../src/viewer/cicd/format.js';
 
 const MS = 1_000_000;
 const HOUR = 3_600_000 * MS;
@@ -12,6 +12,38 @@ describe('durationText', () => {
     expect(durationText(0)).toBe('0 s');
     expect(durationText(1500 * MS)).toBe('1.5 s');
     expect(durationText(5)).toBe('5 ns');
+    expect(durationText(312 * MS)).toBe('312 ms');
+    expect(durationText(59_600 * MS)).toBe('59.6 s');
+  });
+
+  test('minutes and hours read in whole numbers', () => {
+    const S = 1e9;
+    expect(durationText(60 * S)).toBe('1 min');
+    expect(durationText(252 * S)).toBe('4 min 12 s');
+    expect(durationText(300 * S)).toBe('5 min');
+    expect(durationText(3900 * S)).toBe('1 h 5 min');
+    expect(durationText(7200 * S)).toBe('2 h');
+  });
+
+  test('rounded seconds carry into the minute, rounded minutes into the hour', () => {
+    const S = 1e9;
+    expect(durationText(299.7 * S)).toBe('5 min');
+    expect(durationText(3599.7 * S)).toBe('1 h');
+    expect(durationText(3599.7 * S + 3600 * S)).toBe('2 h');
+    expect(durationText(7170 * S)).toBe('2 h');
+  });
+
+  test('a negative duration is the minus sign and the magnitude', () => {
+    expect(durationText(-252e9)).toBe('-4 min 12 s');
+    expect(durationText(-1500 * MS)).toBe('-1.5 s');
+  });
+});
+
+describe('durationAxis', () => {
+  test('round steps in nanoseconds', () => {
+    expect(durationAxis(1_840e9)).toEqual({ max: 2_700e9, interval: 900e9 });
+    expect(durationAxis(7_300e9)).toEqual({ max: 9_000e9, interval: 1_800e9 });
+    expect(durationAxis(0)).toEqual({ max: 1e9, interval: 1e9 });
   });
 });
 
