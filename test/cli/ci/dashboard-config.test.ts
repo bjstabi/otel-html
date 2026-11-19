@@ -61,8 +61,8 @@ describe('CI dashboard configs', () => {
       ['cicd.worker.labels', 'runner'],
     ]);
     expect(d.quick).toEqual([
-      { label: 'main', set: { 'vcs.ref.head.name': 'main' } },
-      { label: 'pull requests', set: { 'cicd.pipeline.trigger': 'pull_request' } },
+      { label: 'main', set: { 'vcs.ref.head.name': 'main', 'cicd.pipeline.trigger': null } },
+      { label: 'pull requests', set: { 'vcs.ref.head.name': null, 'cicd.pipeline.trigger': 'pull_request' } },
       { label: 'all', set: { 'vcs.ref.head.name': null, 'cicd.pipeline.trigger': null } },
     ]);
     const { config } = resolveConfig({ file: await raw(path), env: {}, fileLabel: path });

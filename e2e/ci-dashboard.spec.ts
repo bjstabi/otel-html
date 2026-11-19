@@ -44,6 +44,23 @@ async function centreX(l: Locator): Promise<number> {
   return b.x + b.width / 2;
 }
 
+test('main and pull requests exclude each other and release', HTTP, async ({ page, reportUrl }) => {
+  await openCi(page, reportUrl('ci'));
+  const bar = page.getByTestId('filter-bar');
+  const main = bar.getByRole('button', { name: 'main', exact: true });
+  const prs = bar.getByRole('button', { name: 'pull requests', exact: true });
+  await prs.click();
+  await expect(prs).toHaveAttribute('aria-pressed', 'true');
+  await main.click();
+  await expect(main).toHaveAttribute('aria-pressed', 'true');
+  await expect(prs).toHaveAttribute('aria-pressed', 'false');
+  await expect(bar.getByRole('combobox', { name: 'trigger' })).toContainText('+ trigger');
+  await expect(bar.getByRole('combobox', { name: 'branch' })).toContainText('branch = main');
+  await main.click();
+  await expect(main).toHaveAttribute('aria-pressed', 'false');
+  await expect(bar.getByRole('combobox', { name: 'branch' })).toContainText('+ branch');
+});
+
 test('a status-grid cell opens the run under the grid, its caret over the cell; side panel opens Jobs', async ({
   page,
   reportUrl,

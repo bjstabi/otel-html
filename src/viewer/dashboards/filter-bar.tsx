@@ -50,6 +50,18 @@ function withQuick(
   return next;
 }
 
+/** `vars` after pressing a pressed quick filter: every key of its `set` is released. */
+function withoutQuick(
+  vars: DashboardPageState['vars'],
+  variables: readonly Variable[],
+  quick: QuickFilter,
+): DashboardPageState['vars'] {
+  return withQuick(vars, variables, {
+    ...quick,
+    set: Object.fromEntries(Object.keys(quick.set).map((key) => [key, null])),
+  });
+}
+
 function matches(quick: QuickFilter, variables: readonly Variable[], state: DashboardPageState): boolean {
   return Object.entries(quick.set).every(([key, value]) => {
     const variable = variables.find((v) => v.key === key);
@@ -200,7 +212,9 @@ export function FilterBar(props: {
                     key={q.label}
                     type="button"
                     aria-pressed={on}
-                    onClick={() => props.onVars(withQuick(state.vars, dashboard.variables, q))}
+                    onClick={() =>
+                      props.onVars((on ? withoutQuick : withQuick)(state.vars, dashboard.variables, q))
+                    }
                     className={`rounded-full px-3 py-1 text-sm ${on ? 'bg-ink text-page font-medium' : 'text-ink-2 hover:bg-hairline'}`}
                   >
                     {q.label}
