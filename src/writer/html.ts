@@ -57,7 +57,9 @@ export function renderIndexHtml(
   const pre =
     opts.format === 'site'
       ? `<script>__OH__.pre={${engineAssetNames('site')
-          .map((n) => JSON.stringify(escapeHtml(base + n)))
+          // ASSETS_BASE_RE admits only [A-Za-z0-9._/-], and the engine file names are plain: no `<`, `&` or quote can
+          // occur, so the raw string is safe inside the inline script and the key stays exactly `base + name`.
+          .map((n) => JSON.stringify(base + n))
           .map((h) => `${h}:fetch(${h}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r})`)
           .join(',')}};for(const k in __OH__.pre)__OH__.pre[k].catch(()=>{})</script>\n`
       : '';
