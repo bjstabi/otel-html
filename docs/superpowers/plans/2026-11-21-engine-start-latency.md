@@ -20,7 +20,7 @@ is known, with a loading line where the page will be. `openReport` fetches the f
 
 | #   | branch              | PR title                                                                                                   | status |
 | --- | ------------------- | ---------------------------------------------------------------------------------------------------------- | ------ |
-| 1   | `perf/engine-start` | `perf(viewer): engine bytes handed to the worker, the shell during the load, views bound without range reads` | open   |
+| 1   | `perf/engine-start` | `perf(viewer): engine bytes handed to the worker, the shell during the load, views bound without range reads` | merged #367 (3379619e) |
 
 - **Models.** Implementers and task reviewers run on Sonnet 5.5. The branch review runs on Opus 5.5.
 - **Bugs found on the way** are fixed in this PR and listed under **Also** in its body.
@@ -310,3 +310,25 @@ test('the engine files are requested once each and the navigation shows before t
   measurements, the trailers. Merge on green CI (`--squash --delete-branch`).
 - [ ] After the site deploys: spec §4 row 4 (live `branch/main/` at 50 Mbps / 40 ms RTT); record it with the
   plan's status line in a follow-up docs commit (`docs(plan): engine-start record`).
+
+## Status (2026-11-21)
+
+Done. PR #367 merged (squash 3379619e) after per-task reviews on Sonnet 5.5 and a whole-branch review on Opus 5.5
+(two Important findings, fixed and re-reviewed: the shim released the wasm buffer only on a second fetch, and the
+e2e navigation-before-page assertion could not fail). CI went green on a re-run: the Windows unit shard 2 failed once
+in `test/scaling/generator.test.ts` ("the worker holding the lock died"), which the branch does not touch.
+
+Spec §4 rows 1–3 are in the PR body (before → after, time to `main`: `local` at `file://` 1457 → 871 ms Chromium,
+1307 → 852 Firefox, 1695 → 1253 WebKit; `site` loopback 754 → 749, 842 → 730, 1228 → 1351 (the one worse row, accepted
+by the maintainer before the PR was opened); `ci` at 50 Mbps / 40 ms 4014 → 1948, 4069 → 1903, 4215 → 2396; Parquet
+requests before `main` 20 → 1/6/6). Row 4, the live `branch/main/` page cold in Chromium after the deploy (two runs
+each, before from spec §1):
+
+| network             | engine phase   | `main` attached | engine files                                             | Parquet requests views → `main` |
+| ------------------- | -------------- | --------------- | -------------------------------------------------------- | ------------------------------- |
+| 50 Mbps / 40 ms RTT | 2.1 s → 1.68 s | 3.6 s → 2.57 s  | all four start at 120 ms, in parallel, once each; wasm done at 1.82 s | 19 → 7                          |
+| 10 Mbps / 60 ms RTT | 7.9 s → 6.1 s  | — → 8.9 s       | wasm done at 8.0 s                                       | 19 → 7                          |
+| no throttle         | 0.64–1.7 s → 0.52–1.15 s | — → 1.03–1.83 s | wasm 270 ms (edge hit) to 909 ms (miss)       | 19 → 7                          |
+
+What remains on the throttled rows is the wasm download itself (7.66 MB gzipped) plus ~0.5 s to compile it; the
+seven Parquet requests during the views phase are the range reads of the first files above 512 KiB.
