@@ -33,14 +33,18 @@ test(
     await page.addInitScript(() => {
       const order: string[] = [];
       window.__order = order;
-      const seen = new Set<string>();
+      // `nav` counts only while the loading line shows and no `main` exists yet (the navigation of the engine start);
+      // a build that renders both in one commit records just `main`.
       const scan = (): void => {
-        for (const tag of ['nav', 'main']) {
-          if (!seen.has(tag) && document.querySelector(tag)) {
-            seen.add(tag);
-            order.push(tag);
-          }
-        }
+        const main = document.querySelector('main') !== null;
+        if (
+          !main &&
+          !order.includes('nav') &&
+          document.querySelector('nav') !== null &&
+          document.querySelector('[aria-label="Loading the report"]') !== null
+        )
+          order.push('nav');
+        if (main && !order.includes('main')) order.push('main');
       };
       const observer = new MutationObserver(scan);
       const start = (): void => {
@@ -64,15 +68,15 @@ test(
       new RegExp(`^${SPAN_COUNT} spans`),
     );
 
-    const counts = [...engineRequests.values()];
-    if (testInfo.project.name.endsWith('-http')) {
-      expect([...engineRequests.keys()].map((u) => u.split('/').pop()).sort()).toHaveLength(4);
-      expect(counts).toEqual([1, 1, 1, 1]);
-    } else {
-      // Firefox does not report file:// script requests; whatever was observed must not repeat.
-      expect(counts.every((n) => n === 1)).toBe(true);
-    }
     expect(await page.evaluate(() => window.__order)).toEqual(['nav', 'main']);
+    if (testInfo.project.name.endsWith('-http')) {
+      expect(engineRequests.size).toBe(4);
+      expect([...engineRequests.values()]).toEqual([1, 1, 1, 1]);
+    } else {
+      // Firefox does not report file:// script requests, so with none observed this check is vacuous; whatever
+      // was observed must not repeat.
+      expect([...engineRequests.values()].every((n) => n === 1)).toBe(true);
+    }
     expect(problems).toEqual([]);
   },
 );
