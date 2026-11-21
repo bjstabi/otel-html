@@ -141,13 +141,15 @@ export async function restoreViews(engine: Engine, manifest: ManifestV4): Promis
   }
 }
 
-/** Registers every file the manifest lists, then creates the base views. */
+/** Registers every file the manifest lists, awaits `prepare` (the small-file fetch of the binding files), then creates the base views. */
 export async function registerPartitions(
   engine: Engine,
   manifest: ManifestV4,
   deps: Pick<EngineDeps, 'loader' | 'baseUrl'>,
   onProgress?: (p: RegisterProgress) => void,
+  prepare?: () => Promise<void>,
 ): Promise<void> {
   await registerFiles(engine, manifestFiles(manifest), deps, onProgress);
+  await prepare?.();
   await createViews(engine, manifest);
 }

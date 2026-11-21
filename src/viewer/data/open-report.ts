@@ -1,4 +1,5 @@
 import { type ManifestV4, parseAnyManifest } from '../../format/manifest.js';
+import { viewBindingFiles } from '../../query/sql/views.js';
 import { traced } from '../telemetry.js';
 import type { DataSource } from './data-source.js';
 import { createDuckDbDataSource } from './duckdb-source.js';
@@ -141,16 +142,6 @@ export async function openReportRefreshable(
         parts.startEngine(manifest.engine, deps),
       );
       try {
-        onProgress({ phase: 'partitions', done: 0, total });
-        await traced('viewer.partitions.register', attrs, () =>
-          parts.registerPartitions(engine, manifest, deps, (f) =>
-            onProgress(
-              f.done < f.total
-                ? { phase: 'partitions', done: partitionsDone(fileCounts, f.done), total }
-                : { phase: 'views' },
-            ),
-          ),
-        );
         let current = manifest;
         const sizes = new Map<string, number>();
         const fillSizes = (m: ManifestV4): void => {
@@ -175,6 +166,21 @@ export async function openReportRefreshable(
                   swapToBuffer(engine, path, bytes, new URL(path, deps.baseUrl).href, isCurrent),
               })
             : undefined;
+        onProgress({ phase: 'partitions', done: 0, total });
+        await traced('viewer.partitions.register', attrs, () =>
+          parts.registerPartitions(
+            engine,
+            manifest,
+            deps,
+            (f) =>
+              onProgress(
+                f.done < f.total
+                  ? { phase: 'partitions', done: partitionsDone(fileCounts, f.done), total }
+                  : { phase: 'views' },
+              ),
+            small ? () => small.prepare(viewBindingFiles(manifest, 'base', (p) => p)) : undefined,
+          ),
+        );
         const queryEngine = parts.createQueryEngine(
           engine,
           deps.logger,
