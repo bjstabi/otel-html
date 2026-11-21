@@ -110,10 +110,11 @@ the `__OH__` bootstrap line and before `data/manifest.js`, one inline script:
 <script>__OH__.pre={};for(const u of ["assets/duckdb.1.32.0.worker.js","assets/duckdb.1.32.0.wasm","assets/parquet.1.32.0.duckdb_extension.wasm","assets/json.1.32.0.duckdb_extension.wasm"])__OH__.pre[u]=fetch(u).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.arrayBuffer()});__OH__.pre[u]?.catch(()=>{});</script>
 ```
 
-(the exact text is the implementer's, with the hrefs built by `assetUrl(…)` under `assetsBase`, escaped as the other
-hrefs are; the `.catch(() => {})` is a second consumer that stops an unhandled-rejection report, the promise itself
-stays rejected for the viewer to see). The hrefs are the page-relative strings `engineAssetNames('site')` gives, under
-`assetsBase`; the viewer looks them up by the same strings (`engine.assetsBase + name`), which is what
+(the exact text is the implementer's, with the hrefs built by `assetUrl(…)` under `assetsBase` as the raw strings,
+not HTML-escaped: `ASSETS_BASE_RE` keeps the base safe to embed; the `.catch(() => {})` is a second consumer that
+stops an unhandled-rejection report, the promise itself stays rejected for the viewer to see). The hrefs are the
+page-relative strings `engineAssetNames('site')` gives, under `assetsBase`; the viewer looks them up by the same
+strings (`engine.assetsBase + name`), which is what
 `engineUrls`/`extensionUrls` resolve today.
 
 `installRegistry` carries `pre` over from the bootstrap object (`Registry.prefetched(href): Promise<ArrayBuffer> |
@@ -177,7 +178,7 @@ visible within ~0.4 s of navigation on localhost. A result worse than today on a
 ## 5. Tests
 
 - `test/writer/html.test.ts`: `format: 'site'` writes the prefetch block with the four hrefs under `assetsBase`, before
-  `data/manifest.js`; `'local'`/absent writes none; hrefs are escaped. Call-site tests that compare `index.html` text
+  `data/manifest.js`; `'local'`/absent writes none; hrefs are the raw strings. Call-site tests that compare `index.html` text
   (`test/writer/local-format.test.ts`, `partition-session`, `upgrade`, `test/cli/ci/*`) pass the format where they
   render the expected text.
 - `test/viewer-data/engine-start.test.ts`: the fake `AsyncDuckDB` sees `instantiate(EMBEDDED_HOST + 'duckdb.wasm')`;
