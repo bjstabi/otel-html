@@ -73,7 +73,7 @@ describe('the pages ask only catalogued requests', () => {
       window.location.hash = hash;
       render(
         <ThemeProvider>
-          <Shell dataSource={ds} history={createHashHistory(window)} />
+          <Shell manifest={ds.manifest} dataSource={ds} history={createHashHistory(window)} />
         </ThemeProvider>,
       );
       await settled(PAGE_CALLS[hash] ?? []);

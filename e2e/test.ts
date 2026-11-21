@@ -34,8 +34,8 @@ const REPORT_LOAD_TIMEOUT_MS = 30_000;
 
 /**
  * Waits until the viewer of `page` has left its loading line (`p[role=status]`: "Loading report", "Starting the query
- * engine", "Loading partition N of M", "Preparing views"): the app shell or the load-failure alert, both a `main`, is
- * in the DOM. Pages that are not a report's index.html are left alone, and a report that never gets there is left to
+ * engine", "Loading partition N of M", "Preparing views"): the page or the load-failure alert, both a `main`, is
+ * in the DOM. The navigation may be in the DOM before that (it shows while the engine starts), so only a `main` counts. Pages that are not a report's index.html are left alone, and a report that never gets there is left to
  * the test's own assertions to describe.
  */
 async function waitForReportLoaded(page: Page): Promise<void> {

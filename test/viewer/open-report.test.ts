@@ -174,7 +174,9 @@ describe('openReport over a host', () => {
     expect(createRestEngine).toHaveBeenCalledWith('http://127.0.0.1:4318/query', hostDeps.logger);
     expect(mustNot).not.toHaveBeenCalled();
     expect(hostParts.createSource).toHaveBeenCalledWith(expect.objectContaining({ engine: rest }));
-    expect(seen).toEqual([{ phase: 'host' }]);
+    expect(seen).toEqual([
+      { phase: 'host', manifest: expect.objectContaining({ partitions: expect.any(Array) }) },
+    ]);
     expect(await ds.querySpans({} as never)).toEqual({ rows: [1] });
     expect(source.querySpans).toHaveBeenCalledOnce();
   });
@@ -350,7 +352,7 @@ describe('openReport', () => {
     const seen: LoadProgress[] = [];
     const ds = await openReport(manifest4(), deps, (p) => seen.push(p));
     expect(seen).toEqual([
-      { phase: 'engine' },
+      { phase: 'engine', manifest: expect.objectContaining({ partitions: expect.any(Array) }) },
       { phase: 'partitions', done: 0, total: 3 },
       { phase: 'partitions', done: 0, total: 3 }, // 1 of 5 files: partition 0 has 2
       { phase: 'partitions', done: 1, total: 3 }, // 2 files

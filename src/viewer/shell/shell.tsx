@@ -2,7 +2,7 @@ import { Tooltip } from '@base-ui/react/tooltip';
 import { Menu, X } from 'lucide-react';
 import { type JSX, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Redirect, Route, Router, Switch } from 'wouter';
-import type { AnyManifest } from '../../format/manifest.js';
+import type { AnyManifest, ManifestV4 } from '../../format/manifest.js';
 import { SELECTION_MODES } from '../../query/pages.js';
 import { DashboardPage } from '../dashboards/dashboard-page.js';
 import { useStacked } from '../dashboards/grid.js';
@@ -11,6 +11,7 @@ import { defaultDashboardRoute } from '../dashboards/registry.js';
 import { RunSessionProvider } from '../dashboards/run-session.js';
 import type { DataSource } from '../data/data-source.js';
 import { manifestRange } from '../data/manifest-range.js';
+import type { LoadProgress } from '../data/open-report.js';
 import { defaultWindowOf, type TimeWindow } from '../data/time-window.js';
 import { LogsExplorer } from '../logs/explorer.js';
 import { MetricsCatalog } from '../metrics/catalog.js';
@@ -26,6 +27,7 @@ import { ServicesPage } from '../traces/services-page.js';
 import { leaveTracePage, TracePage } from '../traces/trace-page.js';
 import { type GoTo, GoToContext } from './go-to.js';
 import { RefreshContext, type RefreshControl } from './in-progress.js';
+import { LoadingLine } from './loading-line.js';
 import { MOVE_EVENT } from './move-event.js';
 import { NotFoundPage } from './pages.js';
 import { ShortcutHelp } from './shortcut-help.js';
@@ -116,12 +118,14 @@ function PatternsRedirect(): null {
 
 /** `refresh` (D55) is null on a served report and wherever the report cannot grow: the in-progress line shows without its controls. */
 export function Shell(props: {
-  dataSource: DataSource;
+  manifest: ManifestV4;
+  /** Null while the engine starts: the navigation shows, and the loading line stands where the page will be. */
+  dataSource: DataSource | null;
+  loading?: LoadProgress | null;
   history: HistoryPort;
   refresh?: RefreshControl | null;
 }): JSX.Element {
-  const { dataSource, history } = props;
-  const manifest = dataSource.manifest;
+  const { dataSource, history, manifest } = props;
   const epoch = BigInt(manifest.epochUnixNano);
   // a format-6 report's URLs carry absolute unix nanoseconds against its anchor (frozen at load, also across a Refresh)
   const absolute = manifest.formatVersion >= 6;
@@ -231,7 +235,11 @@ export function Shell(props: {
                   <CarryNotice carried={carried} onDismiss={() => setCarried(null)} />
                   <RefreshContext.Provider value={props.refresh ?? null}>
                     <RunSessionProvider>
-                      <RoutedPage dataSource={dataSource} />
+                      {dataSource === null ? (
+                        <LoadingLine progress={props.loading ?? null} />
+                      ) : (
+                        <RoutedPage dataSource={dataSource} />
+                      )}
                     </RunSessionProvider>
                   </RefreshContext.Provider>
                 </div>

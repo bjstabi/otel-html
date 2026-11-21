@@ -7,7 +7,9 @@ import { type LoadProgress, type OpenedReport, requireFormat4 } from '../../src/
 import { Root } from '../../src/viewer/root.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 
-vi.mock('../../src/viewer/shell/shell.js', () => ({ Shell: (): string => 'shell' }));
+vi.mock('../../src/viewer/shell/shell.js', () => ({
+  Shell: (props: { dataSource: unknown }): string => (props.dataSource === null ? 'shell-loading' : 'shell'),
+}));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 function dataSource(theme: 'system' | 'light' | 'dark'): OpenedReport {
@@ -66,6 +68,33 @@ describe('loading phases', () => {
     expect(screen.getByRole('status').textContent).toBe('Preparing views');
     await act(async () => finish(dataSource('system')));
     await screen.findByText('shell');
+  });
+});
+
+describe('the shell while the engine starts', () => {
+  const manifest = (theme: 'system' | 'light' | 'dark'): ManifestV4 => dataSource(theme).dataSource.manifest;
+
+  test('the line is bare until a progress carries the manifest, then the shell shows and the theme applies', async () => {
+    let report: (p: LoadProgress) => void = () => undefined;
+    let finish: (d: OpenedReport) => void = () => undefined;
+    const load = (onProgress: (p: LoadProgress) => void): Promise<OpenedReport> => {
+      report = onProgress;
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    };
+    render(<Root load={load} history={createHashHistory(window)} />);
+    act(() => report({ phase: 'partitions', done: 0, total: 1 }));
+    expect(screen.getByRole('status').textContent).toBe('Loading partition 1 of 1');
+    expect(screen.queryByText('shell-loading')).toBeNull();
+    act(() => report({ phase: 'engine', manifest: manifest('dark') }));
+    expect(screen.getByText('shell-loading')).toBeTruthy();
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    // later progress without a manifest keeps the shell
+    act(() => report({ phase: 'views' }));
+    expect(screen.getByText('shell-loading')).toBeTruthy();
+    await act(async () => finish(dataSource('dark')));
+    expect(screen.getByText('shell')).toBeTruthy();
   });
 });
 

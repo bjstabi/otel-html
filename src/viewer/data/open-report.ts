@@ -25,6 +25,8 @@ export interface LoadProgress {
   phase: 'engine' | 'partitions' | 'views' | 'host';
   done?: number;
   total?: number;
+  /** The validated manifest, on the first event only (`engine` or `host`), so the shell can render before the data source exists. */
+  manifest?: ManifestV4;
 }
 
 /** The collaborators `openReport` composes; tests replace them. */
@@ -130,14 +132,14 @@ export async function openReportRefreshable(
     { 'otel_html.report.version': manifest.otelHtmlVersion, ...attrs },
     async () => {
       if (deps.host !== undefined && deps.host !== null) {
-        onProgress({ phase: 'host' });
+        onProgress({ phase: 'host', manifest });
         const queryEngine = parts.createRestEngine(new URL(deps.host, deps.baseUrl).href, deps.logger);
         const dataSource = tracedDataSource(
           parts.createSource({ engine: queryEngine, manifest, logger: deps.logger }),
         );
         return { dataSource, refresh: null };
       }
-      onProgress({ phase: 'engine' });
+      onProgress({ phase: 'engine', manifest });
       const engine: Engine = await traced('viewer.engine.start', attrs, () =>
         parts.startEngine(manifest.engine, deps),
       );
