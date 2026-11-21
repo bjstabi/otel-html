@@ -73,23 +73,27 @@ Anti-goals
 
 - **The worker is always created from a blob**: a shim script followed by the worker script's bytes (today only
   `local` does this). The shim does three things in the worker, before duckdb-wasm's code runs:
-  1. `self.addEventListener('message', …, true)` catches the one hand-off message `{ __oh: { wasm: ArrayBuffer } }`,
-     stops its propagation (`stopImmediatePropagation`, so duckdb-wasm's own handler never sees it) and resolves a
-     promise with the buffer.
+  1. `self.addEventListener('message', …, true)` catches the one hand-off message `{ __oh: { wasm: ArrayBuffer | ReadableStream<Uint8Array> } }`,
+     stops its propagation (`stopImmediatePropagation`, so duckdb-wasm's own handler never sees it) and keeps
+     the wasm (an `ArrayBuffer` for `local`, a `ReadableStream` for `site`).
   2. Overrides `self.fetch` so that a request for `EMBEDDED_HOST + 'duckdb.wasm'` resolves to
-     `new Response(buffer, { headers: { 'content-type': 'application/wasm', 'content-length': … } })` once the
-     hand-off arrived; any other request passes through. duckdb-wasm's `instantiateWasm` fetches this URL and runs
+     `new Response(wasm, { headers: { 'content-type': 'application/wasm' } })` (plus `content-length` for a buffer)
+     once the hand-off arrived, and lets go of the wasm after that first fetch; any other request, a later one of
+     this URL included, passes through. duckdb-wasm's `instantiateWasm` fetches this URL and runs
      `instantiateStreaming` over it, as it does today over a network response.
   3. Keeps today's `XMLHttpRequest.prototype.open` rewrite for the two extensions (`EMBEDDED_HOST + <ext>` → a
      `data:application/wasm;base64,…` URL; anything else there → `data:,`). The extensions are 0.7 and 0.2 MB, so
      the base64 detour costs about 15 ms and is kept for both formats.
 - `db.instantiate(EMBEDDED_HOST + 'duckdb.wasm')` after `worker.postMessage({ __oh: { wasm } }, [wasm])` (the buffer
-  is transferred, not copied).
+  or stream is transferred, not copied; where a browser cannot transfer a stream, the stream is read into a buffer
+  and that is posted).
 - **`local`**: the four base64 wrappers (`wasm.gz`, `worker`, two extensions) are loaded **concurrently** through the
   script loader (today: strictly in sequence), gunzipped where gzipped, and the wasm bytes are kept as bytes (no
   `toBase64`). The `data:` URL and its `null`ing go.
 - **`site`**: the worker script, the wasm and the two extensions are fetched **concurrently** on the main thread with
-  `fetch(url)` → `arrayBuffer()`; a non-OK response or a network error becomes the D13 `invalid-report` error naming
+  `fetch(url)` → `arrayBuffer()`, except the wasm: its `Response.body` stream is transferred to the worker unread
+  (no ~55–275 ms main-thread copy of 34 MB delaying first paint; the worker's `instantiateStreaming` compiles while
+  the download is still arriving; a response without a body falls back to `arrayBuffer()`); a non-OK response or a network error becomes the D13 `invalid-report` error naming
   the file. Where `index.html` already started the fetch (3.2), the viewer awaits that promise instead; a prefetch
   that rejected is retried once by the viewer's own fetch, so the error path and the message stay the viewer's.
   `db.open({ filesystem: { forceFullHTTPReads: false, allowFullHTTPReads: true } })` stays for `site`. Extensions are
@@ -101,10 +105,11 @@ Anti-goals
 ### 3.2 Early prefetch from `index.html` (`site` only)
 
 `renderIndexHtml(entry, title, opts)` gains `opts.format?: 'local' | 'site'`. With `'site'` it writes, right after
-the `__OH__` bootstrap line and before `data/manifest.js`, one inline script:
+the `__OH__` bootstrap line and before `data/manifest.js`, one inline script (the promises hold the **Response**, so the viewer can transfer the wasm's body stream
+and read the others):
 
 ```html
-<script>__OH__.pre={};for(const u of ["assets/duckdb.1.32.0.worker.js","assets/duckdb.1.32.0.wasm","assets/parquet.1.32.0.duckdb_extension.wasm","assets/json.1.32.0.duckdb_extension.wasm"])__OH__.pre[u]=fetch(u).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.arrayBuffer()});__OH__.pre[u]?.catch(()=>{});</script>
+<script>__OH__.pre={};for(const u of ["assets/duckdb.1.32.0.worker.js","assets/duckdb.1.32.0.wasm","assets/parquet.1.32.0.duckdb_extension.wasm","assets/json.1.32.0.duckdb_extension.wasm"])__OH__.pre[u]=fetch(u).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r});__OH__.pre[u]?.catch(()=>{});</script>
 ```
 
 (the exact text is the implementer's, with the hrefs built by `assetUrl(…)` under `assetsBase`, escaped as the other
@@ -113,8 +118,8 @@ stays rejected for the viewer to see). The hrefs are the page-relative strings `
 `assetsBase`; the viewer looks them up by the same strings (`engine.assetsBase + name`), which is what
 `engineUrls`/`extensionUrls` resolve today.
 
-`installRegistry` carries `pre` over from the bootstrap object (`Registry.prefetched(href): Promise<ArrayBuffer> |
-undefined`); `main.tsx` passes it to `openReportRefreshable` as a dep. With `'local'` or no `format` nothing is written
+`installRegistry` carries `pre` over from the bootstrap object (`Registry.prefetched(href): Promise<Response> |
+undefined`, handed out once); `main.tsx` passes it to `openReportRefreshable` as a dep. With `'local'` or no `format` nothing is written
 (a `file://` page cannot fetch). Call sites pass the manifest's `engine.format`: `src/writer/partition-session.ts`,
 `src/writer/upgrade.ts`, `src/cli/ci/run-report.ts`, `src/cli/ci/main-report.ts`. `src/host/server.ts` passes
 nothing (no engine in a hosted page). `index.html` is not part of the report format (the manifest and partitions
