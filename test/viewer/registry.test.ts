@@ -14,8 +14,8 @@ function withBootstrap(): Window {
 
 describe('installRegistry', () => {
   test('prefetched promises of the bootstrap are carried over', () => {
-    const p = Promise.resolve(new Response('x'));
-    const pre: Record<string, Promise<Response>> = { 'assets/x.wasm': p };
+    const p = Promise.resolve(new ArrayBuffer(1));
+    const pre: Record<string, Promise<ArrayBuffer>> = { 'assets/x.wasm': p };
     const win = { __OH__: { q: [], push() {}, pre } } as unknown as Window;
     const registry = installRegistry(win);
     expect(registry.prefetched('assets/x.wasm')).toBe(p);

@@ -6,7 +6,7 @@ interface OhGlobal {
   q: [string, unknown][];
   push(key: string, payload: unknown): void;
   /** `site` reports: the engine downloads index.html started, keyed by their page-relative href. */
-  pre?: Record<string, Promise<Response>>;
+  pre?: Record<string, Promise<ArrayBuffer>>;
 }
 
 declare global {
@@ -30,7 +30,7 @@ export interface Registry {
    * The download index.html started for the engine file at this page-relative href; `undefined` when there is none.
    * Handed out once: the entry is dropped, so the Response is not retained.
    */
-  prefetched(href: string): Promise<Response> | undefined;
+  prefetched(href: string): Promise<ArrayBuffer> | undefined;
 }
 
 /**
