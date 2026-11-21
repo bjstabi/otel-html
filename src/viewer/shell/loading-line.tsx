@@ -2,7 +2,7 @@ import type { JSX } from 'react';
 import type { LoadProgress } from '../data/open-report.js';
 
 /** The loading line for each phase of `LoadProgress`. */
-export function progressText(p: LoadProgress | null): string {
+function progressText(p: LoadProgress | null): string {
   if (p === null) return 'Loading report';
   switch (p.phase) {
     case 'engine':
