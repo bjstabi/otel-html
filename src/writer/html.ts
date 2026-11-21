@@ -18,6 +18,8 @@ function escapeHtml(s: string): string {
 
 /** The body of the inline script that starts the engine downloads (`__OH__.pre[href]`) through cache `cacheName`. */
 export function enginePrefetchScript(hrefs: readonly string[], cacheName: string): string {
+  // The try/catch below exists because a sandboxed iframe's `caches` getter throws in Chromium (SecurityError); Node's
+  // vm swallows that error in `typeof`, so no unit test can exercise it.
   return `(()=>{const n=${JSON.stringify(cacheName)},p=__OH__.pre={};let s=[];
 let c;try{c=typeof caches==="undefined"?Promise.resolve(null):caches.open(n).catch(()=>null)}catch{c=Promise.resolve(null)}
 const get=u=>c.then(k=>{const miss=()=>fetch(u).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);if(k)s.push([u,r.clone()]);return r.arrayBuffer()});return(k?k.match(u,{ignoreVary:true}).catch(()=>undefined):Promise.resolve(undefined)).then(r=>r?r.arrayBuffer().catch(miss):miss())});
