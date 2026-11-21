@@ -1,6 +1,7 @@
 import { type ManifestV4, parseAnyManifest } from '../../format/manifest.js';
 import { MANIFEST_KEY, MANIFEST_PATH } from '../../format/paths.js';
 import { OtelHtmlError } from '../../model/errors.js';
+import { viewBindingFiles } from '../../query/sql/views.js';
 import type { DataSource } from './data-source.js';
 import { createDuckDbDataSource } from './duckdb-source.js';
 import { createViews, dropFiles, manifestFiles, registerFiles, restoreViews } from './engine/files.js';
@@ -17,7 +18,7 @@ export interface RefreshDeps {
   baseUrl: string;
   logger: Logger;
   /** A site report's small-file loader: told which paths the refresh dropped. */
-  smallFiles?: Pick<SmallFiles, 'forget'>;
+  smallFiles?: Pick<SmallFiles, 'forget' | 'prepare'>;
   /** Told the manifest whose sizes the small-file loader must judge from now on; called before any path is forgotten. */
   adoptSizes?: (manifest: ManifestV4) => void;
 }
@@ -73,6 +74,7 @@ export async function refreshReport(
   try {
     if (rewritten.length > 0) await held(engine, reregister);
     await registerFiles(engine, added, deps);
+    await deps.smallFiles?.prepare(viewBindingFiles(manifest, 'base', (p) => p));
     await createViews(engine, manifest);
   } catch (error) {
     deps.adoptSizes?.(previous);

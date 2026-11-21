@@ -123,7 +123,11 @@ export async function pageOn(
     window.location.hash = hash;
     render(
       <ThemeProvider>
-        <Shell dataSource={recording.ds} history={createHashHistory(window)} />
+        <Shell
+          manifest={recording.ds.manifest}
+          dataSource={recording.ds}
+          history={createHashHistory(window)}
+        />
       </ThemeProvider>,
     );
     await recording.settled(required);

@@ -108,6 +108,33 @@ export function viewStatements(
 }
 
 /**
+ * The first file of every `read_parquet([...])` list the statements of `set` contain, in statement order (`traces`: the
+ * first file that stores the share, then the first that does not; a table with no file contributes nothing). Binding a
+ * view reads exactly these files' footers.
+ */
+export function viewBindingFiles(
+  manifest: ManifestV4,
+  set: 'all' | 'base' | 'rollups',
+  resolve: (path: string) => string,
+): string[] {
+  const out: string[] = [];
+  for (const table of TABLES) {
+    if (table === 'widget_traces' || (set !== 'all' && isRollup(table) !== (set === 'rollups'))) continue;
+    if (table === 'traces') {
+      const stored = manifest.partitions.find((p) => p.files.traces?.serviceShare === true)?.files.traces;
+      const plain = manifest.partitions.find(
+        (p) => p.files.traces !== undefined && p.files.traces.serviceShare !== true,
+      )?.files.traces;
+      for (const file of [stored, plain]) if (file !== undefined) out.push(resolve(file.path));
+    } else {
+      const [first] = tableFiles(manifest, table, resolve);
+      if (first !== undefined) out.push(first);
+    }
+  }
+  return out;
+}
+
+/**
  * The views of the rollup tables, created by the data source on the first statement that reads a rollup file (binding
  * a view reads each file's footer, which a page that never routes to the rollups should not pay). `CREATE VIEW IF NOT
  * EXISTS`: a view that exists (a host's, or one made for this manifest earlier) is kept; with `replace` (the source made by a

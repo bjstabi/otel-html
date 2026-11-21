@@ -174,7 +174,9 @@ describe('openReport over a host', () => {
     expect(createRestEngine).toHaveBeenCalledWith('http://127.0.0.1:4318/query', hostDeps.logger);
     expect(mustNot).not.toHaveBeenCalled();
     expect(hostParts.createSource).toHaveBeenCalledWith(expect.objectContaining({ engine: rest }));
-    expect(seen).toEqual([{ phase: 'host' }]);
+    expect(seen).toEqual([
+      { phase: 'host', manifest: expect.objectContaining({ partitions: expect.any(Array) }) },
+    ]);
     expect(await ds.querySpans({} as never)).toEqual({ rows: [1] });
     expect(source.querySpans).toHaveBeenCalledOnce();
   });
@@ -350,7 +352,7 @@ describe('openReport', () => {
     const seen: LoadProgress[] = [];
     const ds = await openReport(manifest4(), deps, (p) => seen.push(p));
     expect(seen).toEqual([
-      { phase: 'engine' },
+      { phase: 'engine', manifest: expect.objectContaining({ partitions: expect.any(Array) }) },
       { phase: 'partitions', done: 0, total: 3 },
       { phase: 'partitions', done: 0, total: 3 }, // 1 of 5 files: partition 0 has 2
       { phase: 'partitions', done: 1, total: 3 }, // 2 files
@@ -484,5 +486,76 @@ describe('the small-file loader of openReportRefreshable', () => {
     const { mosaicQueryEngine } = await import('../../src/viewer/data/mosaic.js');
     const engine = mosaicQueryEngine({} as never, { registerText() {}, close() {} });
     await expect(engine.prepare(['x'])).resolves.toBeUndefined();
+  });
+});
+
+describe('openReportRefreshable binds the views after the binding files are fetched whole', () => {
+  const mixed = (format: 'local' | 'site'): ManifestV4 => {
+    const m = manifest4();
+    return {
+      ...m,
+      partitions: [
+        { n: 0, source: 'job:0', files: { spans: file(0, 'spans', 600_000), logs: file(0, 'logs', 100) } },
+        { n: 1, source: 'job:1', files: { spans: file(1, 'spans', 100) } },
+      ],
+      engine: { ...m.engine, format },
+    } as ManifestV4;
+  };
+
+  const run = async (format: 'local' | 'site') => {
+    const events: string[] = [];
+    const swapped: string[] = [];
+    vi.stubGlobal('fetch', async (url: string) => {
+      events.push(`fetch ${new URL(url).pathname}`);
+      return { ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(format === 'site' ? 100 : 0) };
+    });
+    const engine = {
+      format,
+      db: {
+        dropFile: async () => undefined,
+        registerFileBuffer: async (name: string) => void swapped.push(name),
+        registerFileURL: async () => undefined,
+      },
+      connection: { query: async () => undefined },
+      close: async () => undefined,
+    } as unknown as Engine;
+    let received: unknown = 'unset';
+    const { deps } = setup({
+      startEngine: vi.fn(() => Promise.resolve(engine)),
+      registerPartitions: vi.fn(async (_e, _m, _d, _p, prepare) => {
+        received = prepare;
+        events.push('registerFiles');
+        await prepare?.();
+        events.push('createViews');
+      }),
+    });
+    const manifest = mixed(format);
+    try {
+      await openReportRefreshable(
+        manifest,
+        { ...deps, baseUrl: 'https://s.example/r/' } as OpenDeps,
+        () => undefined,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    return { events, received, swapped };
+  };
+
+  test('a site report fetches the small binding files between registerFiles and createViews, not the big one', async () => {
+    const { events, received } = await run('site');
+    expect(typeof received).toBe('function');
+    // the first spans file is big and stays a range read; partition 1's spans is not a binding file
+    expect(events).toEqual([
+      'registerFiles',
+      `fetch ${new URL(partitionFilePath(0, 'logs'), 'https://s.example/r/').pathname}`,
+      'createViews',
+    ]);
+  });
+
+  test('a local report passes no prepare and fetches nothing', async () => {
+    const { events, received } = await run('local');
+    expect(received).toBeUndefined();
+    expect(events).toEqual(['registerFiles', 'createViews']);
   });
 });

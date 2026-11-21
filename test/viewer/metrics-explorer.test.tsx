@@ -47,7 +47,7 @@ function open(m: MetricPageState): void {
   window.location.hash = `#/metrics?${serializeUrlState({ m })}`;
   render(
     <ThemeProvider>
-      <Shell dataSource={source()} history={createHashHistory(window)} />
+      <Shell manifest={source().manifest} dataSource={source()} history={createHashHistory(window)} />
     </ThemeProvider>,
   );
 }

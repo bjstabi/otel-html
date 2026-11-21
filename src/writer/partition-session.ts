@@ -1150,7 +1150,7 @@ class PartitionSession implements WriterSession {
     }
     await fs.writeTextAtomic(
       at(this.#out, 'index.html'),
-      renderIndexHtml(viewerAssets.entry(), this.#title, { assetsBase }),
+      renderIndexHtml(viewerAssets.entry(), this.#title, { assetsBase, format }),
     );
     await fs.writeTextAtomic(at(this.#out, '.nojekyll'), '');
     this.#shellWritten = true;

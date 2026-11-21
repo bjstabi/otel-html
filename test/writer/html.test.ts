@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { engineAssetNames } from '../../src/format/engine.js';
 import { renderIndexHtml } from '../../src/writer/html.js';
 import { openSession } from '../../src/writer/session.js';
 import { createTestWriter, otlp, testConfig } from '../../test-support/writer-deps.js';
@@ -7,6 +8,24 @@ import { spansRequest } from './helpers.js';
 const entry = { script: 'assets/viewer.abc123.js', style: 'assets/viewer.abc123.css' };
 
 describe('renderIndexHtml', () => {
+  test("format 'site' starts the four engine downloads before the manifest script", () => {
+    const html = renderIndexHtml(entry, 't', { format: 'site' });
+    const block = html.match(/<script>__OH__\.pre=[\s\S]*?<\/script>/)?.[0] ?? '';
+    for (const name of engineAssetNames('site')) expect(block).toContain(`"assets/${name}"`);
+    expect(html.indexOf('__OH__.pre')).toBeGreaterThan(html.indexOf('window.__OH__={q:[]'));
+    expect(html.indexOf('__OH__.pre')).toBeLessThan(html.indexOf('src="data/manifest.js"'));
+    expect(block).toContain('arrayBuffer()');
+    expect(block).toContain('.catch(');
+  });
+  test('a shared base prefixes the engine hrefs', () => {
+    expect(renderIndexHtml(entry, 't', { assetsBase: '../../assets/', format: 'site' })).toContain(
+      '"../../assets/duckdb.1.32.0.wasm"',
+    );
+  });
+  test("format 'local' and no format write no prefetch", () => {
+    expect(renderIndexHtml(entry, 't', { format: 'local' })).toBe(renderIndexHtml(entry, 't'));
+    expect(renderIndexHtml(entry, 't')).not.toContain('__OH__.pre');
+  });
   test('host names the query endpoint in a meta tag before the title; without it there is none', () => {
     const html = renderIndexHtml(entry, 't', { host: 'query' });
     expect(html.match(/<meta name="otel-html-host" content="query">/g)).toHaveLength(1);

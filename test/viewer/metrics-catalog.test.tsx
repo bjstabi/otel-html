@@ -19,7 +19,7 @@ afterEach(cleanup);
 function open(): void {
   render(
     <ThemeProvider>
-      <Shell dataSource={source()} history={createHashHistory(window)} />
+      <Shell manifest={source().manifest} dataSource={source()} history={createHashHistory(window)} />
     </ThemeProvider>,
   );
 }
@@ -74,6 +74,7 @@ describe('a summary row', () => {
     render(
       <ThemeProvider>
         <Shell
+          manifest={ds.manifest}
           dataSource={{ ...ds, metricShowOptions: (id) => (id === 0 ? ds.metricShowOptions(id) : slow) }}
           history={createHashHistory(window)}
         />

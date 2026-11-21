@@ -1,4 +1,5 @@
 import { type ManifestV4, parseAnyManifest } from '../../format/manifest.js';
+import { viewBindingFiles } from '../../query/sql/views.js';
 import { traced } from '../telemetry.js';
 import type { DataSource } from './data-source.js';
 import { createDuckDbDataSource } from './duckdb-source.js';
@@ -24,6 +25,8 @@ export interface LoadProgress {
   phase: 'engine' | 'partitions' | 'views' | 'host';
   done?: number;
   total?: number;
+  /** The validated manifest, on the first event only (`engine` or `host`), so the shell can render before the data source exists. */
+  manifest?: ManifestV4;
 }
 
 /** The collaborators `openReport` composes; tests replace them. */
@@ -129,28 +132,18 @@ export async function openReportRefreshable(
     { 'otel_html.report.version': manifest.otelHtmlVersion, ...attrs },
     async () => {
       if (deps.host !== undefined && deps.host !== null) {
-        onProgress({ phase: 'host' });
+        onProgress({ phase: 'host', manifest });
         const queryEngine = parts.createRestEngine(new URL(deps.host, deps.baseUrl).href, deps.logger);
         const dataSource = tracedDataSource(
           parts.createSource({ engine: queryEngine, manifest, logger: deps.logger }),
         );
         return { dataSource, refresh: null };
       }
-      onProgress({ phase: 'engine' });
+      onProgress({ phase: 'engine', manifest });
       const engine: Engine = await traced('viewer.engine.start', attrs, () =>
         parts.startEngine(manifest.engine, deps),
       );
       try {
-        onProgress({ phase: 'partitions', done: 0, total });
-        await traced('viewer.partitions.register', attrs, () =>
-          parts.registerPartitions(engine, manifest, deps, (f) =>
-            onProgress(
-              f.done < f.total
-                ? { phase: 'partitions', done: partitionsDone(fileCounts, f.done), total }
-                : { phase: 'views' },
-            ),
-          ),
-        );
         let current = manifest;
         const sizes = new Map<string, number>();
         const fillSizes = (m: ManifestV4): void => {
@@ -175,6 +168,21 @@ export async function openReportRefreshable(
                   swapToBuffer(engine, path, bytes, new URL(path, deps.baseUrl).href, isCurrent),
               })
             : undefined;
+        onProgress({ phase: 'partitions', done: 0, total });
+        await traced('viewer.partitions.register', attrs, () =>
+          parts.registerPartitions(
+            engine,
+            manifest,
+            deps,
+            (f) =>
+              onProgress(
+                f.done < f.total
+                  ? { phase: 'partitions', done: partitionsDone(fileCounts, f.done), total }
+                  : { phase: 'views' },
+              ),
+            small ? () => small.prepare(viewBindingFiles(manifest, 'base', (p) => p)) : undefined,
+          ),
+        );
         const queryEngine = parts.createQueryEngine(
           engine,
           deps.logger,

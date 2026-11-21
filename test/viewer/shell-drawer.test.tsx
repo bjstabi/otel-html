@@ -17,7 +17,11 @@ function renderShell(phone: boolean): void {
   window.location.hash = '#/traces';
   render(
     <ThemeProvider>
-      <Shell dataSource={dataSourceOf(baseManifest)} history={createHashHistory(window)} />
+      <Shell
+        manifest={baseManifest}
+        dataSource={dataSourceOf(baseManifest)}
+        history={createHashHistory(window)}
+      />
     </ThemeProvider>,
   );
 }

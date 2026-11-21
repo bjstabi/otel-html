@@ -236,9 +236,8 @@ export async function migrateAssetsBases(
       const flat = `${'../'.repeat(rel.split('/').filter((x) => x !== '').length)}${SHARED}/`;
       const pagePath = join(folder, 'index.html');
       if (await deps.fs.exists(pagePath)) {
-        const page = (await deps.fs.readText(pagePath)).replace(LINK_RE, (all, value: string) =>
-          value.startsWith(oldBase) ? all.replace(oldBase, flat) : all,
-        );
+        // every quoted string that starts with the old base: the src=/href= values and the inline prefetch's hrefs
+        const page = (await deps.fs.readText(pagePath)).replaceAll(`"${oldBase}`, `"${flat}`);
         await deps.fs.writeTextAtomic(pagePath, page);
       }
       await deps.fs.writeTextAtomic(manifestPath, manifestText.replace(needle, `"assetsBase":"${flat}"`));

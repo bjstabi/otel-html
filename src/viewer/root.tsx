@@ -13,7 +13,11 @@ export function Root(props: {
   const { load } = props;
   const loadAndApplyTheme = useCallback(
     async (onProgress: (p: LoadProgress) => void): Promise<OpenedReport> => {
-      const opened = await load(onProgress);
+      // the theme applies from the first progress that carries the manifest, before the engine has started
+      const opened = await load((p) => {
+        if (p.manifest !== undefined) setTheme(p.manifest.config.viewer.theme);
+        onProgress(p);
+      });
       setTheme(opened.dataSource.manifest.config.viewer.theme);
       return opened;
     },

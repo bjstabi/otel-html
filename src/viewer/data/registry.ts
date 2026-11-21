@@ -5,6 +5,8 @@ interface OhGlobal {
   /** Pushes made before the registry was installed, drained by `installRegistry`. */
   q: [string, unknown][];
   push(key: string, payload: unknown): void;
+  /** `site` reports: the engine downloads index.html started, keyed by their page-relative href. */
+  pre?: Record<string, Promise<ArrayBuffer>>;
 }
 
 declare global {
@@ -24,6 +26,11 @@ export interface Registry {
    * error); waiting would hang forever, so a missing payload throws naming `file`.
    */
   takeStatic(key: string, file: string): unknown;
+  /**
+   * The download index.html started for the engine file at this page-relative href; `undefined` when there is none.
+   * Handed out once: the entry is dropped, so the Response is not retained.
+   */
+  prefetched(href: string): Promise<ArrayBuffer> | undefined;
 }
 
 /**
@@ -55,7 +62,15 @@ export function installRegistry(win: Window): Registry {
   for (const [key, payload] of boot.q) push(key, payload);
   win.__OH__ = { q: [], push };
 
+  const pre = boot.pre;
+
   return {
+    prefetched(href) {
+      if (pre === undefined || !Object.hasOwn(pre, href)) return undefined;
+      const early = pre[href];
+      delete pre[href];
+      return early;
+    },
     takeStatic(key, file) {
       if (!values.has(key)) {
         throw new OtelHtmlError('invalid-report', {

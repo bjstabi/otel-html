@@ -1,12 +1,14 @@
 import { type JSX, useCallback, useEffect, useRef, useState } from 'react';
+import type { ManifestV4 } from '../format/manifest.js';
 import type { DataSource } from './data/data-source.js';
 import type { LoadProgress, OpenedReport } from './data/open-report.js';
 import { POLL_MS, type RefreshControl, readPoll, writePoll } from './shell/in-progress.js';
+import { LoadingLine } from './shell/loading-line.js';
 import { Shell } from './shell/shell.js';
 import type { HistoryPort } from './state/selection.js';
 
 type Load =
-  | { status: 'loading'; progress: LoadProgress | null }
+  | { status: 'loading'; progress: LoadProgress | null; manifest: ManifestV4 | null }
   | { status: 'ready'; dataSource: DataSource; refresh: OpenedReport['refresh'] }
   | { status: 'failed'; message: string };
 
@@ -29,37 +31,25 @@ function LoadFailure({ message }: { message: string }): JSX.Element {
   );
 }
 
-/** The loading line for each phase of `LoadProgress`. */
-function progressText(p: LoadProgress | null): string {
-  if (p === null) return 'Loading report';
-  switch (p.phase) {
-    case 'engine':
-      return 'Starting the query engine';
-    case 'partitions':
-      return p.total === undefined || p.done === undefined
-        ? 'Loading partitions'
-        : `Loading partition ${Math.min(p.done + 1, p.total)} of ${p.total}`;
-    case 'views':
-      return 'Preparing views';
-    case 'host':
-      return 'Connecting to the host';
-  }
-}
-
 /** `load` is the composition root's registry -> manifest -> data source chain; failures are shown, never swallowed. */
 export function App(props: {
   load: (onProgress: (p: LoadProgress) => void) => Promise<OpenedReport>;
   history: HistoryPort;
 }): JSX.Element {
   const { load, history } = props;
-  const [state, setState] = useState<Load>({ status: 'loading', progress: null });
+  const [state, setState] = useState<Load>({ status: 'loading', progress: null, manifest: null });
 
   useEffect(() => {
     let live = true;
     // Progress from registrations still in flight can arrive after the load failed; it must not undo the error.
     let settled = false;
     const onProgress = (progress: LoadProgress): void => {
-      if (live && !settled) setState({ status: 'loading', progress });
+      if (live && !settled)
+        setState((s) => ({
+          status: 'loading',
+          progress,
+          manifest: progress.manifest ?? (s.status === 'loading' ? s.manifest : null),
+        }));
     };
     load(onProgress).then(
       (opened) => {
@@ -134,15 +124,28 @@ export function App(props: {
 
   switch (state.status) {
     case 'loading':
-      return (
-        <p role="status" className="p-8 text-sm text-muted">
-          {progressText(state.progress)}
-        </p>
+      return state.manifest === null ? (
+        <LoadingLine progress={state.progress} />
+      ) : (
+        <Shell
+          manifest={state.manifest}
+          dataSource={null}
+          loading={state.progress}
+          history={history}
+          refresh={null}
+        />
       );
     case 'failed':
       return <LoadFailure message={state.message} />;
     case 'ready':
-      return <Shell dataSource={state.dataSource} history={history} refresh={control} />;
+      return (
+        <Shell
+          manifest={state.dataSource.manifest}
+          dataSource={state.dataSource}
+          history={history}
+          refresh={control}
+        />
+      );
     default: {
       const never: never = state;
       throw new Error(`unhandled load state ${JSON.stringify(never)}`);

@@ -1,3 +1,4 @@
+import { engineAssetNames } from '../format/engine.js';
 import { ASSETS_BASE_RE, assetFileName, DEFAULT_ASSETS_BASE } from '../format/paths.js';
 import { OtelHtmlError } from '../model/errors.js';
 
@@ -32,12 +33,14 @@ function assetUrl(p: string, what: string, base: string): string {
  * The report shell: a one-line `__OH__` queue so data files can register before the viewer loads, then
  * classic scripts only (no modules, so it works from file://). Title and paths are escaped. The viewer files
  * resolve under `assetsBase` (the report's own `assets/` by default); `data/manifest.js` is always the report's. With `host` (the query endpoint, relative to the page) a
- * meta tag tells the viewer it is served by `otel-html host`.
+ * meta tag tells the viewer it is served by `otel-html host`. With `format: 'site'` an inline script after the
+ * bootstrap starts the engine downloads at once, as promises on `__OH__.pre` keyed by the page-relative href
+ * (`assetsBase` + file name), so the viewer awaits them instead of starting them after it has parsed.
  */
 export function renderIndexHtml(
   entry: ViewerEntry,
   title: string,
-  opts: { assetsBase?: string; host?: string } = {},
+  opts: { assetsBase?: string; host?: string; format?: 'local' | 'site' } = {},
 ): string {
   const base = opts.assetsBase ?? DEFAULT_ASSETS_BASE;
   if (!ASSETS_BASE_RE.test(base)) {
@@ -51,6 +54,18 @@ export function renderIndexHtml(
     entry.style === null ? '' : `<link rel="stylesheet" href="${assetUrl(entry.style, 'style', base)}">\n`;
   const host =
     opts.host === undefined ? '' : `<meta name="otel-html-host" content="${escapeHtml(opts.host)}">\n`;
+  const pre =
+    opts.format === 'site'
+      ? `<script>__OH__.pre={${engineAssetNames('site')
+          // ASSETS_BASE_RE admits only [A-Za-z0-9._/-], and the engine file names are plain: no `<`, `&` or quote can
+          // occur, so the raw string is safe inside the inline script and the key stays exactly `base + name`.
+          .map((n) => JSON.stringify(base + n))
+          .map(
+            (h) =>
+              `${h}:fetch(${h}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.arrayBuffer()})`,
+          )
+          .join(',')}};for(const k in __OH__.pre)__OH__.pre[k].catch(()=>{})</script>\n`
+      : '';
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -61,7 +76,7 @@ ${style}</head>
 <body>
 <div id="root"></div>
 <script>window.__OH__={q:[],push(k,p){this.q.push([k,p])}}</script>
-<script src="data/manifest.js"></script>
+${pre}<script src="data/manifest.js"></script>
 <script src="${assetUrl(entry.script, 'script', base)}"></script>
 </body>
 </html>

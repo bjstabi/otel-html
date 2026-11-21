@@ -6,6 +6,7 @@ import {
   partitionOfFilename,
   rollupViewStatements,
   tableFiles,
+  viewBindingFiles,
   viewStatements,
 } from '../../../src/query/sql/views.js';
 import { openTestDb } from '../../../test-support/duckdb-node.js';
@@ -262,5 +263,47 @@ describe('format-6 traces view', () => {
       'filename',
     ]);
     db.close();
+  });
+});
+
+describe('viewBindingFiles', () => {
+  const entry = (n: number, table: string, serviceShare?: true) => ({
+    path: `data/partitions/${String(n).padStart(6, '0')}/${table}.parquet`,
+    bytes: 1,
+    rows: 1,
+    timeMin: null,
+    timeMax: null,
+    values: {},
+    ...(serviceShare ? { serviceShare } : {}),
+  });
+  const manifest = {
+    ...emptyManifest(),
+    partitions: [
+      { n: 0, source: 'a', files: { spans: entry(0, 'spans'), traces: entry(0, 'traces') } },
+      { n: 1, source: 'b', files: { spans: entry(1, 'spans'), traces: entry(1, 'traces', true) } },
+      { n: 2, source: 'c', files: { spans: entry(2, 'spans'), traces: entry(2, 'traces', true) } },
+    ],
+  } as unknown as ReturnType<typeof emptyManifest>;
+
+  test('names the first file of every read_parquet group of the base views', () => {
+    const files = viewBindingFiles(manifest, 'base', (p) => p);
+    const lists = viewStatements(manifest, (p) => p, 'base').flatMap((s) =>
+      [...s.matchAll(/read_parquet\(\[([^\]]*)\]/g)].map((m) =>
+        (m[1] ?? '').split(', ')[0]?.replaceAll("'", ''),
+      ),
+    );
+    expect(files).toEqual(lists);
+    expect(files).toHaveLength(new Set(files).size);
+    expect(files).toEqual([
+      'data/partitions/000000/spans.parquet',
+      'data/partitions/000001/traces.parquet',
+      'data/partitions/000000/traces.parquet',
+    ]);
+  });
+  test('an empty manifest has none, and resolve maps every path', () => {
+    expect(viewBindingFiles(emptyManifest(), 'all', (p) => p)).toEqual([]);
+    expect(viewBindingFiles(manifest, 'base', (p) => `x/${p}`)[0]).toBe(
+      'x/data/partitions/000000/spans.parquet',
+    );
   });
 });

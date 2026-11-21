@@ -4,6 +4,7 @@ import type { ManifestV4 } from '../../src/format/manifest.js';
 import { ROLLUP_GRAIN_NS } from '../../src/format/manifest.js';
 import { partitionFilePath, partitionWrapperPath } from '../../src/format/paths.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
+import { viewBindingFiles } from '../../src/query/sql/views.js';
 import { toBase64 } from '../../src/viewer/data/engine/bytes.js';
 import type { Engine } from '../../src/viewer/data/engine/start.js';
 import { type QueryEngine, sequentialBatch } from '../../src/viewer/data/query-engine.js';
@@ -376,7 +377,7 @@ describe('refreshReport and the small-file loader', () => {
           loader: loaderOf(next),
           baseUrl: BASE,
           logger,
-          smallFiles: { forget: (paths) => void forgotten.push(...paths) },
+          smallFiles: { forget: (paths) => void forgotten.push(...paths), prepare: async () => undefined },
         },
         () => 1,
       ),
@@ -453,7 +454,7 @@ describe('refreshReport and the small-file loader', () => {
           loader: loaderOf(next),
           baseUrl: BASE,
           logger,
-          smallFiles: { forget: () => void order.push('forget') },
+          smallFiles: { forget: () => void order.push('forget'), prepare: async () => undefined },
           adoptSizes: (m) => {
             adopted.push(m);
             order.push('adopt');
@@ -558,5 +559,37 @@ describe('refreshReport and the small-file loader', () => {
     const drops = events.filter((e) => e.startsWith('dropFile'));
     expect(drops.length).toBeGreaterThan(0);
     expect(drops.every((e) => e.endsWith(' held'))).toBe(true);
+  });
+});
+
+describe('refreshReport prepares the binding files', () => {
+  test('the new manifest first files are prepared before the views are created', async () => {
+    const f = fakes('site');
+    const events: string[] = [];
+    const prepared: (readonly string[])[] = [];
+    const next = { ...manifestOf([0, 1]), updatedAt: '2026-11-06T00:00:09.000Z' };
+    await refreshReport(
+      f.engine,
+      { ...f.queryEngine },
+      manifestOf([0]),
+      {
+        loader: loaderOf(next),
+        baseUrl: BASE,
+        logger,
+        smallFiles: {
+          forget: () => undefined,
+          prepare: async (paths) => {
+            prepared.push(paths);
+            events.push(
+              `prepare:${f.calls.statements.filter((s) => s.startsWith('CREATE OR REPLACE VIEW')).length}`,
+            );
+          },
+        },
+      },
+      () => 1,
+    );
+    expect(events).toEqual(['prepare:0']);
+    expect(prepared).toEqual([viewBindingFiles(next, 'base', (p) => p)]);
+    expect(prepared[0]?.length).toBeGreaterThan(0);
   });
 });

@@ -24,7 +24,7 @@ function renderShell(hash: string, ds: DataSource = dataSource): void {
   window.location.hash = hash;
   render(
     <ThemeProvider>
-      <Shell dataSource={ds} history={createHashHistory(window)} />
+      <Shell manifest={ds.manifest} dataSource={ds} history={createHashHistory(window)} />
     </ThemeProvider>,
   );
 }
@@ -35,6 +35,30 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+});
+
+describe('while the engine starts', () => {
+  test('the navigation shows with the loading line and no main, and the page replaces the line', async () => {
+    window.location.hash = '#/traces';
+    const history = createHashHistory(window);
+    const ui = (ds: DataSource | null) => (
+      <ThemeProvider>
+        <Shell
+          manifest={dataSource.manifest}
+          dataSource={ds}
+          loading={{ phase: 'engine' }}
+          history={history}
+        />
+      </ThemeProvider>
+    );
+    const view = render(ui(null));
+    expect(screen.getByRole('navigation')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toBe('Starting the query engine');
+    expect(screen.queryByRole('main')).toBeNull();
+    view.rerender(ui(dataSource));
+    await screen.findByRole('main');
+    expect(screen.queryByText('Starting the query engine')).toBeNull();
+  });
 });
 
 describe('sidebar', () => {
@@ -385,7 +409,7 @@ describe('presets and the default window', () => {
       const history = createHashHistory(window);
       const ui = (ds: DataSource) => (
         <ThemeProvider>
-          <Shell dataSource={ds} history={history} />
+          <Shell manifest={ds.manifest} dataSource={ds} history={history} />
         </ThemeProvider>
       );
       const view = render(ui(withDefault('1h', 10)));

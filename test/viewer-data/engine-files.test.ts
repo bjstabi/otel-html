@@ -209,3 +209,21 @@ test('manifestFiles lists the rollup files of a partition beside its other files
     ['log_rollups', 'data/partitions/000003/log_rollups.parquet'],
   ]);
 });
+
+test('prepare resolves after the files are registered and before the first view is created', async () => {
+  const engine = fakeEngine('site');
+  const order: string[] = [];
+  await registerPartitions(
+    engine,
+    twoPartitionManifest,
+    { loader: scriptedLoader({}), baseUrl: 'https://h/r/index.html' },
+    undefined,
+    async () => {
+      order.push(`urls:${engine.calls.registerFileURL.length}`);
+      await Promise.resolve();
+      order.push(`views:${engine.calls.exec.filter((s) => s.startsWith('CREATE OR REPLACE VIEW')).length}`);
+    },
+  );
+  expect(order).toEqual(['urls:4', 'views:0']);
+  expect(engine.calls.exec.some((s) => s.startsWith('CREATE OR REPLACE VIEW'))).toBe(true);
+});

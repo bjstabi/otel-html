@@ -127,7 +127,7 @@ export function renderShell(hash: string, ds: DataSource): void {
   window.location.hash = hash;
   render(
     <ThemeProvider>
-      <Shell dataSource={ds} history={createHashHistory(window)} />
+      <Shell manifest={ds.manifest} dataSource={ds} history={createHashHistory(window)} />
     </ThemeProvider>,
   );
 }

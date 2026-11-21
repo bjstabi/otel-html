@@ -3,6 +3,7 @@ import type { Page } from '@playwright/test';
 import { reviveDataJson, unwrapDataFile } from '../src/format/data-file.js';
 import { isPartitioned, parseAnyManifest } from '../src/format/manifest.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
+import { viewBindingFiles } from '../src/query/sql/views.js';
 import { SMALL_FILE_BYTES } from '../src/viewer/data/engine/small-files.js';
 import { reportDir } from './fixture.js';
 import type { RequestRecord } from './static-server.js';
@@ -150,12 +151,21 @@ test(
     await expect(page.getByRole('alert')).toHaveCount(0);
     await expect(page.getByRole('grid', { name: 'Results' }).getByRole('row')).not.toHaveCount(1);
     const whole = (r: RequestRecord): boolean => r.method === 'GET' && r.range === null;
-    // the "never by range afterwards" check is vacuous if this browser does not report the worker's range reads
-    // at all: the page's own opening reads (the view's footer reads) must show up as Range requests
+    // the opening fetches the first file of each view group whole, so a Range request to a Parquet file during the
+    // load would be a regression; the whole GETs of the binding files also show that the request log is live
+    // (only the binding files at or under SMALL_FILE_BYTES are fetched whole)
+    const binding = viewBindingFiles(manifest, 'base', (p) => p).filter((p) => small.includes(p));
+    expect(binding.length, 'the fixture has a small binding file').toBeGreaterThan(0);
+    for (const path of binding) {
+      expect(
+        seen.some((r) => r.path.endsWith(`/${path}`) && whole(r)),
+        `${path} (a binding file) fetched whole`,
+      ).toBe(true);
+    }
     expect(
-      seen.some((r) => r.range !== null && r.path.endsWith('.parquet')),
-      'a Range request to a Parquet file was recorded',
-    ).toBe(true);
+      seen.filter((r) => r.range !== null && r.path.endsWith('.parquet')),
+      'a Range request to a Parquet file',
+    ).toEqual([]);
     let fetched = 0;
     for (const path of small) {
       const mine = seen.filter((r) => r.path.endsWith(`/${path}`));
