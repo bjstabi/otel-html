@@ -286,7 +286,10 @@ export async function writeRunReport(
   );
   await deps.fs.writeTextAtomic(
     `${dir}/index.html`,
-    renderIndexHtml(deps.viewerAssets.entry(), manifest.title, { assetsBase: manifest.engine.assetsBase }),
+    renderIndexHtml(deps.viewerAssets.entry(), manifest.title, {
+      assetsBase: manifest.engine.assetsBase,
+      format: manifest.engine.format,
+    }),
   );
   await deps.fs.writeTextAtomic(`${dir}/.nojekyll`, '');
 }

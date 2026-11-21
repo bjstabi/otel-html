@@ -191,7 +191,7 @@ async function upgradePartitioned(
   if (!sharedBase) await writeViewerAssets(fs, dir, viewerAssets, format);
   await fs.writeTextAtomic(
     at(dir, 'index.html'),
-    renderIndexHtml(viewerAssets.entry(), manifest.title, { assetsBase }),
+    renderIndexHtml(viewerAssets.entry(), manifest.title, { assetsBase, format }),
   );
   await fs.writeTextAtomic(at(dir, '.nojekyll'), '');
   const engine = { version: ENGINE_VERSION, format, assetsBase };

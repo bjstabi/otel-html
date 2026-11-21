@@ -77,7 +77,10 @@ export async function ensureMainReport(
     );
     written.push(MANIFEST_PATH);
   }
-  const html = renderIndexHtml(deps.viewerAssets.entry(), patched.title, { assetsBase: o.assetsBase });
+  const html = renderIndexHtml(deps.viewerAssets.entry(), patched.title, {
+    assetsBase: o.assetsBase,
+    format: patched.engine.format,
+  });
   const htmlPath = `${dir}/index.html`;
   if (!(await deps.fs.exists(htmlPath)) || (await deps.fs.readText(htmlPath)) !== html) {
     await deps.fs.writeTextAtomic(htmlPath, html);
