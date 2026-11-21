@@ -7,10 +7,20 @@ import { type LoadProgress, type OpenedReport, requireFormat4 } from '../../src/
 import { Root } from '../../src/viewer/root.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 
-const seen = vi.hoisted(() => ({ props: [] as { dataSource: unknown; loading: unknown }[] }));
+const seen = vi.hoisted(() => ({
+  props: [] as { dataSource: unknown; loading: unknown; refresh: { refresh: () => void } | null }[],
+}));
 vi.mock('../../src/viewer/shell/shell.js', () => ({
-  Shell: (props: { dataSource: unknown; loading?: unknown }): string => {
-    seen.props.push({ dataSource: props.dataSource, loading: props.loading ?? null });
+  Shell: (props: {
+    dataSource: unknown;
+    loading?: unknown;
+    refresh?: { refresh: () => void } | null;
+  }): string => {
+    seen.props.push({
+      dataSource: props.dataSource,
+      loading: props.loading ?? null,
+      refresh: props.refresh ?? null,
+    });
     return props.loading ? 'shell-loading' : 'shell';
   },
 }));
@@ -227,5 +237,45 @@ describe('a failed load', () => {
     );
     await screen.findByText('This report could not be loaded');
     expect(screen.getByRole('alert').textContent).toContain('incomplete or moved');
+  });
+});
+
+describe('the shown data source after a refresh', () => {
+  async function ready(
+    refreshTo: (real: DataSource) => DataSource,
+  ): Promise<{ pending: DataSource; real: DataSource }> {
+    let report: (p: LoadProgress) => void = () => undefined;
+    let finish: (d: OpenedReport) => void = () => undefined;
+    const load = (onProgress: (p: LoadProgress) => void): Promise<OpenedReport> => {
+      report = onProgress;
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    };
+    render(<Root load={load} history={createHashHistory(window)} />);
+    const real = dataSource('system').dataSource;
+    act(() => report({ phase: 'partitions', done: 0, total: 1, manifest: real.manifest }));
+    const pending = lastSeen().dataSource;
+    await act(async () => finish({ dataSource: real, refresh: () => Promise.resolve(refreshTo(real)) }));
+    expect(lastSeen().dataSource).toBe(pending);
+    return { pending, real };
+  }
+  const click = (): Promise<void> =>
+    act(async () => {
+      seen.props.at(-1)?.refresh?.refresh();
+    });
+
+  test('a refresh that resolves the same real source keeps the shown (pending) one', async () => {
+    const { pending } = await ready((real) => real);
+    await click();
+    expect(lastSeen().dataSource).toBe(pending);
+  });
+
+  test('a refresh that resolves a different source swaps it in', async () => {
+    const next = dataSource('dark').dataSource;
+    const { pending } = await ready(() => next);
+    await click();
+    expect(lastSeen().dataSource).toBe(next);
+    expect(next).not.toBe(pending);
   });
 });

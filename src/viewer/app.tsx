@@ -9,7 +9,8 @@ import type { HistoryPort } from './state/selection.js';
 
 type Load =
   | { status: 'loading'; progress: LoadProgress | null; pending: DataSource | null }
-  | { status: 'ready'; dataSource: DataSource; refresh: OpenedReport['refresh'] }
+  // `dataSource` is the shown one (the pending wrapper after a first load); `real` is the engine-backed source behind it.
+  | { status: 'ready'; dataSource: DataSource; real: DataSource; refresh: OpenedReport['refresh'] }
   | { status: 'failed'; message: string };
 
 /** The hint under the error: only for failures that a moved or partial report explains, not for D12 or engine errors. */
@@ -54,15 +55,15 @@ export function App(props: {
     });
     // A failed load that no page query was waiting on must not be reported as an unhandled rejection.
     ready.catch(() => undefined);
+    // Made on the first progress that carries the manifest and kept here, so the state updater below only copies.
+    let pending: DataSource | null = null;
     const onProgress = (progress: LoadProgress): void => {
-      if (live && !settled)
-        setState((s) => ({
-          status: 'loading',
-          progress,
-          pending:
-            (s.status === 'loading' ? s.pending : null) ??
-            (progress.manifest === undefined ? null : pendingDataSource(progress.manifest, ready)),
-        }));
+      if (live && !settled) {
+        if (pending === null && progress.manifest !== undefined)
+          pending = pendingDataSource(progress.manifest, ready);
+        const kept = pending;
+        setState({ status: 'loading', progress, pending: kept });
+      }
     };
     load(onProgress).then(
       (opened) => {
@@ -74,6 +75,7 @@ export function App(props: {
           setState((s) => ({
             status: 'ready',
             dataSource: s.status === 'loading' && s.pending !== null ? s.pending : opened.dataSource,
+            real: opened.dataSource,
             refresh: opened.refresh,
           }));
         else void opened.dataSource.close().catch(() => undefined); // unmounted mid-load: release the engine
@@ -113,7 +115,10 @@ export function App(props: {
           if (!live.current) return;
           setRefreshError(null);
           setRefreshing(false);
-          setState((s) => (s.status === 'ready' ? { ...s, dataSource } : s));
+          // A poll tick that finds nothing new resolves the same real source: the shown one must not change then.
+          setState((s) =>
+            s.status !== 'ready' || dataSource === s.real ? s : { ...s, dataSource, real: dataSource },
+          );
         },
         (e: unknown) => {
           inFlight.current = false;
