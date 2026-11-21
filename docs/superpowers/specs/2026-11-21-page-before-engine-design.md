@@ -27,8 +27,10 @@ on a local copy of the site with Pages' headers, a Chromium reload at 50 Mbps we
 with no engine request; WebKit serves the reload from that cache too in a persistent profile over https (what a real
 Safari has); Firefox is unchanged. A hard reload benefits as well (it bypasses the HTTP cache only). Measured costs: the
 engine files decoded are 34 MB (wasm) + 4 MB per engine version in the origin's storage; a `put` during a Firefox
-cold load cost about 150 ms; `caches` is undefined in insecure contexts (Chromium and Firefox count `http://127.0.0.1`
-as secure, WebKit does not) and `caches.open` rejects in some ephemeral contexts.
+cold load cost about 150 ms; `caches` is undefined in insecure contexts, and WebKit's ephemeral contexts
+(Playwright's default, a private window) accept `put` but hold nothing across a reload. (Correction 2026-11-21, after
+the build: all three browsers treat `http://127.0.0.1` as a secure context, WebKit included; the earlier reading that
+WebKit does not was wrong, see the plan's Status section.)
 
 **Under the download there is a floor no cache removes**: DuckDB's instantiate, `open` and the two extension `LOAD`s,
 about 0.5 s in Chromium and Firefox and about 1 s in WebKit on loopback. The "Starting the query engine" line stays on
@@ -165,9 +167,9 @@ no race: the line is in the DOM exactly while the data is pending, and it is com
 same tick and shows it for a frame at most. The comment
 there is updated. `e2e/engine-load.spec.ts`'s order check becomes: `main` is attached while the loading line is still
 in the DOM (the page before the engine), and the line is gone by the time the span count shows. The spec gains a
-reload check (3.1): after `page.reload()` on the `-http` projects in Chromium and Firefox, the engine files have no
-new request (the request count per file stays 1); WebKit skips that part (`http://127.0.0.1` is not a secure context
-there, so `caches` is unavailable and it fetches). `e2e/scale.spec.ts`'s settled checks read `[role="status"]` text
+reload check (3.1): after `page.reload()` on the `-http` project, once the cache holds the four files, the engine
+files have no new request (the request count per file stays 1). Only Chromium has an `-http` project
+(`playwright.config.ts`), so the check runs there; Firefox and WebKit reloads are measured by the bench instead. `e2e/scale.spec.ts`'s settled checks read `[role="status"]` text
 inside the widget frames and are unaffected; the loading bar sits outside the frames.
 
 ## 4. Measurements the PR body carries

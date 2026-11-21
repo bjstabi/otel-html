@@ -22,7 +22,7 @@ mise.
 
 | #   | branch              | PR title                                                                                         | status |
 | --- | ------------------- | ------------------------------------------------------------------------------------------------ | ------ |
-| 1   | `perf/page-before-engine` | `perf(viewer): the page renders before the engine starts, and a site keeps the engine files in cache storage` | open   |
+| 1   | `perf/page-before-engine` | `perf(viewer): the page renders before the engine starts, and a site keeps the engine files in cache storage` | built; stopped before the PR on the WebKit loopback reload row (see Status) |
 
 - **Models.** Implementers and task reviewers run on Sonnet 5.5. The branch review runs on Opus 5.5.
 - **Bugs found on the way** are fixed in this PR and listed under **Also** in its body.
@@ -543,3 +543,43 @@ git commit -m "test(e2e): a reload makes no engine request; README on the page b
 - [ ] After the deploy: live `branch/main/` cold and reloaded in Chromium at 50 Mbps / 40 ms
   (`scratchpad/bench/run-live-reload2.mjs` or the like): engine requests on reload (expected 0), time to `main` and
   to data ready; record in this plan's Status section and the PR (a comment, since it is merged by then).
+
+## Status (2026-11-21)
+
+Tasks 1–6 done on `perf/page-before-engine` (a9128bc4..2a42cfad), each task reviewed on Sonnet 5.5, the branch
+reviewed on Opus 5.5: two Important findings fixed (a no-change poll tick swapped the pending data source for the real
+one, re-running every query; the e2e reload check raced the fire-and-forget store) plus five minors (the inline
+script survives a throwing `caches` getter and a bad cache entry falls through to the fetch; comment fixes; `pending`
+kept in the effect closure; the e2e wait no longer waits twice on a missing `main`); re-review clean. `mise run
+verify` green before the fix wave, `mise run check` green after it.
+
+Measurements (`scratchpad/bench/pbe.mjs`, `pbe-webkit.mjs`; ms since navigation; `main` = page frame attached,
+`ready` = loading line gone = data source ready; one run each):
+
+| row | before: main / ready | after: main / ready | engine files on reload |
+| --- | --- | --- | --- |
+| sample, Chromium, cold | 829 / 829 | 248 / 787 | — |
+| sample, Chromium, reload | 709 / 709 | 47 / 629 | wasm re-downloaded → none |
+| sample, Firefox, cold | 1019 / 1019 | 342 / 1005 | — |
+| sample, Firefox, reload | 845 / 845 | 207 / 706 | HTTP cache → cache storage |
+| sample, WebKit over http (ephemeral context), cold | 1469 / 1469 | 422 / 1507 | — |
+| sample, WebKit over http (ephemeral context), reload | 1377 / 1377 | 42 / 1736–1804 | re-downloaded before and after (the context drops the cache on reload) |
+| sample, WebKit over https, persistent profile, cold | 1611 / 1611 | 156 / 1390 | — |
+| sample, WebKit over https, persistent profile, reload | 1210 (HTTP cache) and 1776 (re-download) | 36 / 1559–1592 | → none; `match` of the 34 MB entry 141 ms |
+| ci, Chromium 50 Mbps / 40 ms, cold | 7595 / 7595 | 1617 / 7529 | — |
+| ci, Chromium 50 Mbps / 40 ms, reload | 6381 / 6381 | 91 / 681 | wasm re-downloaded (1.4 s) → none |
+
+The page frame is on screen 0.6–6 s earlier everywhere; Chromium and Firefox data-ready times are unchanged or
+better; a Chromium reload on the throttled link goes from 6.4 s to 0.7 s.
+
+**The one worse row:** WebKit on loopback over http, reload: +0.35–0.4 s to data ready. Variants isolated it
+(`scratchpad/bench/variant-*`): not the response clone, not the store; a no-cache build with the fetches delayed by
+90 ms (the lookup's cost) gives 1422–1507, so part is the page rendering earlier and overlapping the body
+downloads on WebKit's main thread (the engine's steps are round trips through it), part the lookup itself. WebKit's
+ephemeral context never hits the cache, so that row pays the lookup without the benefit; a persistent profile over
+https (a real Safari) reads from the cache in ~140 ms instead of downloading. On a real link (the wasm download is
+1.4 s at 50 Mbps) the cache wins in every browser. Cold rows are within noise of before.
+
+Correction to the spec and plan: WebKit does treat `http://127.0.0.1` as a secure context (`isSecureContext` true,
+`caches.open` works); what fails there is persistence across a reload in an ephemeral context. Only Chromium has
+`-http` e2e projects, so the reload assertion runs in Chromium only.
