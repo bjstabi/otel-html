@@ -72,6 +72,18 @@ test(
       // was observed must not repeat.
       expect([...engineRequests.values()].every((n) => n === 1)).toBe(true);
     }
+    // A reload reads the engine files from cache storage (the viewer stored them after the first load), so no
+    // request is made. WebKit is skipped: http://127.0.0.1 is not a secure context there, `caches` is unavailable
+    // and the engine is fetched as before.
+    if (testInfo.project.name.endsWith('-http') && !testInfo.project.name.startsWith('webkit')) {
+      await page.reload();
+      await expect(page.getByRole('main').locator('output', { hasText: /\bspans\b/ })).toHaveText(
+        new RegExp(`^${SPAN_COUNT} spans`),
+      );
+      expect([...engineRequests.values()], 'a reload serves the engine files from cache storage').toEqual([
+        1, 1, 1, 1,
+      ]);
+    }
     expect(problems).toEqual([]);
   },
 );
