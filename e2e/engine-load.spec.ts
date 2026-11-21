@@ -34,12 +34,15 @@ test(
     await page.addInitScript(() => {
       const order: string[] = [];
       window.__order = order;
-      // The first `main` is recorded as `main-while-loading` when the loading line is still there (the page frame
-      // rendered before the engine), `main` otherwise; `ready` once a `main` exists and the line is gone.
+      // The first `main` is recorded as `main-while-loading:<the line's text>` when the loading line is still there
+      // (the page frame rendered before the engine; the text names the phase), `main` otherwise; `ready` once a
+      // `main` exists and the line is gone.
       const scan = (): void => {
         const main = document.querySelector('main') !== null;
-        const loading = document.querySelector('[aria-label="Loading the report"]') !== null;
-        if (main && order.length === 0) order.push(loading ? 'main-while-loading' : 'main');
+        const line = document.querySelector('[aria-label="Loading the report"]');
+        const loading = line !== null;
+        if (main && order.length === 0)
+          order.push(line ? `main-while-loading:${(line.textContent ?? '').trim()}` : 'main');
         if (main && !loading && !order.includes('ready')) order.push('ready');
       };
       const observer = new MutationObserver(scan);
@@ -64,7 +67,10 @@ test(
       new RegExp(`^${SPAN_COUNT} spans`),
     );
 
-    expect(await page.evaluate(() => window.__order)).toEqual(['main-while-loading', 'ready']);
+    const order = await page.evaluate(() => window.__order);
+    expect(order).toHaveLength(2);
+    expect(order?.[0]).toMatch(/^main-while-loading:(Loading report|Starting the query engine)$/);
+    expect(order?.[1]).toBe('ready');
     if (testInfo.project.name.endsWith('-http')) {
       expect(engineRequests.size).toBe(4);
       expect([...engineRequests.values()]).toEqual([1, 1, 1, 1]);

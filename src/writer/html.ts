@@ -20,12 +20,12 @@ function escapeHtml(s: string): string {
 export function enginePrefetchScript(hrefs: readonly string[], cacheName: string): string {
   // The try/catch below exists because a sandboxed iframe's `caches` getter throws in Chromium (SecurityError); Node's
   // vm swallows that error in `typeof`, so no unit test can exercise it.
-  return `(()=>{const n=${JSON.stringify(cacheName)},p=__OH__.pre={};let s=[];
+  return `(()=>{const n=${JSON.stringify(cacheName)},p=__OH__.pre={};let s=[],d=false;
 let c;try{c=typeof caches==="undefined"?Promise.resolve(null):caches.open(n).catch(()=>null)}catch{c=Promise.resolve(null)}
-const get=u=>c.then(k=>{const miss=()=>fetch(u).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);if(k)s.push([u,r.clone()]);return r.arrayBuffer()});return(k?k.match(u,{ignoreVary:true}).catch(()=>undefined):Promise.resolve(undefined)).then(r=>r?r.arrayBuffer().catch(miss):miss())});
+const get=u=>c.then(k=>{const miss=()=>fetch(u).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);if(k&&!d)s.push([u,r.clone()]);return r.arrayBuffer()});return(k?k.match(u,{ignoreVary:true}).catch(()=>undefined):Promise.resolve(undefined)).then(r=>r?r.arrayBuffer().catch(miss):miss())});
 for(const u of ${JSON.stringify(hrefs)}){p[u]=get(u);p[u].catch(()=>{})}
 __OH__.store=()=>{const t=s;s=[];return c.then(k=>k&&Promise.allSettled(t.map(e=>k.put(e[0],e[1]))).then(()=>caches.keys()).then(ks=>Promise.allSettled(ks.filter(x=>x.startsWith("oh-engine-")&&x!==n).map(x=>caches.delete(x))))).then(()=>{},()=>{})};
-__OH__.drop=()=>c.then(k=>k&&caches.delete(n)).then(()=>{},()=>{});})()`;
+__OH__.drop=()=>{d=true;s=[];return c.then(k=>k&&caches.delete(n)).then(()=>{},()=>{})};})()`;
 }
 
 const ASSET_PATH = /^assets\/[A-Za-z0-9][A-Za-z0-9._-]*$/;

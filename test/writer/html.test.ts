@@ -140,6 +140,26 @@ describe('enginePrefetchScript', () => {
     await oh.store();
     expect(cache.put).toHaveBeenCalledTimes(2);
   });
+  test('drop() releases the pending clones: a fetch that completes after drop() is never stored', async () => {
+    const { cache, caches } = fakes();
+    cache.match.mockResolvedValue(undefined);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const fetch = vi.fn(async (h: string) => {
+      if (h === WORKER) await gate;
+      return body(4);
+    });
+    const oh = run(script(), { caches, fetch });
+    await oh.pre[WASM]; // completed before drop(): its clone is released by drop()
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledWith(WORKER));
+    await oh.drop();
+    release();
+    await oh.pre[WORKER];
+    await oh.store();
+    expect(cache.put).not.toHaveBeenCalled();
+  });
   test('a non-OK miss rejects naming the status', async () => {
     const { cache, caches } = fakes();
     cache.match.mockResolvedValue(undefined);
