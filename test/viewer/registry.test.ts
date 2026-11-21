@@ -14,10 +14,14 @@ function withBootstrap(): Window {
 
 describe('installRegistry', () => {
   test('prefetched promises of the bootstrap are carried over', () => {
-    const p = Promise.resolve(new ArrayBuffer(1));
-    const win = { __OH__: { q: [], push() {}, pre: { 'assets/x.wasm': p } } } as unknown as Window;
+    const p = Promise.resolve(new Response('x'));
+    const pre: Record<string, Promise<Response>> = { 'assets/x.wasm': p };
+    const win = { __OH__: { q: [], push() {}, pre } } as unknown as Window;
     const registry = installRegistry(win);
     expect(registry.prefetched('assets/x.wasm')).toBe(p);
+    // handed out once: the entry is gone, so the Response is not retained
+    expect(registry.prefetched('assets/x.wasm')).toBeUndefined();
+    expect(pre).toEqual({});
     expect(registry.prefetched('assets/other')).toBeUndefined();
     expect(
       installRegistry({ __OH__: { q: [], push() {} } } as unknown as Window).prefetched('a'),

@@ -23,7 +23,7 @@ export interface EngineDeps {
   /** `site` reports fetch the engine files with it; default `globalThis.fetch`. */
   fetch?: typeof fetch;
   /** The promise the report's index.html started for the engine file at this page-relative href, if any. */
-  prefetched?: (href: string) => Promise<ArrayBuffer> | undefined;
+  prefetched?: (href: string) => Promise<Response> | undefined;
   /** `URL.createObjectURL` / `revokeObjectURL`, injected for tests. */
   blobUrl: { create(blob: Blob): string; revoke(url: string): void };
 }
@@ -79,16 +79,18 @@ export function extensionShim(dataUrls: Record<string, string>): string {
 }
 
 /**
- * Classic-script source run first in every engine worker: it takes the wasm bytes the page posts (`{ __oh: { wasm } }`,
- * before DuckDB's own message handler sees the message) and answers DuckDB's `fetch` of `WASM_HANDOFF_URL` with them,
- * then the extension shim. Any other `fetch` goes through.
+ * Classic-script source run first in every engine worker: it takes the wasm the page posts (`{ __oh: { wasm } }`, an
+ * ArrayBuffer or a ReadableStream, before DuckDB's own message handler sees the message) and answers the first
+ * `fetch` of `WASM_HANDOFF_URL` with it (and lets go of it), then the extension shim. Any other `fetch`, a later
+ * one of the hand-off URL included, goes through.
  */
 export function workerShim(extensionDataUrls: Record<string, string>): string {
-  return `(function(){var u=${JSON.stringify(WASM_HANDOFF_URL)};var b=null;self.addEventListener('message',function(e){var d=e.data;if(d&&d.__oh&&d.__oh.wasm){b=d.__oh.wasm;e.stopImmediatePropagation();}},true);var f=self.fetch;self.fetch=function(i,o){var k=typeof i==='string'?i:i&&i.url;if(k===u&&b!==null)return Promise.resolve(new Response(b,{status:200,headers:{'content-type':'application/wasm'}}));return f.call(self,i,o);};})();\n${extensionShim(extensionDataUrls)}`;
+  return `(function(){var u=${JSON.stringify(WASM_HANDOFF_URL)};var b=null;self.addEventListener('message',function(e){var d=e.data;if(d&&d.__oh&&d.__oh.wasm){b=d.__oh.wasm;e.stopImmediatePropagation();}},true);var f=self.fetch;self.fetch=function(i,o){var k=typeof i==='string'?i:i&&i.url;if(k===u&&b!==null){var x=b;b=null;var h={'content-type':'application/wasm'};if(typeof x.byteLength==='number')h['content-length']=String(x.byteLength);return Promise.resolve(new Response(x,{status:200,headers:h}));}return f.call(self,i,o);};})();\n${extensionShim(extensionDataUrls)}`;
 }
 
 interface EngineBytes {
-  wasm: Uint8Array;
+  /** `local`: the gunzipped bytes; `site`: the response's body stream, unread (compiled by the worker as it arrives). */
+  wasm: Uint8Array | ReadableStream<Uint8Array>;
   worker: Uint8Array;
   /** `data:` URLs keyed `<ext>.duckdb_extension.wasm`, for the worker's shim. */
   extensions: Record<string, string>;
@@ -117,31 +119,60 @@ async function localBytes(engine: ManifestV4['engine'], deps: EngineDeps): Promi
   };
 }
 
-/** One `site` engine file: the page's early fetch if it has one (and it worked), else one fetch of the file's URL. */
-async function siteFile(name: string, engine: ManifestV4['engine'], deps: EngineDeps): Promise<Uint8Array> {
+/**
+ * One `site` engine file's response: the page's early fetch if it has one (and it worked), else one fetch of the
+ * file's URL. A failure of that fetch names the file (D13).
+ */
+async function siteResponse(name: string, engine: ManifestV4['engine'], deps: EngineDeps): Promise<Response> {
   const href = engine.assetsBase + name;
   const early = deps.prefetched?.(href);
   if (early !== undefined) {
     try {
-      return new Uint8Array(await early);
+      const response = await early;
+      if (response.ok) return response;
     } catch {
       // the early fetch failed: one more try below, which names the file when it fails too
     }
   }
   const url = new URL(href, deps.baseUrl).href;
-  const failure = (actual: string): OtelHtmlError =>
-    new OtelHtmlError('invalid-report', {
-      path: url,
-      expected: `the DuckDB engine file (${name})`,
-      actual,
-    });
   let response: Response;
   try {
     response = await (deps.fetch ?? fetch)(url);
   } catch (error) {
-    throw failure(error instanceof Error ? error.message : String(error));
+    throw siteFailure(name, url, error instanceof Error ? error.message : String(error));
   }
-  if (!response.ok) throw failure(`HTTP ${response.status}`);
+  if (!response.ok) throw siteFailure(name, url, `HTTP ${response.status}`);
+  return response;
+}
+
+const siteFailure = (name: string, url: string, actual: string): OtelHtmlError =>
+  new OtelHtmlError('invalid-report', { path: url, expected: `the DuckDB engine file (${name})`, actual });
+
+const siteUrl = (name: string, engine: ManifestV4['engine'], deps: EngineDeps): string =>
+  new URL(engine.assetsBase + name, deps.baseUrl).href;
+
+/** One `site` engine file read whole. */
+async function siteFile(name: string, engine: ManifestV4['engine'], deps: EngineDeps): Promise<Uint8Array> {
+  const response = await siteResponse(name, engine, deps);
+  try {
+    return new Uint8Array(await response.arrayBuffer());
+  } catch (error) {
+    throw siteFailure(
+      name,
+      siteUrl(name, engine, deps),
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+/** The wasm of a `site` report: its body stream, not read here (no copy on the main thread). */
+async function siteWasm(
+  name: string,
+  engine: ManifestV4['engine'],
+  deps: EngineDeps,
+): Promise<Uint8Array | ReadableStream<Uint8Array>> {
+  const response = await siteResponse(name, engine, deps);
+  if (response.body !== null) return response.body;
   return new Uint8Array(await response.arrayBuffer());
 }
 
@@ -149,7 +180,7 @@ async function siteFile(name: string, engine: ManifestV4['engine'], deps: Engine
 async function siteBytes(engine: ManifestV4['engine'], deps: EngineDeps): Promise<EngineBytes> {
   const [wasmName, workerName] = engineAssetNames('site');
   const [wasm, worker, ...extensions] = await Promise.all([
-    siteFile(wasmName as string, engine, deps),
+    siteWasm(wasmName as string, engine, deps),
     siteFile(workerName as string, engine, deps),
     ...ENGINE_EXTENSIONS.map((e) => siteFile(engineExtensionName(engine.format, e), engine, deps)),
   ]);
@@ -169,6 +200,21 @@ function exactBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.slice().buffer;
 }
 
+/** Posts the wasm to the worker, transferred; a browser that cannot transfer a stream gets the bytes read from it. */
+async function handOffWasm(worker: Worker, source: Uint8Array | ReadableStream<Uint8Array>): Promise<void> {
+  if (source instanceof Uint8Array) {
+    const wasm = exactBuffer(source);
+    worker.postMessage({ __oh: { wasm } }, [wasm]);
+    return;
+  }
+  try {
+    worker.postMessage({ __oh: { wasm: source } }, [source]);
+  } catch {
+    const wasm = await new Response(source).arrayBuffer();
+    worker.postMessage({ __oh: { wasm } }, [wasm]);
+  }
+}
+
 async function startDatabase(format: 'local' | 'site', bytes: EngineBytes, deps: EngineDeps) {
   let blob: Blob | null = new Blob([workerShim(bytes.extensions), bytes.worker as BlobPart], {
     type: 'text/javascript',
@@ -178,8 +224,7 @@ async function startDatabase(format: 'local' | 'site', bytes: EngineBytes, deps:
   let db: AsyncDuckDB | undefined;
   try {
     const worker = deps.createWorker(blobUrl);
-    const wasm = exactBuffer(bytes.wasm);
-    worker.postMessage({ __oh: { wasm } }, [wasm]);
+    await handOffWasm(worker, bytes.wasm);
     db = new AsyncDuckDB(new VoidLogger(), worker);
     await db.instantiate(WASM_HANDOFF_URL);
     if (format === 'site')

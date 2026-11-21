@@ -83,16 +83,22 @@ function scriptedLoader(payloads: Record<string, string>): ScriptLoader {
 }
 
 const EMBEDDED = 'https://oh-engine.invalid/';
-type Posted = [{ __oh: { wasm: ArrayBuffer } }, Transferable[]];
+type Posted = [{ __oh: { wasm: ArrayBuffer | ReadableStream<Uint8Array> } }, Transferable[]];
 const posted: Posted[] = [];
 
-function fakeWorker(): Worker {
+function fakeWorker(rejectStreams = false): Worker {
   return {
     postMessage: (message: Posted[0], transfer: Transferable[]) => {
+      if (rejectStreams && message.__oh.wasm instanceof ReadableStream) throw new Error('DataCloneError');
       posted.push([message, transfer]);
     },
   } as unknown as Worker;
 }
+
+const decode = (wasm: ArrayBuffer | ReadableStream<Uint8Array>): string =>
+  new TextDecoder().decode(new Uint8Array(wasm as ArrayBuffer));
+const readStream = async (wasm: ArrayBuffer | ReadableStream<Uint8Array>): Promise<string> =>
+  wasm instanceof ReadableStream ? await new Response(wasm).text() : decode(wasm);
 
 const SITE_FILES: Record<string, string> = {
   'duckdb.1.32.0.wasm': 'WASM',
@@ -152,7 +158,7 @@ test('local: the wasm is posted to the worker as a transferred buffer and instan
   expect(posted).toHaveLength(1);
   const [message, transfer] = posted[0] as Posted;
   expect(Object.keys(message)).toEqual(['__oh']);
-  expect(new TextDecoder().decode(new Uint8Array(message.__oh.wasm))).toBe('WASM');
+  expect(decode(message.__oh.wasm)).toBe('WASM');
   expect(transfer).toEqual([message.__oh.wasm]);
   expect(created[0]).toMatch(/^blob:/);
   expect(revoked).toEqual(['blob:fake-1']);
@@ -208,7 +214,10 @@ test('site: the worker script, the wasm and both extensions are fetched concurre
   expect(fetched).toEqual(expect.arrayContaining([urls.worker, urls.wasm, ext.parquet, ext.json]));
   expect(created).toEqual(['blob:fake-1']);
   expect(fake.instantiated).toEqual([WASM_HANDOFF_URL]);
-  expect(new TextDecoder().decode(new Uint8Array((posted[0] as Posted)[0].__oh.wasm))).toBe('WASM');
+  const handed = (posted[0] as Posted)[0].__oh.wasm;
+  expect(handed).toBeInstanceOf(ReadableStream);
+  expect((posted[0] as Posted)[1]).toEqual([handed]);
+  expect(await readStream(handed)).toBe('WASM');
   expect(fake.opened).toEqual([{ filesystem: { forceFullHTTPReads: false, allowFullHTTPReads: true } }]);
   expect(engine.format).toBe('site');
 });
@@ -220,7 +229,7 @@ test('site: a prefetched promise is used instead of a fetch; a rejected one fall
   const asked: string[] = [];
   d.prefetched = (href) => {
     asked.push(href);
-    if (href === 'assets/duckdb.1.32.0.wasm') return Promise.resolve(new TextEncoder().encode('PRE').buffer);
+    if (href === 'assets/duckdb.1.32.0.wasm') return Promise.resolve(new Response('PRE'));
     if (href === 'assets/duckdb.1.32.0.worker.js') return Promise.reject(new Error('early fetch failed'));
     return undefined;
   };
@@ -236,7 +245,58 @@ test('site: a prefetched promise is used instead of a fetch; a rejected one fall
     'file:///r/assets/duckdb.1.32.0.worker.js',
   ]);
   expect(fetched).toHaveLength(3);
-  expect(new TextDecoder().decode(new Uint8Array((posted[0] as Posted)[0].__oh.wasm))).toBe('PRE');
+  expect(await readStream((posted[0] as Posted)[0].__oh.wasm)).toBe('PRE');
+});
+
+test('site: a prefetched response with a bad status falls back to one fetch', async () => {
+  const fetched: string[] = [];
+  const d = deps({ load: vi.fn() });
+  d.fetch = fakeFetch(fetched);
+  d.prefetched = (href) =>
+    href.endsWith('.wasm') && href.startsWith('assets/duckdb')
+      ? Promise.resolve(new Response('bad', { status: 500 }))
+      : undefined;
+  await startEngine(siteEngine, d);
+  expect(fetched).toContain('file:///r/assets/duckdb.1.32.0.wasm');
+  expect(await readStream((posted[0] as Posted)[0].__oh.wasm)).toBe('WASM');
+});
+
+test('site: a response without a body stream is posted as bytes', async () => {
+  const d = deps({ load: vi.fn() });
+  const noBody = new Response('NOBODY');
+  Object.defineProperty(noBody, 'body', { value: null });
+  d.prefetched = (href) => (href === 'assets/duckdb.1.32.0.wasm' ? Promise.resolve(noBody) : undefined);
+  await startEngine(siteEngine, d);
+  const [message, transfer] = posted[0] as Posted;
+  expect(message.__oh.wasm).toBeInstanceOf(ArrayBuffer);
+  expect(decode(message.__oh.wasm)).toBe('NOBODY');
+  expect(transfer).toEqual([message.__oh.wasm]);
+});
+
+test('site: a worker that cannot take a transferred stream gets the same bytes as a buffer', async () => {
+  const d = deps({ load: vi.fn() });
+  d.createWorker = () => fakeWorker(true);
+  await startEngine(siteEngine, d);
+  expect(posted).toHaveLength(1);
+  const [message, transfer] = posted[0] as Posted;
+  expect(message.__oh.wasm).toBeInstanceOf(ArrayBuffer);
+  expect(decode(message.__oh.wasm)).toBe('WASM');
+  expect(transfer).toEqual([message.__oh.wasm]);
+});
+
+test('site: a fetch that rejects is the D13 error naming the file', async () => {
+  const d = deps({ load: vi.fn() });
+  d.fetch = (async (input: string) => {
+    if (input.endsWith('json.1.32.0.duckdb_extension.wasm')) throw new TypeError('network down');
+    return new Response('x');
+  }) as typeof fetch;
+  const err = await startEngine(siteEngine, d).catch((e: unknown) => e);
+  expect(err).toBeInstanceOf(OtelHtmlError);
+  expect(err).toMatchObject({
+    code: 'invalid-report',
+    path: 'file:///r/assets/json.1.32.0.duckdb_extension.wasm',
+  });
+  expect((err as Error).message).toContain('network down');
 });
 
 test('site: a 404 on an engine file is the D13 error naming it', async () => {
@@ -293,11 +353,27 @@ test('workerShim serves the posted buffer to a fetch of the hand-off URL and pas
   const viaRequest = (await self.fetch({ url: WASM_HANDOFF_URL })) as unknown as Response;
   expect(viaRequest.headers.get('content-type')).toBe('application/wasm');
   expect(new TextDecoder().decode(await viaRequest.arrayBuffer())).toBe('WASM');
-  const viaString = (await self.fetch(WASM_HANDOFF_URL)) as unknown as Response;
-  expect(viaString.headers.get('content-type')).toBe('application/wasm');
+  expect(viaRequest.headers.get('content-length')).toBe('4');
+  // the first fetch released the bytes: the next one of the hand-off URL goes through
+  expect(await self.fetch(WASM_HANDOFF_URL)).toBe('passed');
   expect(await self.fetch('https://example.test/a')).toBe('passed');
   expect(await self.fetch({ url: 'https://example.test/b' })).toBe('passed');
-  expect(passed).toHaveLength(2);
+  expect(passed).toHaveLength(3);
+});
+
+test('workerShim serves a posted stream without a content-length', async () => {
+  const listeners: ((e: unknown) => void)[] = [];
+  const self = {
+    addEventListener: (_t: string, fn: (e: unknown) => void) => listeners.push(fn),
+    fetch: vi.fn(),
+  };
+  new Function('self', 'XMLHttpRequest', workerShim({}))(self, class {});
+  const stream = new Response('STREAM').body;
+  (listeners[0] as (e: unknown) => void)({ data: { __oh: { wasm: stream } }, stopImmediatePropagation() {} });
+  const served = (await self.fetch(WASM_HANDOFF_URL)) as unknown as Response;
+  expect(served.headers.get('content-type')).toBe('application/wasm');
+  expect(served.headers.has('content-length')).toBe(false);
+  expect(await served.text()).toBe('STREAM');
 });
 
 test('registerText and close reach the database and connection', async () => {

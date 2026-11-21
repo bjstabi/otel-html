@@ -58,10 +58,7 @@ export function renderIndexHtml(
     opts.format === 'site'
       ? `<script>__OH__.pre={${engineAssetNames('site')
           .map((n) => JSON.stringify(escapeHtml(base + n)))
-          .map(
-            (h) =>
-              `${h}:fetch(${h}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.arrayBuffer()})`,
-          )
+          .map((h) => `${h}:fetch(${h}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r})`)
           .join(',')}};for(const k in __OH__.pre)__OH__.pre[k].catch(()=>{})</script>\n`
       : '';
   return `<!doctype html>

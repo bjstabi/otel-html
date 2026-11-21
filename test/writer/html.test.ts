@@ -14,7 +14,8 @@ describe('renderIndexHtml', () => {
     for (const name of engineAssetNames('site')) expect(block).toContain(`"assets/${name}"`);
     expect(html.indexOf('__OH__.pre')).toBeGreaterThan(html.indexOf('window.__OH__={q:[]'));
     expect(html.indexOf('__OH__.pre')).toBeLessThan(html.indexOf('src="data/manifest.js"'));
-    expect(block).toContain('arrayBuffer()');
+    expect(block).toContain('return r})');
+    expect(block).not.toContain('arrayBuffer');
     expect(block).toContain('.catch(');
   });
   test('a shared base prefixes the engine hrefs', () => {
