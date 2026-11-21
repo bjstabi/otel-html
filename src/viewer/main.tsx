@@ -21,6 +21,8 @@ const history = createHashHistory(window);
  * (`<meta name="otel-html-host">`) starts no engine and registers nothing: its data source queries the host over REST.
  */
 function load(onProgress: (p: LoadProgress) => void): Promise<OpenedReport> {
+  // The cache store runs only after the load, so it never competes with the download, the instantiate or the
+  // partition reads; a failed load drops the cache so the next visit fetches afresh.
   return openReportRefreshable(
     registry.takeStatic('manifest', 'data/manifest.js'),
     {
@@ -33,6 +35,15 @@ function load(onProgress: (p: LoadProgress) => void): Promise<OpenedReport> {
       logger: console,
     },
     onProgress,
+  ).then(
+    (opened) => {
+      registry.storeEngine();
+      return opened;
+    },
+    (error: unknown) => {
+      registry.dropEngine();
+      throw error;
+    },
   );
 }
 

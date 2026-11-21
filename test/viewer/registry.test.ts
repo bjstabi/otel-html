@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { installRegistry } from '../../src/viewer/data/registry.js';
 
 /** The inline bootstrap index.html runs before any data script. */
@@ -104,5 +104,23 @@ describe('takeStatic', () => {
         message: expect.stringContaining('data/manifest.js'),
       }),
     );
+  });
+
+  test('storeEngine and dropEngine call the bootstrap once; without them they are no-ops', async () => {
+    const store = vi.fn(async () => undefined);
+    const drop = vi.fn(async () => undefined);
+    const registry = installRegistry({ __OH__: { q: [], push() {}, store, drop } } as unknown as Window);
+    registry.storeEngine();
+    registry.dropEngine();
+    expect(store).toHaveBeenCalledOnce();
+    expect(drop).toHaveBeenCalledOnce();
+    const bare = installRegistry({ __OH__: { q: [], push() {} } } as unknown as Window);
+    expect(() => bare.storeEngine()).not.toThrow();
+    expect(() => bare.dropEngine()).not.toThrow();
+    const throwing = installRegistry({
+      __OH__: { q: [], push() {}, store: () => Promise.reject(new Error('x')) },
+    } as unknown as Window);
+    expect(() => throwing.storeEngine()).not.toThrow();
+    await Promise.resolve();
   });
 });

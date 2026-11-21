@@ -7,6 +7,10 @@ interface OhGlobal {
   push(key: string, payload: unknown): void;
   /** `site` reports: the engine downloads index.html started, keyed by their page-relative href. */
   pre?: Record<string, Promise<ArrayBuffer>>;
+  /** `site` reports: writes the engine files the page fetched to cache storage; the viewer calls it after the load. */
+  store?: () => Promise<void>;
+  /** `site` reports: deletes that cache; the viewer calls it after a failed load. */
+  drop?: () => Promise<void>;
 }
 
 declare global {
@@ -16,6 +20,10 @@ declare global {
 }
 
 export interface Registry {
+  /** Has the bootstrap write the engine files to cache storage (no-op without one); never throws. */
+  storeEngine(): void;
+  /** Has the bootstrap delete the engine cache (no-op without one); never throws. */
+  dropEngine(): void;
   /** Resolves with the payload registered under `key` (now or later) and forgets it. An aborted `signal` stops the wait. */
   take(key: string, signal?: AbortSignal): Promise<unknown>;
   /** Forgets a payload registered under `key` that nobody was waiting for (the late script of a load that timed out). */
@@ -63,8 +71,18 @@ export function installRegistry(win: Window): Registry {
   win.__OH__ = { q: [], push };
 
   const pre = boot.pre;
+  const { store, drop } = boot;
+  const fireAndForget = (fn: (() => Promise<void>) | undefined): void => {
+    try {
+      fn?.().catch(() => undefined);
+    } catch {
+      // the cache is an optimisation; a failing bootstrap must not fail the viewer
+    }
+  };
 
   return {
+    storeEngine: () => fireAndForget(store),
+    dropEngine: () => fireAndForget(drop),
     prefetched(href) {
       if (pre === undefined || !Object.hasOwn(pre, href)) return undefined;
       const early = pre[href];
