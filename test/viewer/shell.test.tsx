@@ -49,12 +49,14 @@ describe('while the engine starts', () => {
     );
     const view = render(ui({ phase: 'engine' }));
     expect(screen.getByRole('navigation')).toBeTruthy();
-    expect(screen.getByRole('status', { name: 'Loading the report' }).textContent).toBe(
-      'Starting the query engine',
-    );
+    const pill = screen.getByRole('status', { name: 'Loading the report' });
+    expect(pill.textContent).toBe('Starting the query engine');
+    // The deploy preview waits for a `main` with no [aria-busy="true"] in the document.
+    expect(pill.getAttribute('aria-busy')).toBe('true');
     expect(screen.getByRole('main')).toBeTruthy();
     view.rerender(ui(null));
     expect(screen.queryByRole('status', { name: 'Loading the report' })).toBeNull();
+    expect(document.querySelector('[aria-busy="true"]')).toBeNull();
     expect(screen.getByRole('main')).toBeTruthy();
   });
 });
