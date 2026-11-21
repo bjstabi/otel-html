@@ -132,6 +132,17 @@ describe('migrateAssetsBases', () => {
     expect(await migrateAssetsBases(site, deps, w.warn)).toEqual([]);
   });
 
+  test('rewrites the inline prefetch hrefs as well as src= and href=', async () => {
+    const to = await reportAt('branch/main', '../../assets/9.9.9/');
+    fillVersion('9.9.9');
+    const pagePath = join(to, 'index.html');
+    expect(readFileSync(pagePath, 'utf8')).toContain('"../../assets/9.9.9/duckdb.');
+    await migrateAssetsBases(site, deps, () => {});
+    const page = readFileSync(pagePath, 'utf8');
+    expect(page).not.toContain('9.9.9');
+    for (const n of engineAssetNames('site')) expect(page).toContain(`"../../assets/${n}"`);
+  });
+
   test('skips a report whose manifest text holds the base twice or whose version folder lacks a file', async () => {
     const twice = await reportAt('branch/a', '../../assets/9.9.9/');
     const lacking = await reportAt('branch/b', '../../assets/9.9.9/');
