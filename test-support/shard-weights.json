@@ -272,6 +272,7 @@
     "test/viewer/dashboards-list.test.tsx": 2,
     "test/viewer/echarts-theme.test.ts": 0.3,
     "test/viewer/explorer-filter.test.ts": 0.9,
+    "test/viewer/explorer-states.test.tsx": 0.1,
     "test/viewer/explorer-paging.test.tsx": 4,
     "test/viewer/explorer.test.tsx": 3.3,
     "test/viewer/export.test.ts": 0.7,

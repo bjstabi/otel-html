@@ -1,4 +1,5 @@
 import type { JSX } from 'react';
+import { LoadingIndicator } from '../components/explorer-states.js';
 import type { LoadProgress } from '../data/open-report.js';
 
 /** The loading line for each phase of `LoadProgress`. */
@@ -36,6 +37,7 @@ export function LoadingLine({
       : 'p-8 text-sm text-muted';
   return (
     <p role="status" aria-label="Loading the report" className={classes}>
+      <LoadingIndicator />
       {progressText(progress)}
     </p>
   );
