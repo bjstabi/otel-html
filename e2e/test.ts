@@ -40,11 +40,16 @@ const REPORT_LOAD_TIMEOUT_MS = 30_000;
  */
 async function waitForReportLoaded(page: Page): Promise<void> {
   if (!/\/index\.html$/.test(page.url().split(/[?#]/)[0] ?? '')) return;
-  await page
+  const attached = await page
     .locator('main')
     .first()
     .waitFor({ state: 'attached', timeout: REPORT_LOAD_TIMEOUT_MS })
-    .catch(() => undefined);
+    .then(
+      () => true,
+      () => false,
+    );
+  // No `main` within the timeout: the report is not loading, so do not wait the same time again for the line.
+  if (!attached) return;
   await page
     .locator('[aria-label="Loading the report"]')
     .waitFor({ state: 'detached', timeout: REPORT_LOAD_TIMEOUT_MS })

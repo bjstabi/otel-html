@@ -1,3 +1,4 @@
+import { ENGINE_VERSION } from '../src/format/engine.js';
 import { SPAN_COUNT } from './fixture.js';
 import { expect, HTTP, test } from './test.js';
 
@@ -73,9 +74,20 @@ test(
       expect([...engineRequests.values()].every((n) => n === 1)).toBe(true);
     }
     // A reload reads the engine files from cache storage (the viewer stored them after the first load), so no
-    // request is made. WebKit is skipped: http://127.0.0.1 is not a secure context there, `caches` is unavailable
-    // and the engine is fetched as before.
-    if (testInfo.project.name.endsWith('-http') && !testInfo.project.name.startsWith('webkit')) {
+    // request is made. Only Chromium runs the -http projects; WebKit would need a skip here (http://127.0.0.1 is
+    // not a secure context there, so `caches` is unavailable).
+    if (testInfo.project.name.endsWith('-http')) {
+      // The store is fire-and-forget after the load: wait until it finished before navigating away.
+      await expect
+        .poll(
+          () =>
+            page.evaluate(
+              async (name) => (await (await caches.open(name)).keys()).length,
+              `oh-engine-${ENGINE_VERSION}`,
+            ),
+          { timeout: 15_000 },
+        )
+        .toBe(4);
       await page.reload();
       await expect(page.getByRole('main').locator('output', { hasText: /\bspans\b/ })).toHaveText(
         new RegExp(`^${SPAN_COUNT} spans`),
