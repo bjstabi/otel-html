@@ -33,11 +33,10 @@ export function guardContext(context: BrowserContext): () => void {
 const REPORT_LOAD_TIMEOUT_MS = 30_000;
 
 /**
- * Waits until the viewer of `page` has left its loading line (`p[role=status]`: "Loading report", "Starting the query
- * engine", "Loading partition N of M", "Preparing views"): the page or the load-failure alert, both a `main`, is
- * in the DOM. The navigation may be in the DOM before that (it shows while the engine starts), so only a `main`
- * counts. Pages that are not a report's index.html are left alone, and a report that never gets there is left to
- * the test's own assertions to describe.
+ * Waits until the viewer of `page` has loaded the report. The page frame (a `main`) attaches as soon as the manifest
+ * is read; the loading line (`[aria-label="Loading the report"]`: bare before the manifest, a pill after) leaves when
+ * the data is ready. The load-failure page is a `main` without the line. Pages that are not a report's index.html
+ * are left alone, and a report that never gets there is left to the test's own assertions to describe.
  */
 async function waitForReportLoaded(page: Page): Promise<void> {
   if (!/\/index\.html$/.test(page.url().split(/[?#]/)[0] ?? '')) return;
@@ -45,6 +44,10 @@ async function waitForReportLoaded(page: Page): Promise<void> {
     .locator('main')
     .first()
     .waitFor({ state: 'attached', timeout: REPORT_LOAD_TIMEOUT_MS })
+    .catch(() => undefined);
+  await page
+    .locator('[aria-label="Loading the report"]')
+    .waitFor({ state: 'detached', timeout: REPORT_LOAD_TIMEOUT_MS })
     .catch(() => undefined);
 }
 

@@ -302,6 +302,7 @@
     "test/viewer/metrics-catalog.test.tsx": 4.1,
     "test/viewer/metrics-explorer.test.tsx": 5,
     "test/viewer/open-report.test.ts": 1.2,
+    "test/viewer/pending-source.test.ts": 0.1,
     "test/viewer/palette.test.ts": 0.5,
     "test/viewer/plots.test.ts": 0.4,
     "test/viewer/query-bar.test.tsx": 2.1,

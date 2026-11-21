@@ -18,10 +18,24 @@ function progressText(p: LoadProgress | null): string {
   }
 }
 
-/** Never a `main`: the e2e suite treats a `main` as "the report loaded", and the pages render their own. */
-export function LoadingLine({ progress }: { progress: LoadProgress | null }): JSX.Element {
+/**
+ * Two placements: `page` stands alone before the manifest is read; `pill` floats at the bottom of the viewport over
+ * the page while the engine starts. Never inside a `main`: the e2e suite treats a `main` as "the page", and its
+ * report-loaded wait reads the `aria-label`.
+ */
+export function LoadingLine({
+  progress,
+  placement = 'page',
+}: {
+  progress: LoadProgress | null;
+  placement?: 'page' | 'pill';
+}): JSX.Element {
+  const classes =
+    placement === 'pill'
+      ? 'fixed bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full border border-hairline bg-surface px-3 py-1.5 text-sm text-muted shadow'
+      : 'p-8 text-sm text-muted';
   return (
-    <p role="status" aria-label="Loading the report" className="p-8 text-sm text-muted">
+    <p role="status" aria-label="Loading the report" className={classes}>
       {progressText(progress)}
     </p>
   );

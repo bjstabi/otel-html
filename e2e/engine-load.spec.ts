@@ -8,9 +8,9 @@ declare global {
 }
 
 // The engine files (worker, wasm, the two extensions) are fetched once each, never twice, and the navigation shows
-// while the engine starts: a `nav` is in the DOM before the first `main`.
+// while the engine starts: the page (a `main`) is up while the loading line still shows, and the line then leaves.
 test(
-  'the engine files are requested once each and the navigation shows before the page',
+  'the engine files are requested once each and the page shows before the engine is ready',
   HTTP,
   async ({ page, baseURL }, testInfo) => {
     const problems: string[] = [];
@@ -33,18 +33,13 @@ test(
     await page.addInitScript(() => {
       const order: string[] = [];
       window.__order = order;
-      // `nav` counts only while the loading line shows and no `main` exists yet (the navigation of the engine start);
-      // a build that renders both in one commit records just `main`.
+      // The first `main` is recorded as `main-while-loading` when the loading line is still there (the page frame
+      // rendered before the engine), `main` otherwise; `ready` once a `main` exists and the line is gone.
       const scan = (): void => {
         const main = document.querySelector('main') !== null;
-        if (
-          !main &&
-          !order.includes('nav') &&
-          document.querySelector('nav') !== null &&
-          document.querySelector('[aria-label="Loading the report"]') !== null
-        )
-          order.push('nav');
-        if (main && !order.includes('main')) order.push('main');
+        const loading = document.querySelector('[aria-label="Loading the report"]') !== null;
+        if (main && order.length === 0) order.push(loading ? 'main-while-loading' : 'main');
+        if (main && !loading && !order.includes('ready')) order.push('ready');
       };
       const observer = new MutationObserver(scan);
       const start = (): void => {
@@ -68,7 +63,7 @@ test(
       new RegExp(`^${SPAN_COUNT} spans`),
     );
 
-    expect(await page.evaluate(() => window.__order)).toEqual(['nav', 'main']);
+    expect(await page.evaluate(() => window.__order)).toEqual(['main-while-loading', 'ready']);
     if (testInfo.project.name.endsWith('-http')) {
       expect(engineRequests.size).toBe(4);
       expect([...engineRequests.values()]).toEqual([1, 1, 1, 1]);

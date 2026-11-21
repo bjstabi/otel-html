@@ -1,14 +1,14 @@
 import { type JSX, useCallback, useEffect, useRef, useState } from 'react';
-import type { ManifestV4 } from '../format/manifest.js';
 import type { DataSource } from './data/data-source.js';
 import type { LoadProgress, OpenedReport } from './data/open-report.js';
+import { pendingDataSource } from './data/pending-source.js';
 import { POLL_MS, type RefreshControl, readPoll, writePoll } from './shell/in-progress.js';
 import { LoadingLine } from './shell/loading-line.js';
 import { Shell } from './shell/shell.js';
 import type { HistoryPort } from './state/selection.js';
 
 type Load =
-  | { status: 'loading'; progress: LoadProgress | null; manifest: ManifestV4 | null }
+  | { status: 'loading'; progress: LoadProgress | null; pending: DataSource | null }
   | { status: 'ready'; dataSource: DataSource; refresh: OpenedReport['refresh'] }
   | { status: 'failed'; message: string };
 
@@ -37,28 +37,50 @@ export function App(props: {
   history: HistoryPort;
 }): JSX.Element {
   const { load, history } = props;
-  const [state, setState] = useState<Load>({ status: 'loading', progress: null, manifest: null });
+  const [state, setState] = useState<Load>({ status: 'loading', progress: null, pending: null });
 
   useEffect(() => {
     let live = true;
     // Progress from registrations still in flight can arrive after the load failed; it must not undo the error.
     let settled = false;
+    // The pending source's queries wait on this. It exists before `load` runs: the first progress (with the manifest)
+    // arrives synchronously inside it.
+    let settle: { resolve: (d: DataSource) => void; reject: (e: unknown) => void } = {
+      resolve: () => undefined,
+      reject: () => undefined,
+    };
+    const ready = new Promise<DataSource>((resolve, reject) => {
+      settle = { resolve, reject };
+    });
+    // A failed load that no page query was waiting on must not be reported as an unhandled rejection.
+    ready.catch(() => undefined);
     const onProgress = (progress: LoadProgress): void => {
       if (live && !settled)
         setState((s) => ({
           status: 'loading',
           progress,
-          manifest: progress.manifest ?? (s.status === 'loading' ? s.manifest : null),
+          pending:
+            (s.status === 'loading' ? s.pending : null) ??
+            (progress.manifest === undefined ? null : pendingDataSource(progress.manifest, ready)),
         }));
     };
     load(onProgress).then(
       (opened) => {
         settled = true;
-        if (live) setState({ status: 'ready', dataSource: opened.dataSource, refresh: opened.refresh });
+        settle.resolve(opened.dataSource);
+        if (live)
+          // The pending source stays the shown one: `useQuery` keys on the data-source object, so swapping it for the
+          // real one would abort and re-run the first queries.
+          setState((s) => ({
+            status: 'ready',
+            dataSource: s.status === 'loading' && s.pending !== null ? s.pending : opened.dataSource,
+            refresh: opened.refresh,
+          }));
         else void opened.dataSource.close().catch(() => undefined); // unmounted mid-load: release the engine
       },
       (e: unknown) => {
         settled = true;
+        settle.reject(e);
         if (live) setState({ status: 'failed', message: e instanceof Error ? e.message : String(e) });
       },
     );
@@ -124,12 +146,12 @@ export function App(props: {
 
   switch (state.status) {
     case 'loading':
-      return state.manifest === null ? (
+      return state.pending === null ? (
         <LoadingLine progress={state.progress} />
       ) : (
         <Shell
-          manifest={state.manifest}
-          dataSource={null}
+          manifest={state.pending.manifest}
+          dataSource={state.pending}
           loading={state.progress}
           history={history}
           refresh={null}
