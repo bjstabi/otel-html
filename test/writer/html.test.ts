@@ -182,4 +182,34 @@ describe('enginePrefetchScript', () => {
     caches.delete.mockRejectedValue(new Error('no'));
     await expect(oh.drop()).resolves.toBeUndefined();
   });
+  test('a caches getter that throws (a sandboxed frame) leaves the fetch and store/drop working', async () => {
+    const ctx = {
+      __OH__: { q: [], push() {} } as Partial<Oh>,
+      Promise,
+      Error,
+      fetch: vi.fn(async () => body(4)),
+    };
+    Object.defineProperty(ctx, 'caches', {
+      get() {
+        throw new Error('SecurityError');
+      },
+    });
+    runInNewContext(script(), ctx);
+    const oh = ctx.__OH__ as Oh;
+    expect([...new Uint8Array((await oh.pre[WASM]) as ArrayBuffer)]).toEqual([4]);
+    await expect(oh.store()).resolves.toBeUndefined();
+    await expect(oh.drop()).resolves.toBeUndefined();
+  });
+  test('a hit whose body cannot be read falls through to a fetch that store() puts', async () => {
+    const { cache, caches } = fakes();
+    const bad = { arrayBuffer: () => Promise.reject(new Error('bad entry')) };
+    cache.match.mockResolvedValue(bad);
+    const fetch = vi.fn(async () => body(8));
+    const oh = run(script(), { caches, fetch });
+    expect([...new Uint8Array((await oh.pre[WASM]) as ArrayBuffer)]).toEqual([8]);
+    expect(fetch).toHaveBeenCalledWith(WASM);
+    await oh.pre[WORKER];
+    await oh.store();
+    expect(cache.put).toHaveBeenCalledWith(WASM, expect.any(Response));
+  });
 });

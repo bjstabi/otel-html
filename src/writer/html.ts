@@ -19,8 +19,8 @@ function escapeHtml(s: string): string {
 /** The body of the inline script that starts the engine downloads (`__OH__.pre[href]`) through cache `cacheName`. */
 export function enginePrefetchScript(hrefs: readonly string[], cacheName: string): string {
   return `(()=>{const n=${JSON.stringify(cacheName)},p=__OH__.pre={};let s=[];
-const c=typeof caches==="undefined"?Promise.resolve(null):caches.open(n).catch(()=>null);
-const get=u=>c.then(k=>(k?k.match(u,{ignoreVary:true}).catch(()=>undefined):Promise.resolve(undefined)).then(r=>r?r.arrayBuffer():fetch(u).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);if(k)s.push([u,r.clone()]);return r.arrayBuffer()})));
+let c;try{c=typeof caches==="undefined"?Promise.resolve(null):caches.open(n).catch(()=>null)}catch{c=Promise.resolve(null)}
+const get=u=>c.then(k=>{const miss=()=>fetch(u).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);if(k)s.push([u,r.clone()]);return r.arrayBuffer()});return(k?k.match(u,{ignoreVary:true}).catch(()=>undefined):Promise.resolve(undefined)).then(r=>r?r.arrayBuffer().catch(miss):miss())});
 for(const u of ${JSON.stringify(hrefs)}){p[u]=get(u);p[u].catch(()=>{})}
 __OH__.store=()=>{const t=s;s=[];return c.then(k=>k&&Promise.allSettled(t.map(e=>k.put(e[0],e[1]))).then(()=>caches.keys()).then(ks=>Promise.allSettled(ks.filter(x=>x.startsWith("oh-engine-")&&x!==n).map(x=>caches.delete(x))))).then(()=>{},()=>{})};
 __OH__.drop=()=>c.then(k=>k&&caches.delete(n)).then(()=>{},()=>{});})()`;
@@ -67,7 +67,7 @@ export function renderIndexHtml(
   // A site's engine files (the wasm, its worker) are the report's biggest download, so the shell starts them before
   // the viewer script is parsed. Each one is looked up in a Cache API cache named for the engine version first; a
   // miss is fetched and kept aside, and the viewer calls `store()` once the engine runs (writing the cache, dropping
-  // other versions') or `drop()` when the cached bytes proved bad. A browser without `caches` just fetches.
+  // other versions') or `drop()` when the load failed (a stale or bad entry must not survive). A browser without `caches` just fetches.
   // ASSETS_BASE_RE admits only [A-Za-z0-9._/-], and the engine file names are plain: no `<`, `&` or quote can
   // occur, so the JSON strings are safe inside the inline script and each key stays exactly `base + name`.
   const pre =
