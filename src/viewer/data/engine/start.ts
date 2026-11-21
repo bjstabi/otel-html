@@ -20,6 +20,10 @@ export interface EngineDeps {
   /** `document.baseURI`: engine and partition URLs resolve against it. */
   baseUrl: string;
   createWorker: (url: string) => Worker;
+  /** `site` reports fetch the engine files with it; default `globalThis.fetch`. */
+  fetch?: typeof fetch;
+  /** The promise the report's index.html started for the engine file at this page-relative href, if any. */
+  prefetched?: (href: string) => Promise<ArrayBuffer> | undefined;
   /** `URL.createObjectURL` / `revokeObjectURL`, injected for tests. */
   blobUrl: { create(blob: Blob): string; revoke(url: string): void };
 }
@@ -58,6 +62,8 @@ export function extensionUrls(
  * resolves. DuckDB reads the extension's name from the last path segment.
  */
 const EMBEDDED_HOST = 'https://oh-engine.invalid/';
+/** What the worker's shim serves the wasm at: the page posts the bytes, DuckDB's `fetch` of this URL gets them. */
+export const WASM_HANDOFF_URL = `${EMBEDDED_HOST}duckdb.wasm`;
 /** Where DuckDB looks for an extension it does not have (ICU, say) once the two are loaded: nowhere that answers. */
 const NO_REPOSITORY = 'no-extensions';
 
@@ -72,66 +78,124 @@ export function extensionShim(dataUrls: Record<string, string>): string {
   return `(function(){var m=${JSON.stringify(dataUrls)};var h=${JSON.stringify(EMBEDDED_HOST)};var o=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(){var a=Array.prototype.slice.call(arguments);var k=String(a[1]);if(k.indexOf(h)===0){var f=k.slice(h.length);a[1]=Object.prototype.hasOwnProperty.call(m,f)?m[f]:'data:,';}return o.apply(this,a);};})();\n`;
 }
 
-async function embeddedExtensions(
-  engine: ManifestV4['engine'],
-  baseUrl: string,
-  deps: EngineDeps,
-): Promise<Record<string, string>> {
-  const urls = extensionUrls(engine, baseUrl);
-  const out: Record<string, string> = {};
-  for (const e of ENGINE_EXTENSIONS) {
-    const bytes = await gunzip(fromBase64(await loadText(deps.loader, urls[e], engineExtensionKey(e))));
-    out[`${e}.duckdb_extension.wasm`] = `data:application/wasm;base64,${toBase64(bytes)}`;
-  }
-  return out;
+/**
+ * Classic-script source run first in every engine worker: it takes the wasm bytes the page posts (`{ __oh: { wasm } }`,
+ * before DuckDB's own message handler sees the message) and answers DuckDB's `fetch` of `WASM_HANDOFF_URL` with them,
+ * then the extension shim. Any other `fetch` goes through.
+ */
+export function workerShim(extensionDataUrls: Record<string, string>): string {
+  return `(function(){var u=${JSON.stringify(WASM_HANDOFF_URL)};var b=null;self.addEventListener('message',function(e){var d=e.data;if(d&&d.__oh&&d.__oh.wasm){b=d.__oh.wasm;e.stopImmediatePropagation();}},true);var f=self.fetch;self.fetch=function(i,o){var k=typeof i==='string'?i:i&&i.url;if(k===u&&b!==null)return Promise.resolve(new Response(b,{status:200,headers:{'content-type':'application/wasm'}}));return f.call(self,i,o);};})();\n${extensionShim(extensionDataUrls)}`;
 }
 
-async function startLocal(
-  urls: { wasm: string; worker: string },
-  loadExtensionData: () => Promise<Record<string, string>>,
-  deps: EngineDeps,
-) {
-  let wasmBytes: Uint8Array | null = await gunzip(
-    fromBase64(await loadText(deps.loader, urls.wasm, ENGINE_WASM_KEY)),
-  );
-  let wasmUrl: string | null = `data:application/wasm;base64,${toBase64(wasmBytes)}`;
-  wasmBytes = null;
-  const workerBytes = fromBase64(await loadText(deps.loader, urls.worker, ENGINE_WORKER_KEY));
-  let blob: Blob | null = new Blob([extensionShim(await loadExtensionData()), workerBytes as BlobPart], {
+interface EngineBytes {
+  wasm: Uint8Array;
+  worker: Uint8Array;
+  /** `data:` URLs keyed `<ext>.duckdb_extension.wasm`, for the worker's shim. */
+  extensions: Record<string, string>;
+}
+
+const extensionDataUrl = (bytes: Uint8Array): string => `data:application/wasm;base64,${toBase64(bytes)}`;
+const extensionKey = (e: EngineExtension): string => `${e}.duckdb_extension.wasm`;
+
+/** `local`: the four wrappers load concurrently; the wasm stays bytes (a `data:` URL of it would cost ~0.5 s). */
+async function localBytes(engine: ManifestV4['engine'], deps: EngineDeps): Promise<EngineBytes> {
+  const urls = engineUrls(engine, deps.baseUrl);
+  const ext = extensionUrls(engine, deps.baseUrl);
+  const bytes = (url: string, key: string): Promise<Uint8Array> =>
+    loadText(deps.loader, url, key).then(fromBase64);
+  const [wasm, worker, ...extensions] = await Promise.all([
+    bytes(urls.wasm, ENGINE_WASM_KEY).then(gunzip),
+    bytes(urls.worker, ENGINE_WORKER_KEY),
+    ...ENGINE_EXTENSIONS.map((e) => bytes(ext[e], engineExtensionKey(e)).then(gunzip)),
+  ]);
+  return {
+    wasm: wasm as Uint8Array,
+    worker: worker as Uint8Array,
+    extensions: Object.fromEntries(
+      ENGINE_EXTENSIONS.map((e, i) => [extensionKey(e), extensionDataUrl(extensions[i] as Uint8Array)]),
+    ),
+  };
+}
+
+/** One `site` engine file: the page's early fetch if it has one (and it worked), else one fetch of the file's URL. */
+async function siteFile(name: string, engine: ManifestV4['engine'], deps: EngineDeps): Promise<Uint8Array> {
+  const href = engine.assetsBase + name;
+  const early = deps.prefetched?.(href);
+  if (early !== undefined) {
+    try {
+      return new Uint8Array(await early);
+    } catch {
+      // the early fetch failed: one more try below, which names the file when it fails too
+    }
+  }
+  const url = new URL(href, deps.baseUrl).href;
+  const failure = (actual: string): OtelHtmlError =>
+    new OtelHtmlError('invalid-report', {
+      path: url,
+      expected: `the DuckDB engine file (${name})`,
+      actual,
+    });
+  let response: Response;
+  try {
+    response = await (deps.fetch ?? fetch)(url);
+  } catch (error) {
+    throw failure(error instanceof Error ? error.message : String(error));
+  }
+  if (!response.ok) throw failure(`HTTP ${response.status}`);
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+/** `site`: the worker script, the wasm and both extensions are fetched concurrently. */
+async function siteBytes(engine: ManifestV4['engine'], deps: EngineDeps): Promise<EngineBytes> {
+  const [wasmName, workerName] = engineAssetNames('site');
+  const [wasm, worker, ...extensions] = await Promise.all([
+    siteFile(wasmName as string, engine, deps),
+    siteFile(workerName as string, engine, deps),
+    ...ENGINE_EXTENSIONS.map((e) => siteFile(engineExtensionName(engine.format, e), engine, deps)),
+  ]);
+  return {
+    wasm,
+    worker,
+    extensions: Object.fromEntries(
+      ENGINE_EXTENSIONS.map((e, i) => [extensionKey(e), extensionDataUrl(extensions[i] as Uint8Array)]),
+    ),
+  };
+}
+
+/** A buffer that holds exactly `bytes` (a view into a larger buffer is sliced), for the transfer list. */
+function exactBuffer(bytes: Uint8Array): ArrayBuffer {
+  const { buffer, byteOffset, byteLength } = bytes;
+  if (byteOffset === 0 && byteLength === buffer.byteLength && buffer instanceof ArrayBuffer) return buffer;
+  return bytes.slice().buffer;
+}
+
+async function startDatabase(format: 'local' | 'site', bytes: EngineBytes, deps: EngineDeps) {
+  let blob: Blob | null = new Blob([workerShim(bytes.extensions), bytes.worker as BlobPart], {
     type: 'text/javascript',
   });
   const blobUrl = deps.blobUrl.create(blob);
   blob = null;
   let db: AsyncDuckDB | undefined;
   try {
-    db = new AsyncDuckDB(new VoidLogger(), deps.createWorker(blobUrl));
-    await db.instantiate(wasmUrl);
+    const worker = deps.createWorker(blobUrl);
+    const wasm = exactBuffer(bytes.wasm);
+    worker.postMessage({ __oh: { wasm } }, [wasm]);
+    db = new AsyncDuckDB(new VoidLogger(), worker);
+    await db.instantiate(WASM_HANDOFF_URL);
+    if (format === 'site')
+      await db.open({ filesystem: { forceFullHTTPReads: false, allowFullHTTPReads: true } });
     return db;
   } catch (error) {
     await db?.terminate().catch(() => undefined);
     throw error;
   } finally {
-    wasmUrl = null;
     deps.blobUrl.revoke(blobUrl);
-  }
-}
-
-async function startSite(urls: { wasm: string; worker: string }, deps: EngineDeps) {
-  let db: AsyncDuckDB | undefined;
-  try {
-    db = new AsyncDuckDB(new VoidLogger(), deps.createWorker(urls.worker));
-    await db.instantiate(urls.wasm);
-    await db.open({ filesystem: { forceFullHTTPReads: false, allowFullHTTPReads: true } });
-    return db;
-  } catch (error) {
-    await db?.terminate().catch(() => undefined);
-    throw error;
   }
 }
 
 /**
  * Network autoload is off, and both extensions are loaded from the report's own files before any view exists:
- * `local` through the worker's shim, `site` by URL. A failure names the extension file (D13). The official signed
+ * both through the worker's shim. A failure names the extension file (D13). The official signed
  * binaries pass DuckDB's signature check, which stays on.
  */
 async function loadExtensions(
@@ -144,9 +208,8 @@ async function loadExtensions(
   const urls = extensionUrls(engine, baseUrl);
   for (const e of ENGINE_EXTENSIONS) {
     const file = engineExtensionName(engine.format, e);
-    const target = engine.format === 'local' ? `${EMBEDDED_HOST}${e}.duckdb_extension.wasm` : urls[e];
     try {
-      await connection.query(`LOAD '${target.replaceAll("'", "''")}'`);
+      await connection.query(`LOAD '${EMBEDDED_HOST}${extensionKey(e)}'`);
     } catch (error) {
       throw new OtelHtmlError('invalid-report', {
         path: urls[e],
@@ -156,22 +219,17 @@ async function loadExtensions(
     }
   }
   // The two SETs above do not stop DuckDB-WASM from installing a further extension (ICU, for timezone functions)
-  // from extensions.duckdb.org, so the repositories point where nothing can answer: `local` at the embedded host,
-  // whose shim answers every extension but the two with nothing; `site` at a path under the report's own assets (a 404).
-  const repository =
-    engine.format === 'local'
-      ? `${EMBEDDED_HOST}${NO_REPOSITORY}`
-      : new URL(`${engine.assetsBase}${NO_REPOSITORY}`, baseUrl).href;
+  // from extensions.duckdb.org, so the repositories point at the embedded host, whose shim answers every extension
+  // but the two with nothing.
+  const repository = `${EMBEDDED_HOST}${NO_REPOSITORY}`;
   for (const setting of ['autoinstall_extension_repository', 'custom_extension_repository']) {
     await connection.query(`SET ${setting} = '${repository.replaceAll("'", "''")}'`);
   }
 }
 
 export async function startEngine(engine: ManifestV4['engine'], deps: EngineDeps): Promise<Engine> {
-  const urls = engineUrls(engine, deps.baseUrl);
-  const db = await (engine.format === 'site'
-    ? startSite(urls, deps)
-    : startLocal(urls, () => embeddedExtensions(engine, deps.baseUrl, deps), deps));
+  const bytes = await (engine.format === 'site' ? siteBytes(engine, deps) : localBytes(engine, deps));
+  const db = await startDatabase(engine.format, bytes, deps);
   let connection: AsyncDuckDBConnection;
   try {
     connection = await db.connect();

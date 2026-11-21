@@ -13,6 +13,17 @@ function withBootstrap(): Window {
 }
 
 describe('installRegistry', () => {
+  test('prefetched promises of the bootstrap are carried over', () => {
+    const p = Promise.resolve(new ArrayBuffer(1));
+    const win = { __OH__: { q: [], push() {}, pre: { 'assets/x.wasm': p } } } as unknown as Window;
+    const registry = installRegistry(win);
+    expect(registry.prefetched('assets/x.wasm')).toBe(p);
+    expect(registry.prefetched('assets/other')).toBeUndefined();
+    expect(
+      installRegistry({ __OH__: { q: [], push() {} } } as unknown as Window).prefetched('a'),
+    ).toBeUndefined();
+  });
+
   test('pushes made before install are drained', async () => {
     const win = withBootstrap();
     win.__OH__?.push('manifest', { title: 't' });
