@@ -22,7 +22,7 @@ mise.
 
 | #   | branch              | PR title                                                                                         | status |
 | --- | ------------------- | ------------------------------------------------------------------------------------------------ | ------ |
-| 1   | `perf/page-before-engine` | `perf(viewer): the page renders before the engine starts, and a site keeps the engine files in cache storage` | built; stopped before the PR on the WebKit loopback reload row (see Status) |
+| 1   | `perf/page-before-engine` | `perf(viewer): the page renders before the engine starts, and a site keeps the engine files in cache storage` | merged 2026-11-22 as 6dfc49c9 (#369); live record below |
 
 - **Models.** Implementers and task reviewers run on Sonnet 5.5. The branch review runs on Opus 5.5.
 - **Bugs found on the way** are fixed in this PR and listed under **Also** in its body.
@@ -530,17 +530,17 @@ git commit -m "test(e2e): a reload makes no engine request; README on the page b
 
 ### Task 7 (coordinator): verify, measure, review, PR
 
-- [ ] `mise run verify` (≈ 2 min) green.
-- [ ] Measurements (spec §4) with the session's bench (`scratchpad/bench/pbe.mjs <root> <browsers> [throttle]`):
+- [x] `mise run verify` (≈ 2 min) green.
+- [x] Measurements (spec §4) with the session's bench (`scratchpad/bench/pbe.mjs <root> <browsers> [throttle]`):
   rows 1–3 after, against the baseline in `scratchpad/bench/before-pbe.txt` (sample: Chromium cold `main` 829 ms,
   reload 709 ms with the wasm re-fetched; Firefox 1019/845 from the HTTP cache; WebKit 1469/1377 re-fetched; `ci`
   throttled Chromium cold 7.6 s, reload 6.4 s with the wasm re-fetched). WebKit's cached reload needs https and a
   persistent profile (`scratchpad/bench/reload-https.mjs`).
-- [ ] Branch review on Opus 5.5 (whole diff + the spec); fix blocking findings; re-review.
-- [ ] `gh pr create` with the plan's title, the body per conventions (what changed, decisions, measurements, **Also**),
+- [x] Branch review on Opus 5.5 (whole diff + the spec); fix blocking findings; re-review.
+- [x] `gh pr create` with the plan's title, the body per conventions (what changed, decisions, measurements, **Also**),
   the footer with the session URL. Merge on green CI (`--squash --delete-branch`); re-run a flaky-looking failure
   once.
-- [ ] After the deploy: live `branch/main/` cold and reloaded in Chromium at 50 Mbps / 40 ms
+- [x] After the deploy: live `branch/main/` cold and reloaded in Chromium at 50 Mbps / 40 ms
   (`scratchpad/bench/run-live-reload2.mjs` or the like): engine requests on reload (expected 0), time to `main` and
   to data ready; record in this plan's Status section and the PR (a comment, since it is merged by then).
 
@@ -583,3 +583,40 @@ https (a real Safari) reads from the cache in ~140 ms instead of downloading. On
 Correction to the spec and plan: WebKit does treat `http://127.0.0.1` as a secure context (`isSecureContext` true,
 `caches.open` works); what fails there is persistence across a reload in an ephemeral context. Only Chromium has
 `-http` e2e projects, so the reload assertion runs in Chromium only.
+
+## Record (2026-11-22)
+
+PR #369 squash-merged as 6dfc49c9 after the maintainer accepted the WebKit loopback reload row. Two more commits
+landed on the branch before the merge:
+
+- **CI fix (0c45e99c).** The deploy preview (`.github/actions/otel-html-deploy/preview.mjs`) decides the report is
+  ready when a `main` exists and nothing in the document is `aria-busy="true"`. Once `main` attached before the engine,
+  the pill opened that gate early: the preview screenshotted a loading page and `e2e/preview.spec.ts:133` (missing
+  partition file) got no warning because the load failure arrived after the screenshot. The loading line is now
+  `aria-busy` for as long as it shows (both placements), which restores the previous gate exactly; the shell test
+  asserts the attribute and that nothing is busy once the data arrived. Fixed in the viewer because nothing under
+  `.github/` was in this PR's scope.
+- **CodeRabbit minors (f24eec6f).** `drop()` marks the script dropped and clears the pending response clones, so a
+  failed load does not keep the engine bodies referenced and a fetch completing after `drop()` stores nothing (vm
+  test); the engine-load e2e records the loading line's text at the first `main` and requires a pre-engine phase
+  (`Loading report` or `Starting the query engine`), so a frame that appeared during partitions or views would fail;
+  the README says the cache storage needs `https://` (or `localhost`) and a `site` over plain `http://` downloads the
+  engine on every load.
+
+CI: the Windows unit shard flaked on `test/scaling/generator.test.ts` ("the worker holding the lock died"), re-run
+green; the same failure then hit the Linux `unit (2)` shard on `main` after the merge (re-run green). Filed as #370
+(third occurrence, not Windows-specific).
+
+Live `branch/main/` (Chromium, 50 Mbps / 40 ms RTT, `bench/pbe-live.mjs`; ms since navigation to `main` / to data
+ready; the deployed `index.html` carries the `oh-engine-1.32.0` script):
+
+| load | before (363db963) | after (6dfc49c9) | engine requests |
+| --- | --- | --- | --- |
+| cold | 3565 / 3565 | 641 / 3220 | 4 → 4 (wasm 7.66 MB, 138→2231 ms) |
+| reload 1 | 2134 / 2134 | 106 / 912 | 4 → 0 |
+| reload 2 | 2109 / 2109 | 76 / 875 | 4 → 0 |
+| reload 3 | — | 76 / 896 | 0 |
+
+A cold visit shows the page frame 2.9 s earlier and the data 0.35 s earlier; a reload shows the frame in under 0.1 s
+and the data in 0.9 s instead of 2.1 s, with no engine request. What remains on a cold visit is the wasm download
+(2.1 s at 50 Mbps) plus the compile: a smaller engine build, or nothing further on the otel-html side.
