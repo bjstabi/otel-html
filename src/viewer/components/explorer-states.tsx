@@ -47,6 +47,7 @@ export function QueryNote(props: { loading: boolean; residual: string | null }):
       )}
       {props.loading && (
         <p role="status" className="text-sm text-muted">
+          <LoadingIndicator />
           Loading
         </p>
       )}
@@ -54,10 +55,24 @@ export function QueryNote(props: { loading: boolean; residual: string | null }):
   );
 }
 
+/**
+ * A spinning ring before the word of a loading note. No text, and inline at `size-3` with a lowered baseline, so
+ * the note stays one `text-sm` line high (dashboard widgets subtract that height). Still under reduced motion.
+ */
+export function LoadingIndicator(): JSX.Element {
+  return (
+    <span
+      aria-hidden="true"
+      className="mr-2 inline-block size-3 animate-spin rounded-full border-2 border-hairline border-t-ink-2 align-[-2px] motion-reduce:animate-none"
+    />
+  );
+}
+
 /** The loading note of a query that has not answered yet. */
 export function LoadingNote(): JSX.Element {
   return (
     <p role="status" className="text-sm text-muted">
+      <LoadingIndicator />
       Loading
     </p>
   );

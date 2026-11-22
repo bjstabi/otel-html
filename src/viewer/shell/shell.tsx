@@ -119,8 +119,9 @@ function PatternsRedirect(): null {
 /** `refresh` (D55) is null on a served report and wherever the report cannot grow: the in-progress line shows without its controls. */
 export function Shell(props: {
   manifest: ManifestV4;
-  /** Null while the engine starts: the navigation shows, and the loading line stands where the page will be. */
-  dataSource: DataSource | null;
+  /** While the engine starts, a pending one whose queries wait for it. */
+  dataSource: DataSource;
+  /** Set while the data is pending: the loading pill shows. */
   loading?: LoadProgress | null;
   history: HistoryPort;
   refresh?: RefreshControl | null;
@@ -235,15 +236,12 @@ export function Shell(props: {
                   <CarryNotice carried={carried} onDismiss={() => setCarried(null)} />
                   <RefreshContext.Provider value={props.refresh ?? null}>
                     <RunSessionProvider>
-                      {dataSource === null ? (
-                        <LoadingLine progress={props.loading ?? null} />
-                      ) : (
-                        <RoutedPage dataSource={dataSource} />
-                      )}
+                      <RoutedPage dataSource={dataSource} />
                     </RunSessionProvider>
                   </RefreshContext.Provider>
                 </div>
               </div>
+              {props.loading != null && <LoadingLine progress={props.loading} placement="pill" />}
               <ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
             </Router>
           </Tooltip.Provider>

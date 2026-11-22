@@ -5,6 +5,7 @@ import { OtelHtmlError } from '../../src/model/errors.js';
 import { App } from '../../src/viewer/app.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
 import { type LogRow, logRef } from '../../src/viewer/data/log-query.js';
+import type { LoadProgress } from '../../src/viewer/data/open-report.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { stepWindow } from '../../src/viewer/shell/time-range.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
@@ -38,26 +39,25 @@ afterEach(() => {
 });
 
 describe('while the engine starts', () => {
-  test('the navigation shows with the loading line and no main, and the page replaces the line', async () => {
+  test('the page frame and the loading pill show, and the pill leaves with the data', () => {
     window.location.hash = '#/traces';
     const history = createHashHistory(window);
-    const ui = (ds: DataSource | null) => (
+    const ui = (loading: LoadProgress | null) => (
       <ThemeProvider>
-        <Shell
-          manifest={dataSource.manifest}
-          dataSource={ds}
-          loading={{ phase: 'engine' }}
-          history={history}
-        />
+        <Shell manifest={dataSource.manifest} dataSource={dataSource} loading={loading} history={history} />
       </ThemeProvider>
     );
-    const view = render(ui(null));
+    const view = render(ui({ phase: 'engine' }));
     expect(screen.getByRole('navigation')).toBeTruthy();
-    expect(screen.getByRole('status').textContent).toBe('Starting the query engine');
-    expect(screen.queryByRole('main')).toBeNull();
-    view.rerender(ui(dataSource));
-    await screen.findByRole('main');
-    expect(screen.queryByText('Starting the query engine')).toBeNull();
+    const pill = screen.getByRole('status', { name: 'Loading the report' });
+    expect(pill.textContent).toBe('Starting the query engine');
+    // The deploy preview waits for a `main` with no [aria-busy="true"] in the document.
+    expect(pill.getAttribute('aria-busy')).toBe('true');
+    expect(screen.getByRole('main')).toBeTruthy();
+    view.rerender(ui(null));
+    expect(screen.queryByRole('status', { name: 'Loading the report' })).toBeNull();
+    expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+    expect(screen.getByRole('main')).toBeTruthy();
   });
 });
 

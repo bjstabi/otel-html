@@ -7,19 +7,42 @@ import { type LoadProgress, type OpenedReport, requireFormat4 } from '../../src/
 import { Root } from '../../src/viewer/root.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 
+const seen = vi.hoisted(() => ({
+  props: [] as { dataSource: unknown; loading: unknown; refresh: { refresh: () => void } | null }[],
+}));
 vi.mock('../../src/viewer/shell/shell.js', () => ({
-  Shell: (props: { dataSource: unknown }): string => (props.dataSource === null ? 'shell-loading' : 'shell'),
+  Shell: (props: {
+    dataSource: unknown;
+    loading?: unknown;
+    refresh?: { refresh: () => void } | null;
+  }): string => {
+    seen.props.push({
+      dataSource: props.dataSource,
+      loading: props.loading ?? null,
+      refresh: props.refresh ?? null,
+    });
+    return props.loading ? 'shell-loading' : 'shell';
+  },
 }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 function dataSource(theme: 'system' | 'light' | 'dark'): OpenedReport {
   return {
-    dataSource: { manifest: { config: { viewer: { theme } } } as ManifestV4 } as DataSource,
+    dataSource: {
+      manifest: { epochUnixNano: '0', config: { viewer: { theme } } } as ManifestV4,
+    } as DataSource,
     refresh: null,
   };
 }
 
+function lastSeen(): { dataSource: DataSource; loading: unknown } {
+  const last = seen.props.at(-1);
+  if (last === undefined) throw new Error('the shell did not render');
+  return { dataSource: last.dataSource as DataSource, loading: last.loading };
+}
+
 beforeEach(() => {
+  seen.props.length = 0;
   vi.stubGlobal('matchMedia', () => ({
     matches: false,
     addEventListener: (): void => undefined,
@@ -87,14 +110,53 @@ describe('the shell while the engine starts', () => {
     act(() => report({ phase: 'partitions', done: 0, total: 1 }));
     expect(screen.getByRole('status').textContent).toBe('Loading partition 1 of 1');
     expect(screen.queryByText('shell-loading')).toBeNull();
-    act(() => report({ phase: 'engine', manifest: manifest('dark') }));
+    const first = manifest('dark');
+    act(() => report({ phase: 'engine', manifest: first }));
     expect(screen.getByText('shell-loading')).toBeTruthy();
     expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    const pending = lastSeen();
+    expect(pending.dataSource).not.toBeNull();
+    expect(pending.dataSource.manifest).toBe(first);
+    expect(pending.loading).toEqual({ phase: 'engine', manifest: first });
     // later progress without a manifest keeps the shell
     act(() => report({ phase: 'views' }));
     expect(screen.getByText('shell-loading')).toBeTruthy();
     await act(async () => finish(dataSource('dark')));
     expect(screen.getByText('shell')).toBeTruthy();
+    // the same object stays the shown data source, so useQuery does not re-run the first queries
+    expect(lastSeen().dataSource).toBe(pending.dataSource);
+    expect(lastSeen().loading).toBeNull();
+  });
+
+  test('a load that resolves before any manifest progress passes its own data source', async () => {
+    const opened = dataSource('dark');
+    render(<Root load={() => Promise.resolve(opened)} history={createHashHistory(window)} />);
+    await screen.findByText('shell');
+    expect(lastSeen().dataSource).toBe(opened.dataSource);
+  });
+
+  test('a load that fails after the shell rendered shows the failure page', async () => {
+    let report: (p: LoadProgress) => void = () => undefined;
+    let fail: (e: Error) => void = () => undefined;
+    const load = (onProgress: (p: LoadProgress) => void): Promise<OpenedReport> => {
+      report = onProgress;
+      return new Promise((_, reject) => {
+        fail = reject;
+      });
+    };
+    render(<Root load={load} history={createHashHistory(window)} />);
+    act(() => report({ phase: 'engine', manifest: manifest('dark') }));
+    expect(screen.getByText('shell-loading')).toBeTruthy();
+    const query = lastSeen().dataSource.services({
+      window: null,
+      condition: null,
+      limit: 1,
+    });
+    const rejected = expect(query).rejects.toThrow('spans.parquet: missing');
+    await act(async () => fail(new Error('spans.parquet: missing')));
+    await rejected;
+    await screen.findByText('This report could not be loaded');
+    expect(screen.queryByText('shell-loading')).toBeNull();
   });
 });
 
@@ -175,5 +237,45 @@ describe('a failed load', () => {
     );
     await screen.findByText('This report could not be loaded');
     expect(screen.getByRole('alert').textContent).toContain('incomplete or moved');
+  });
+});
+
+describe('the shown data source after a refresh', () => {
+  async function ready(
+    refreshTo: (real: DataSource) => DataSource,
+  ): Promise<{ pending: DataSource; real: DataSource }> {
+    let report: (p: LoadProgress) => void = () => undefined;
+    let finish: (d: OpenedReport) => void = () => undefined;
+    const load = (onProgress: (p: LoadProgress) => void): Promise<OpenedReport> => {
+      report = onProgress;
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    };
+    render(<Root load={load} history={createHashHistory(window)} />);
+    const real = dataSource('system').dataSource;
+    act(() => report({ phase: 'partitions', done: 0, total: 1, manifest: real.manifest }));
+    const pending = lastSeen().dataSource;
+    await act(async () => finish({ dataSource: real, refresh: () => Promise.resolve(refreshTo(real)) }));
+    expect(lastSeen().dataSource).toBe(pending);
+    return { pending, real };
+  }
+  const click = (): Promise<void> =>
+    act(async () => {
+      seen.props.at(-1)?.refresh?.refresh();
+    });
+
+  test('a refresh that resolves the same real source keeps the shown (pending) one', async () => {
+    const { pending } = await ready((real) => real);
+    await click();
+    expect(lastSeen().dataSource).toBe(pending);
+  });
+
+  test('a refresh that resolves a different source swaps it in', async () => {
+    const next = dataSource('dark').dataSource;
+    const { pending } = await ready(() => next);
+    await click();
+    expect(lastSeen().dataSource).toBe(next);
+    expect(next).not.toBe(pending);
   });
 });

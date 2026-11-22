@@ -1,3 +1,4 @@
+import { ENGINE_VERSION } from '../src/format/engine.js';
 import { SPAN_COUNT } from './fixture.js';
 import { expect, HTTP, test } from './test.js';
 
@@ -8,9 +9,9 @@ declare global {
 }
 
 // The engine files (worker, wasm, the two extensions) are fetched once each, never twice, and the navigation shows
-// while the engine starts: a `nav` is in the DOM before the first `main`.
+// while the engine starts: the page (a `main`) is up while the loading line still shows, and the line then leaves.
 test(
-  'the engine files are requested once each and the navigation shows before the page',
+  'the engine files are requested once each and the page shows before the engine is ready',
   HTTP,
   async ({ page, baseURL }, testInfo) => {
     const problems: string[] = [];
@@ -33,18 +34,16 @@ test(
     await page.addInitScript(() => {
       const order: string[] = [];
       window.__order = order;
-      // `nav` counts only while the loading line shows and no `main` exists yet (the navigation of the engine start);
-      // a build that renders both in one commit records just `main`.
+      // The first `main` is recorded as `main-while-loading:<the line's text>` when the loading line is still there
+      // (the page frame rendered before the engine; the text names the phase), `main` otherwise; `ready` once a
+      // `main` exists and the line is gone.
       const scan = (): void => {
         const main = document.querySelector('main') !== null;
-        if (
-          !main &&
-          !order.includes('nav') &&
-          document.querySelector('nav') !== null &&
-          document.querySelector('[aria-label="Loading the report"]') !== null
-        )
-          order.push('nav');
-        if (main && !order.includes('main')) order.push('main');
+        const line = document.querySelector('[aria-label="Loading the report"]');
+        const loading = line !== null;
+        if (main && order.length === 0)
+          order.push(line ? `main-while-loading:${(line.textContent ?? '').trim()}` : 'main');
+        if (main && !loading && !order.includes('ready')) order.push('ready');
       };
       const observer = new MutationObserver(scan);
       const start = (): void => {
@@ -68,7 +67,10 @@ test(
       new RegExp(`^${SPAN_COUNT} spans`),
     );
 
-    expect(await page.evaluate(() => window.__order)).toEqual(['nav', 'main']);
+    const order = await page.evaluate(() => window.__order);
+    expect(order).toHaveLength(2);
+    expect(order?.[0]).toMatch(/^main-while-loading:(Loading report|Starting the query engine)$/);
+    expect(order?.[1]).toBe('ready');
     if (testInfo.project.name.endsWith('-http')) {
       expect(engineRequests.size).toBe(4);
       expect([...engineRequests.values()]).toEqual([1, 1, 1, 1]);
@@ -76,6 +78,29 @@ test(
       // Firefox does not report file:// script requests, so with none observed this check is vacuous; whatever
       // was observed must not repeat.
       expect([...engineRequests.values()].every((n) => n === 1)).toBe(true);
+    }
+    // A reload reads the engine files from cache storage (the viewer stored them after the first load), so no
+    // request is made. Only Chromium runs the -http projects; WebKit would need a skip here (http://127.0.0.1 is
+    // not a secure context there, so `caches` is unavailable).
+    if (testInfo.project.name.endsWith('-http')) {
+      // The store is fire-and-forget after the load: wait until it finished before navigating away.
+      await expect
+        .poll(
+          () =>
+            page.evaluate(
+              async (name) => (await (await caches.open(name)).keys()).length,
+              `oh-engine-${ENGINE_VERSION}`,
+            ),
+          { timeout: 15_000 },
+        )
+        .toBe(4);
+      await page.reload();
+      await expect(page.getByRole('main').locator('output', { hasText: /\bspans\b/ })).toHaveText(
+        new RegExp(`^${SPAN_COUNT} spans`),
+      );
+      expect([...engineRequests.values()], 'a reload serves the engine files from cache storage').toEqual([
+        1, 1, 1, 1,
+      ]);
     }
     expect(problems).toEqual([]);
   },

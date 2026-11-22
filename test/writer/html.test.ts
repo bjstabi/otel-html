@@ -1,6 +1,7 @@
-import { describe, expect, test } from 'vitest';
+import { runInNewContext } from 'node:vm';
+import { describe, expect, test, vi } from 'vitest';
 import { engineAssetNames } from '../../src/format/engine.js';
-import { renderIndexHtml } from '../../src/writer/html.js';
+import { enginePrefetchScript, renderIndexHtml } from '../../src/writer/html.js';
 import { openSession } from '../../src/writer/session.js';
 import { createTestWriter, otlp, testConfig } from '../../test-support/writer-deps.js';
 import { spansRequest } from './helpers.js';
@@ -8,14 +9,14 @@ import { spansRequest } from './helpers.js';
 const entry = { script: 'assets/viewer.abc123.js', style: 'assets/viewer.abc123.css' };
 
 describe('renderIndexHtml', () => {
-  test("format 'site' starts the four engine downloads before the manifest script", () => {
+  test("format 'site' embeds the prefetch script before the manifest script", () => {
     const html = renderIndexHtml(entry, 't', { format: 'site' });
-    const block = html.match(/<script>__OH__\.pre=[\s\S]*?<\/script>/)?.[0] ?? '';
-    for (const name of engineAssetNames('site')) expect(block).toContain(`"assets/${name}"`);
+    const hrefs = engineAssetNames('site').map((n) => `assets/${n}`);
+    expect(html).toContain(`<script>${enginePrefetchScript(hrefs, 'oh-engine-1.32.0')}</script>\n`);
+    for (const h of hrefs) expect(html).toContain(JSON.stringify(h));
+    expect(html).toContain('"oh-engine-1.32.0"');
     expect(html.indexOf('__OH__.pre')).toBeGreaterThan(html.indexOf('window.__OH__={q:[]'));
     expect(html.indexOf('__OH__.pre')).toBeLessThan(html.indexOf('src="data/manifest.js"'));
-    expect(block).toContain('arrayBuffer()');
-    expect(block).toContain('.catch(');
   });
   test('a shared base prefixes the engine hrefs', () => {
     expect(renderIndexHtml(entry, 't', { assetsBase: '../../assets/', format: 'site' })).toContain(
@@ -81,5 +82,136 @@ describe('the shell a session writes', () => {
     const files = await run(testConfig({ writer: { format: 'site', assetsBase: '../../assets/0.3.0/' } }));
     expect(files.get('r/index.html')).toContain('src="../../assets/0.3.0/viewer.abc123.js"');
     expect([...files.keys()].some((k) => k.startsWith('r/assets/'))).toBe(false);
+  });
+});
+
+type Oh = {
+  pre: Record<string, Promise<ArrayBuffer>>;
+  store: () => Promise<void>;
+  drop: () => Promise<void>;
+};
+function run(script: string, env: { caches?: unknown; fetch: unknown }): Oh {
+  const ctx = { __OH__: { q: [], push() {} } as Partial<Oh>, Promise, Error, ...env };
+  runInNewContext(script, ctx);
+  return ctx.__OH__ as Oh;
+}
+const WASM = 'assets/duckdb.1.32.0.wasm';
+const WORKER = 'assets/duckdb.1.32.0.worker.js';
+const HREFS = [WASM, WORKER];
+const body = (n: number) => new Response(new Uint8Array([n]));
+const script = () => enginePrefetchScript(HREFS, 'oh-engine-1.32.0');
+function fakes() {
+  const cache = { match: vi.fn(), put: vi.fn(async () => undefined) };
+  const caches = {
+    open: vi.fn(async () => cache),
+    keys: vi.fn(async () => ['oh-engine-0.0.0', 'oh-engine-1.32.0', 'other']),
+    delete: vi.fn(async () => true),
+  };
+  return { cache, caches };
+}
+
+describe('enginePrefetchScript', () => {
+  test('a hit resolves from the cache without a fetch', async () => {
+    const { cache, caches } = fakes();
+    cache.match.mockImplementation(async (h: string) => (h === WASM ? body(7) : undefined));
+    const fetch = vi.fn(async () => body(9));
+    const oh = run(script(), { caches, fetch });
+    expect([...new Uint8Array((await oh.pre[WASM]) as ArrayBuffer)]).toEqual([7]);
+    await oh.pre[WORKER];
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(WORKER);
+    expect(cache.match).toHaveBeenCalledWith(WASM, { ignoreVary: true });
+  });
+  test('a miss is fetched and stored by store()', async () => {
+    const { cache, caches } = fakes();
+    cache.match.mockResolvedValue(undefined);
+    const oh = run(script(), { caches, fetch: vi.fn(async () => body(9)) });
+    await Promise.all(HREFS.map((h) => oh.pre[h]));
+    expect(cache.put).not.toHaveBeenCalled();
+    await oh.store();
+    expect(cache.put).toHaveBeenCalledTimes(2);
+    for (const call of cache.put.mock.calls) {
+      const [href, res] = call as unknown as [string, unknown];
+      expect(HREFS).toContain(href);
+      expect(res).toBeInstanceOf(Response);
+    }
+    expect(caches.delete).toHaveBeenCalledTimes(1);
+    expect(caches.delete).toHaveBeenCalledWith('oh-engine-0.0.0');
+    await oh.store();
+    expect(cache.put).toHaveBeenCalledTimes(2);
+  });
+  test('drop() releases the pending clones: a fetch that completes after drop() is never stored', async () => {
+    const { cache, caches } = fakes();
+    cache.match.mockResolvedValue(undefined);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const fetch = vi.fn(async (h: string) => {
+      if (h === WORKER) await gate;
+      return body(4);
+    });
+    const oh = run(script(), { caches, fetch });
+    await oh.pre[WASM]; // completed before drop(): its clone is released by drop()
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledWith(WORKER));
+    await oh.drop();
+    release();
+    await oh.pre[WORKER];
+    await oh.store();
+    expect(cache.put).not.toHaveBeenCalled();
+  });
+  test('a non-OK miss rejects naming the status', async () => {
+    const { cache, caches } = fakes();
+    cache.match.mockResolvedValue(undefined);
+    const oh = run(script(), { caches, fetch: vi.fn(async () => new Response(null, { status: 404 })) });
+    await expect(oh.pre[WASM]).rejects.toThrow('HTTP 404');
+    await oh.store();
+    expect(cache.put).not.toHaveBeenCalled();
+  });
+  test('no caches: fetch only, store and drop resolve', async () => {
+    const oh = run(script(), { fetch: vi.fn(async () => body(5)) });
+    expect([...new Uint8Array((await oh.pre[WASM]) as ArrayBuffer)]).toEqual([5]);
+    await expect(oh.store()).resolves.toBeUndefined();
+    await expect(oh.drop()).resolves.toBeUndefined();
+  });
+  test('a cache that cannot open, match or put is a miss and never fails', async () => {
+    const a = fakes();
+    a.caches.open.mockRejectedValue(new Error('no'));
+    const oa = run(script(), { caches: a.caches, fetch: vi.fn(async () => body(1)) });
+    await oa.pre[WASM];
+    await expect(oa.store()).resolves.toBeUndefined();
+
+    const b = fakes();
+    b.cache.match.mockRejectedValue(new Error('no'));
+    const ob = run(script(), { caches: b.caches, fetch: vi.fn(async () => body(2)) });
+    expect([...new Uint8Array((await ob.pre[WASM]) as ArrayBuffer)]).toEqual([2]);
+
+    const c = fakes();
+    c.cache.match.mockResolvedValue(undefined);
+    c.cache.put.mockRejectedValue(new Error('no'));
+    const oc = run(script(), { caches: c.caches, fetch: vi.fn(async () => body(3)) });
+    await oc.pre[WASM];
+    await expect(oc.store()).resolves.toBeUndefined();
+  });
+  test("drop() deletes this version's cache", async () => {
+    const { cache, caches } = fakes();
+    cache.match.mockResolvedValue(undefined);
+    const oh = run(script(), { caches, fetch: vi.fn(async () => body(1)) });
+    await oh.drop();
+    expect(caches.delete).toHaveBeenCalledWith('oh-engine-1.32.0');
+    caches.delete.mockRejectedValue(new Error('no'));
+    await expect(oh.drop()).resolves.toBeUndefined();
+  });
+  test('a hit whose body cannot be read falls through to a fetch that store() puts', async () => {
+    const { cache, caches } = fakes();
+    const bad = { arrayBuffer: () => Promise.reject(new Error('bad entry')) };
+    cache.match.mockResolvedValue(bad);
+    const fetch = vi.fn(async () => body(8));
+    const oh = run(script(), { caches, fetch });
+    expect([...new Uint8Array((await oh.pre[WASM]) as ArrayBuffer)]).toEqual([8]);
+    expect(fetch).toHaveBeenCalledWith(WASM);
+    await oh.pre[WORKER];
+    await oh.store();
+    expect(cache.put).toHaveBeenCalledWith(WASM, expect.any(Response));
   });
 });
