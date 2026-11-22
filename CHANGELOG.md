@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.8.0](https://github.com/bjstabi/otel-html/compare/otel-html-v0.7.0...otel-html-v0.8.0) (2026-11-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **format:** format 8 records CI runs in a cicd table ([#347](https://github.com/bjstabi/otel-html/issues/347))
+* **format:** format 7 writes a widget trace index and records refused rollup keys ([#343](https://github.com/bjstabi/otel-html/issues/343))
+
+### Features
+
+* **ci:** one CI report with full and slim runs on one shared assets folder ([#363](https://github.com/bjstabi/otel-html/issues/363)) ([4bbfa87](https://github.com/bjstabi/otel-html/commit/4bbfa87322d3a79b8aa5b930aa953a39443f8a91))
+* **format:** format 7 writes a widget trace index and records refused rollup keys ([#343](https://github.com/bjstabi/otel-html/issues/343)) ([7ad330f](https://github.com/bjstabi/otel-html/commit/7ad330f30f323b928f3d9c23bbda763d7cd530b9))
+* **format:** format 8 records CI runs in a cicd table ([#347](https://github.com/bjstabi/otel-html/issues/347)) ([5f399de](https://github.com/bjstabi/otel-html/commit/5f399de747e252f264c72405c8419e7f99421f9c))
+* **viewer:** cicd widgets, the open run and the new CI dashboard ([#349](https://github.com/bjstabi/otel-html/issues/349)) ([fd55cfb](https://github.com/bjstabi/otel-html/commit/fd55cfb6dc1325887a3dd8762769420ee0230ac5))
+* **viewer:** page filter bar, range slider, context menus and paired stacking ([#348](https://github.com/bjstabi/otel-html/issues/348)) ([da73a8b](https://github.com/bjstabi/otel-html/commit/da73a8b23340ff964028ce8aeb78bc19d722419d))
+
+
+### Bug fixes
+
+* align the runs trend's buckets to local days and screenshot previews with the runner's Chrome ([#357](https://github.com/bjstabi/otel-html/issues/357)) ([177342d](https://github.com/bjstabi/otel-html/commit/177342d615128dda25643772cbaaa3c2ff9a03f4))
+* **ci:** the deployer registers the Parquet codec before it reads a partition ([#365](https://github.com/bjstabi/otel-html/issues/365)) ([028a33e](https://github.com/bjstabi/otel-html/commit/028a33e883aaf90c05d73d7989560b0c26fa08e2))
+* **viewer:** a dashboard shows no "Loading variables" line ([#372](https://github.com/bjstabi/otel-html/issues/372)) ([2d1951f](https://github.com/bjstabi/otel-html/commit/2d1951fcfa6aab2620bf28b1b42c0ea273b94d3c))
+* **viewer:** releasable quick filters, CI durations in minutes and hours, faster Open on GitHub ([#362](https://github.com/bjstabi/otel-html/issues/362)) ([eb99b2b](https://github.com/bjstabi/otel-html/commit/eb99b2b1281a5f0110397de0fb28ce20d2a9a314))
+* **writer:** compaction keeps a dashboard widget's rollup key when the union allows it ([#339](https://github.com/bjstabi/otel-html/issues/339)) ([680af07](https://github.com/bjstabi/otel-html/commit/680af077ecb079c22912c0cfb4b7a8f5cd780ede))
+
+
+### Performance
+
+* **viewer:** engine bytes handed to the worker, the shell during the load, views bound without range reads ([#367](https://github.com/bjstabi/otel-html/issues/367)) ([3379619](https://github.com/bjstabi/otel-html/commit/3379619e01ef74e73ddb5caca6473d5aed687e7d))
+* **viewer:** the page renders before the engine starts, and a site keeps the engine files in cache storage ([#369](https://github.com/bjstabi/otel-html/issues/369)) ([6dfc49c](https://github.com/bjstabi/otel-html/commit/6dfc49c907bd55e85eea50f31611654be91694db))
+* **viewer:** traces widgets read the widget trace index ([#344](https://github.com/bjstabi/otel-html/issues/344)) ([6ba82ac](https://github.com/bjstabi/otel-html/commit/6ba82acda77b7ccbe88737c31cae092de78af782))
+
+
+### Documentation
+
+* ci-dashboard-ui design, plan and the /ui-1 skill ([#346](https://github.com/bjstabi/otel-html/issues/346)) ([3c97d77](https://github.com/bjstabi/otel-html/commit/3c97d775f5f70c822b94d1bbc6db844d03505870))
+* **plan:** ci-dashboard-ui record ([#350](https://github.com/bjstabi/otel-html/issues/350)) ([2b738d3](https://github.com/bjstabi/otel-html/commit/2b738d3cb85d7a3cf18c120bb0790bb6e608e6de))
+* **plan:** engine-start record ([#368](https://github.com/bjstabi/otel-html/issues/368)) ([363db96](https://github.com/bjstabi/otel-html/commit/363db9637714a5e0a5a26b401e81c469e508627d))
+* **plan:** page-before-engine record ([#371](https://github.com/bjstabi/otel-html/issues/371)) ([e32cabb](https://github.com/bjstabi/otel-html/commit/e32cabb5c3ccfd451924e75f850928492b19707e))
+* **plan:** slim-history record ([#366](https://github.com/bjstabi/otel-html/issues/366)) ([d485ded](https://github.com/bjstabi/otel-html/commit/d485ded85736c7c9497f77d59b628bf0d246ce00))
+* widget trace index design and plan (format 7) ([#342](https://github.com/bjstabi/otel-html/issues/342)) ([8315252](https://github.com/bjstabi/otel-html/commit/8315252f980b389458d325a9dab4d2c2969723ea))
+
 ## [0.7.0](https://github.com/bjstabi/otel-html/compare/otel-html-v0.6.0...otel-html-v0.7.0) (2026-11-16)
 
 
