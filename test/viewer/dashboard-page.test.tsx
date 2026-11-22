@@ -650,7 +650,7 @@ describe('the slider on CI dashboards', () => {
     await waitFor(() => expect(screen.getByText(/all 1 run selected/)).toBeTruthy());
   });
 
-  test('no count shows while the variables load', async () => {
+  test('while the variables load the page is busy, shows no message and no count', async () => {
     const cicdRows = vi.fn(() => Promise.resolve([runRow(2)]));
     const withVar = DashboardSchema.parse({ ...CI, variables: ['service.name'] });
     renderShell('#/dashboards/ci', {
@@ -658,9 +658,21 @@ describe('the slider on CI dashboards', () => {
       resourceValues: () => new Promise(() => undefined),
       cicdRows,
     });
-    await screen.findByText('Loading variables…');
+    await screen.findByRole('heading', { name: 'CI', level: 1 });
+    expect(document.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(screen.queryByText(/Loading variables/)).toBeNull();
     expect(screen.queryByText(/\d runs?\b/)).toBeNull();
     expect(cicdRows).not.toHaveBeenCalled();
+  });
+
+  test('once the variables arrived nothing on the page is busy', async () => {
+    const withVar = DashboardSchema.parse({ ...CI, variables: ['service.name'] });
+    renderShell('#/dashboards/ci', {
+      ...dataSourceOf(manifestWith([withVar]), VALUES),
+      cicdRows: () => Promise.resolve([runRow(2)]),
+    });
+    await waitFor(() => expect(screen.getAllByText('1 run')).toHaveLength(1));
+    expect(document.querySelector('[aria-busy="true"]')).toBeNull();
   });
 
   test('a page without a cicd widget has no ticks and never calls cicdRows', async () => {
